@@ -7,7 +7,7 @@ Komari KNS 是运行在 Komari 插件宿主中的原生插件。它通过 Komari
 - 从 Komari 同步探针机器；新机器的部署策略默认关闭。
 - 管理 VLESS Reality、Hysteria2、TUIC、AnyTLS、Shadowsocks、Trojan、VMess 实例，支持安装、重配置、重装、启用、停用、卸载和只读状态核查。
 - 通过 OneBox 一次性回调和 Agent 远程状态双重核验，避免只凭命令退出码登记节点。
-- 解析机器 IP、手动公网地址或 DDNS 域名；支持 IPv4、IPv6、双栈和 NAT 外部端口。插件只读 DNS，不写 DNS 记录。
+- 解析机器 IP、手动公网地址或 DDNS 域名；支持 IPv4、IPv6、双栈和 NAT 外部端口。地址变化后会重新核对公网映射；发现冲突时自动暂停该实例的订阅发布并在管理页提示。插件只读 DNS，不写 DNS 记录。
 - 发布 URI、Mihomo YAML 和 sing-box JSON 订阅；支持创建、筛选、隐藏、轮换和撤销订阅档案。
 - 采用原子状态写入、每日滚动备份、AES-256-GCM 凭据与订阅快照加密、订阅令牌哈希和审计记录。每个订阅档案可管理多个令牌，支持独立撤销、宽限轮换、到期时间和使用统计；管理员可导出带口令加密的状态/密钥包。订阅 GET 只读取已生成的快照。
 - 卸载前要求最近的 OneBox 状态核查，展示配置、证书、防火墙和共享服务资源影响；共享监听仍被引用时保留对应防火墙规则。
@@ -73,4 +73,4 @@ python3 scripts/package.py
 
 ## 版本
 
-插件包版本为 `1.0.0`，OneBox KNS 适配器版本为 `1.2.0`。OneBox 安装脚本固定到 [commit `7c70c71`](https://github.com/liuarui/onebox/commit/7c70c71957f6f96a3deca983745f7414fe1e490e) 和 SHA-256 `9c803f549eb6c579fed8a9e385e43d9a872235ab804e99da01e44eb361b458fa`。可上传 Komari 的 ZIP 为 `dist/onebox-bridge.zip`，SHA-256 为 `5c1c77ae6f6e19a9e04ebb9627e82893a52d786efe201912b7d39cb88885b5ec`。源码仓库为 [liuarui/komari-plugin-kns](https://github.com/liuarui/komari-plugin-kns)，分支 `main`。
+插件包版本为 `1.0.0`，OneBox KNS 适配器版本为 `1.2.0`。OneBox 安装脚本固定到 [commit `7c70c71`](https://github.com/liuarui/onebox/commit/7c70c71957f6f96a3deca983745f7414fe1e490e) 和 SHA-256 `9c803f549eb6c579fed8a9e385e43d9a872235ab804e99da01e44eb361b458fa`。可上传 Komari 的 ZIP 为 `dist/onebox-bridge.zip`，SHA-256 为 `ed8f2184bc652dbdc1604ee67fdeec9c0e9a932a1c6e5ebe6e3d74571cf7f759`。源码仓库为 [liuarui/komari-plugin-kns](https://github.com/liuarui/komari-plugin-kns)，分支 `main`。

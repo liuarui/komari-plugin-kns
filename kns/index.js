@@ -656,6 +656,37 @@ function natMappingConflicts(state, externalPort, transport, publicHosts, ignore
   });
 }
 
+function endpointPublicHosts(endpoint) {
+  const values = endpoint && Array.isArray(endpoint.resolvedAddresses) && endpoint.resolvedAddresses.length
+    ? endpoint.resolvedAddresses
+    : endpoint && Array.isArray(endpoint.hosts) && endpoint.hosts.length ? endpoint.hosts : [endpoint && endpoint.host];
+  return Array.from(new Set(values.map((host) => String(host || "").trim()).filter(Boolean)));
+}
+
+function markNatMappingConflict(state, instance, endpoint) {
+  const current = instance.nat.mappingConflict;
+  const publicHosts = endpointPublicHosts(endpoint);
+  const sameConflict = current && Number(current.externalPort) === Number(instance.nat.externalPort)
+    && JSON.stringify((current.publicHosts || []).slice().sort()) === JSON.stringify(publicHosts.slice().sort());
+  if (sameConflict) return false;
+  instance.nat.mappingConflict = {
+    detectedAt: current && current.detectedAt || now(),
+    externalPort: Number(instance.nat.externalPort),
+    publicHosts,
+  };
+  instance.updatedAt = now();
+  if (!current) audit(state, null, "instance.nat.mapping_conflict.detected", { instanceId: instance.id, externalPort: Number(instance.nat.externalPort), publicHosts });
+  return true;
+}
+
+function clearNatMappingConflict(state, instance) {
+  if (!instance.nat || !instance.nat.mappingConflict) return false;
+  const conflict = instance.nat.mappingConflict;
+  delete instance.nat.mappingConflict;
+  audit(state, null, "instance.nat.mapping_conflict.cleared", { instanceId: instance.id, externalPort: Number(conflict.externalPort) });
+  return true;
+}
+
 function checkTwoFactor(value) {
   const code = String(value || "").trim();
   if (code && !/^\d{6,8}$/.test(code)) fail("invalid_2fa", "2FA 验证码必须是 6 或 8 位数字。", 400);
@@ -1164,14 +1195,14 @@ async function handleAction(req, res) {
     const nextNat = body.externalPort != null ? (body.externalPort ? { externalPort: validatePort(body.externalPort) } : null) : instance.nat;
     const machine = machineByUuid(state, instance.machineUuid);
     const nextEndpoint = candidateAddress(machine, state, Object.assign({}, instance, { endpointOverride: nextOverride, nat: nextNat })) || instance.endpoint;
-    if (nextNat && natMappingConflicts(state, nextNat.externalPort, instance.listen.transport, nextEndpoint && nextEndpoint.hosts || [nextEndpoint && nextEndpoint.host], instance.id)) fail("nat_mapping_conflict", "公网 IP、外部端口和 TCP/UDP 传输组合已被另一个 KNS 实例占用。", 409);
+    if (nextNat && natMappingConflicts(state, nextNat.externalPort, instance.listen.transport, endpointPublicHosts(nextEndpoint), instance.id)) fail("nat_mapping_conflict", "公网 IP、外部端口和 TCP/UDP 传输组合已被另一个 KNS 实例占用。", 409);
     if (body.name != null) instance.name = safeText(body.name, 80);
     if (body.tags != null) instance.tags = Array.isArray(body.tags) ? Array.from(new Set(body.tags.map((tag) => safeText(tag, 32)).filter(Boolean))).slice(0, 30) : [];
     if (body.endpointHost != null) instance.endpointOverride = nextOverride;
     if (body.externalPort != null) instance.nat = nextNat;
     if (instance.nat && nextEndpoint) {
       instance.nat.publicHost = nextEndpoint.host;
-      instance.nat.publicHosts = nextEndpoint.hosts || [nextEndpoint.host];
+      instance.nat.publicHosts = endpointPublicHosts(nextEndpoint);
     }
     instance.endpoint = nextEndpoint;
     instance.updatedAt = now(); audit(state, req, "instance.metadata.updated", { instanceId: instance.id }); save(state); return json(res, 200, { ok: true });
@@ -1223,8 +1254,8 @@ async function handleAction(req, res) {
         const publicEndpoint = candidateAddress(machine, state, instance);
         if (!publicEndpoint) fail("nat_endpoint_missing", "配置 NAT 外部端口时，必须提供公网 Endpoint 地址或先同步机器地址。", 409);
         instance.nat.publicHost = publicEndpoint.host;
-        instance.nat.publicHosts = publicEndpoint.hosts || [publicEndpoint.host];
-        if (natMappingConflicts(state, instance.nat.externalPort, validated.transport, instance.nat.publicHosts, proposedId)) fail("nat_mapping_conflict", "公网 IP、外部端口和 TCP/UDP 传输组合已被另一个 KNS 实例占用。", 409);
+        instance.nat.publicHosts = endpointPublicHosts(publicEndpoint);
+        if (natMappingConflicts(state, instance.nat.externalPort, validated.transport, endpointPublicHosts(publicEndpoint), proposedId)) fail("nat_mapping_conflict", "公网 IP、外部端口和 TCP/UDP 传输组合已被另一个 KNS 实例占用。", 409);
       }
     } else if (actionName === "reconfigure") {
       instance = Object.assign({}, instance, { protocol: validated.protocol, listen: { port: validated.port, transport: validated.transport, address: validated.listenAddress }, options: validated.options });
@@ -1504,10 +1535,14 @@ async function refreshEndpoints() {
           endpoint.resolvedAddresses = resolved;
           if (machine.policy.addressMode === "dual") endpoint.hosts = resolved.slice();
         }
+        if (instance.nat && natMappingConflicts(state, instance.nat.externalPort, (instance.listen || {}).transport, endpointPublicHosts(endpoint), instance.id)) {
+          if (markNatMappingConflict(state, instance, endpoint)) changed = true;
+          continue;
+        }
         const current = instance.endpoint || {};
         const sameHost = current.host === endpoint.host && JSON.stringify(current.hosts || [current.host]) === JSON.stringify(endpoint.hosts || [endpoint.host]);
         const sameResolved = JSON.stringify((current.resolvedAddresses || []).slice().sort()) === JSON.stringify((endpoint.resolvedAddresses || []).slice().sort());
-        if (!sameHost || !sameResolved) candidates.push({ id: instance.id, machineUuid: machine.uuid, endpoint, fingerprint: endpointConfigFingerprint(machine, instance, endpoint), listen: instance.listen, tls: instance.tls });
+        if ((instance.nat && instance.nat.mappingConflict) || !sameHost || !sameResolved) candidates.push({ id: instance.id, machineUuid: machine.uuid, endpoint, fingerprint: endpointConfigFingerprint(machine, instance, endpoint), listen: instance.listen, tls: instance.tls });
       }
     }
     const verified = [];
@@ -1541,7 +1576,16 @@ async function refreshEndpoints() {
         if (machine.policy && machine.policy.addressMode === "dual") currentCandidate.hosts = addresses.slice();
       }
       if (endpointConfigFingerprint(machine, instance, currentCandidate) !== result.fingerprint) continue;
+      if (instance.nat && natMappingConflicts(state, instance.nat.externalPort, (instance.listen || {}).transport, endpointPublicHosts(currentCandidate), instance.id)) {
+        if (markNatMappingConflict(state, instance, currentCandidate)) changed = true;
+        continue;
+      }
       instance.endpoint = result.endpoint;
+      if (instance.nat) {
+        instance.nat.publicHost = result.endpoint.host;
+        instance.nat.publicHosts = endpointPublicHosts(result.endpoint);
+        if (clearNatMappingConflict(state, instance)) changed = true;
+      }
       if (instance.listen && instance.listen.transport === "udp") instance.health = Object.assign({}, instance.health, { state: "unverified", level: "L1-UDP", reason: "endpoint_updated_agent_listener_only" });
       instance.updatedAt = now(); changed = true;
     }

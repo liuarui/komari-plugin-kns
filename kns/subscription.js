@@ -153,6 +153,7 @@ function filterInstances(state, profile) {
   const tags = Array.isArray(profile.includeTags) && profile.includeTags.length ? new Set(profile.includeTags) : null;
   return state.instances.filter((instance) => {
     if (!instance.enabled || instance.publish === false || instance.deletedAt) return false;
+    if (instance.nat && instance.nat.mappingConflict) return false;
     if (instance.health && instance.health.state === "unhealthy" && profile.excludeUnhealthy !== false) return false;
     if (ids && !ids.has(instance.id)) return false;
     if (allowedMachines && !allowedMachines.has(instance.machineUuid)) return false;
