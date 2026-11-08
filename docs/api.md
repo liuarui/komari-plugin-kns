@@ -35,9 +35,9 @@
 | `instance.publish.update` | `instanceId`, `publish:boolean` | 仅控制是否出现在订阅中 |
 | `instance.metadata.update` | `instanceId`, 可选 `name`, `tags`, `endpointHost`, `endpointPort`, `externalPort` | 更新实例展示或端点信息 |
 | `instance.deduplicate` | `keepInstanceId`, `confirm:true` | 隐藏完全匹配的重复实例，不卸载远端实例 |
-| `profile.create` | `name`, `formats[]`, 可选 `instanceIds`, `machineUuids`, `excludeMachineUuids`, `protocols`, `includeTags`, `addressMode`, `sortBy`, `expiresAt`, `excludeUnhealthy` | `201`，返回新 token URL（只显示一次） |
+| `profile.create` | `name`, `formats[]`, 可选 `instanceIds`, `machineUuids`, `excludeMachineUuids`, `protocols`, `includeTags`, `addressMode`, `sortBy`, `expiresAt`, `excludeUnhealthy` | `201`，只为白名单格式返回 `subscriptionUrls`；仅启用 `uri` 时返回 SubConverter 链接，明文 token URL 只显示一次 |
 | `profile.update` | `profileId`, 上述任意可选档案字段 | 更新档案格式、筛选、排序或过期策略 |
-| `profile.token.create` | `profileId`, 可选 `expiresAt` | `201`，新增独立令牌并只返回一次明文 URL；每档案最多 50 条令牌记录 |
+| `profile.token.create` | `profileId`, 可选 `expiresAt` | `201`，新增独立令牌并只为白名单格式返回 URL；每档案最多 50 条令牌记录 |
 | `profile.token.revoke` | `profileId`, `tokenId` | `200`，仅撤销指定令牌 |
 | `profile.rotate` | `profileId`, 可选 `graceSeconds`（0–604800） | `200`，创建新令牌；旧令牌在宽限期结束后失效，默认宽限为 0 秒 |
 | `profile.revoke` | `profileId` | 撤销档案下全部令牌 |

@@ -1267,8 +1267,7 @@ async function handleAction(req, res) {
       state.profiles.push(profile);
       audit(state, req, "profile.created", { profileId, formats: filters.formats });
       save(state);
-      const sourceUrl = profileUrl(state, profile.id, token, "uri");
-      return json(res, 201, { ok: true, profile: { id: profile.id, name: profile.name }, tokenId: tokenRecord.id, tokenUrl: sourceUrl, nativeUrl: profileUrl(state, profile.id, token, "mihomo-full"), converterUrl: buildConverterUrl(state, sourceUrl) });
+      return json(res, 201, Object.assign({ ok: true, profile: { id: profile.id, name: profile.name }, tokenId: tokenRecord.id }, buildProfileTokenLinks(state, profile, token)));
     }
 
     const profileId = String(body.profileId || "");
@@ -1300,8 +1299,7 @@ async function handleAction(req, res) {
     const auditAction = action === "profile.rotate" ? "profile.rotated" : "profile.token.created";
     audit(state, req, auditAction, { profileId, tokenId: tokenRecord.id, graceSeconds: action === "profile.rotate" ? Number(body.graceSeconds || 0) : 0 });
     save(state);
-    const sourceUrl = profileUrl(state, profile.id, token, "uri");
-    return json(res, action === "profile.token.create" ? 201 : 200, { ok: true, profileId, tokenId: tokenRecord.id, tokenUrl: sourceUrl, nativeUrl: profileUrl(state, profile.id, token, "mihomo-full"), converterUrl: buildConverterUrl(state, sourceUrl) });
+    return json(res, action === "profile.token.create" ? 201 : 200, Object.assign({ ok: true, profileId, tokenId: tokenRecord.id }, buildProfileTokenLinks(state, profile, token)));
   }
   if (action === "profile.token.revoke") {
     const profile = state.profiles.find((item) => item.id === String(body.profileId || ""));
@@ -1378,6 +1376,8 @@ async function handleAction(req, res) {
     if (!key) fail("idempotency_key_required", "状态核查需要 idempotencyKey。", 400);
     const prior = state.jobs.find((item) => item.action === action && item.machineUuid === machine.uuid && item.instanceId === instance.id && item.idempotencyKey === key);
     if (prior) return json(res, 200, { ok: true, reused: true, job: safeJob(prior) });
+    const conflict = state.jobs.find((item) => item.machineUuid === machine.uuid && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
+    if (conflict) fail("runtime_busy", "该探针已有 OneBox 任务进行中，请等待完成后再核查状态。", 409);
     const job = { id: randomId("job"), action, state: "authorized", machineUuid: machine.uuid, machineName: machine.name, instanceId: instance.id, protocol: instance.protocol, runtimeId: instance.runtimeId || "onebox-main", idempotencyKey: key, requestHash: crypto.createHash("sha256").update(machine.uuid + ":" + instance.id + ":status").digest("hex"), taskId: "", callback: null, createdAt: now(), updatedAt: now(), message: "正在提交只读状态核查。" };
     state.jobs.push(job); audit(state, req, "instance.status.requested", { jobId: job.id, instanceId: instance.id, machineUuid: machine.uuid }); save(state);
     const params = { command: makeRemoteStatusCommand(instance), clients: [machine.uuid] };
@@ -1468,6 +1468,22 @@ function buildConverterUrl(state, sourceUrl) {
     converter.searchParams.set("url", sourceUrl);
     return converter.toString();
   } catch (_) { return ""; }
+}
+
+function buildProfileTokenLinks(state, profile, token) {
+  const subscriptionUrls = {};
+  for (const format of Array.isArray(profile.formats) ? profile.formats : []) {
+    if (FORMATS.has(format)) subscriptionUrls[format] = profileUrl(state, profile.id, token, format);
+  }
+  const tokenUrl = subscriptionUrls.uri || "";
+  const nativeFormat = ["mihomo-full", "mihomo-provider", "singbox-full", "singbox-outbounds"].find((format) => subscriptionUrls[format]) || "";
+  return {
+    subscriptionUrls,
+    tokenUrl,
+    nativeUrl: nativeFormat ? subscriptionUrls[nativeFormat] : "",
+    nativeFormat,
+    converterUrl: tokenUrl ? buildConverterUrl(state, tokenUrl) : "",
+  };
 }
 
 function profileValid(profile, token) {

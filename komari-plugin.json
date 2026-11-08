@@ -9,7 +9,7 @@
     "en": "Manage OneBox node instances, machine policies, health, and multi-format subscriptions through Komari Agents."
   },
   "author": "Workspace",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "entry": "script.js",
   "permissions": {
     "node": true,

@@ -119,6 +119,10 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.discover", machineUuid, idempotencyKey: "legacy-discovery-1" }) }, legacyDiscoveryRes);
     assert.equal(legacyDiscoveryRes.statusCode, 202);
     assert.match(execParams.command, /kns discover/);
+    const overlappingStatusRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "instance.status", machineUuid, instanceId: request.instance.id, idempotencyKey: "status-during-discovery" }) }, overlappingStatusRes);
+    assert.equal(overlappingStatusRes.statusCode, 409);
+    assert.equal(JSON.parse(overlappingStatusRes.body).error.code, "runtime_busy");
     const legacyDiscovery = { schema: 1, adapterVersion: "1.3.0", runtime: { engine: "sing-box", id: "onebox-main" }, instances: [{ tag: "old-vless", protocol: "vless", listen: { port: 8443, address: "::", transport: "tcp" }, managed: false, importable: true, options: { security: "reality", sni: "www.example.com", method: "" }, reason: "" }] };
     taskResult = { exit_code: 0, stdout: "KNS_DISCOVERY=" + JSON.stringify(legacyDiscovery) };
     await crons.find((item) => item.expression === "@every 15s").handler();
@@ -235,6 +239,8 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.create", name: "test", formats: ["uri", "mihomo-full"], machineUuids: [machineUuid], excludeMachineUuids: [], protocols: ["vless"], includeTags: ["prod"], addressMode: "ipv4", sortBy: "machine" }) }, profileRes);
     const created = JSON.parse(profileRes.body);
     const url = new URL(created.tokenUrl);
+    assert.deepEqual(Object.keys(created.subscriptionUrls).sort(), ["mihomo-full", "uri"]);
+    assert.equal(new URL(created.converterUrl).searchParams.get("url"), created.tokenUrl);
     const profileStateRes = response();
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, profileStateRes);
     const profileState = JSON.parse(profileStateRes.body).profiles[0];
@@ -258,6 +264,13 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.match(subRes.body, new RegExp(legacyCredentialUuid));
     assert.equal(subRes.headers["x-kns-snapshot-success"], "2");
     assert.ok(subRes.headers["x-kns-snapshot-generated-at"]);
+    const singboxOnlyProfileRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.create", name: "singbox-only", formats: ["singbox-full"] }) }, singboxOnlyProfileRes);
+    const singboxOnly = JSON.parse(singboxOnlyProfileRes.body);
+    assert.deepEqual(Object.keys(singboxOnly.subscriptionUrls), ["singbox-full"]);
+    assert.equal(new URL(singboxOnly.nativeUrl).searchParams.get("format"), "singbox-full");
+    assert.equal(singboxOnly.tokenUrl, "");
+    assert.equal(singboxOnly.converterUrl, "");
     const addTokenRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.token.create", profileId: profileState.id }) }, addTokenRes);
     assert.equal(addTokenRes.statusCode, 201, addTokenRes.body);
