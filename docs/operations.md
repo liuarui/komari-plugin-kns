@@ -30,6 +30,8 @@ Komari 插件注册路由和 cron，不在 Komari 主机启动自己的服务。
 
 插件不持久化 Agent 输出全文。需要诊断细节时，应在目标机本地受控查看 OneBox 安装器日志，避免把节点密码或 subscription URI 粘贴到 Komari 日志。
 
+审计事件追加写入 `kns/audit/`，与可回滚的状态 JSON 分开保存。保留最近 365 天且最多 16 MiB；达到期限或空间上限时先落清理检查点，再清理最旧日志段。管理页显示清理条数和覆盖时间。复制服务或恢复 state 时，需另外备份/迁移该目录；带检查点的保留清理不会随 state restore 回滚。
+
 ## 更新与卸载
 
 更新时在 Komari 中上传新 ZIP；保持插件 `short` 不变，数据沿用同一 storage directory。卸载前通过 UI 分别卸载 KNS 管理的实例；此操作不会卸载共享 OneBox 服务。然后导出 state 与 key，再禁用/移除插件。删除插件 storage 会丢失档案、审计、备份以及解密凭据所需 key。

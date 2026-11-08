@@ -13,7 +13,7 @@
 | `instances[]` | 由 KNS 管理的远端实例，保存监听、端点、协议元数据、发布/健康状态和加密凭据 |
 | `jobs[]` | 授权、远程任务编号、回调摘要、结果核验与审计关联；不存远程 stdout/stderr |
 | `profiles[]` | 订阅格式、过滤条件、档案过期时间及 `tokens[]` 生命周期记录 |
-| `audit[]` | 管理动作摘要；不记录订阅 token 或节点凭据 |
+| `audit[]` | 最近 1000 条管理动作缓存；完整受保留策略管理的追加式 JSONL 日志另存于 `kns/audit/`，不记录订阅 token 或节点凭据 |
 | `legacyNodes[]` | 从原 onebox-bridge 数据迁移的加密 URI |
 | `lastSnapshotAt`, `snapshotPending` | 周期/事件快照标记 |
 
@@ -59,5 +59,6 @@
 - 每日首次状态更新前创建一份状态 JSON 备份；若存在 master key，同时复制当日 key。
 - 只保留最近 7 天的 state/key 备份。
 - 每 5 分钟或审计事件后写一次状态快照，最多保留 288 份（约 24 小时）。
+- 审计事件追加写入独立日志，不随 state restore/import 覆盖；保留最近 365 天且总量上限 16 MiB、单段 256 KiB。超过期限或容量时先写清理检查点，再删除最旧日志段；管理 API/UI 显示清理数量与时间范围。若清理中断，下次读取/追加先完成带检查点的操作。
 - `backup.restore` 恢复状态与匹配日期的 key，并在覆盖前复制当前状态到 `pre-restore-*`。
-- 管理员导出为独立口令加密包（PBKDF2-SHA256 + AES-256-GCM），其中包含 state 与恢复所需 master key；管理页可导入该包，并在写入前保留 `pre-import-*` 副本。若宿主注入 `KNS_MASTER_KEY`，仅允许导入匹配密钥的备份；丢失口令无法解密。插件 ZIP/SBOM 不包括用户运行状态。
+- 管理员导出为独立口令加密包（PBKDF2-SHA256 + AES-256-GCM），其中包含 state 与恢复所需 master key；管理页可导入该包，并在写入前保留 `pre-import-*` 副本。若宿主注入 `KNS_MASTER_KEY`，仅允许导入匹配密钥的备份；丢失口令无法解密。审计日志以独立目录保留，不包含在 state/key 加密导出包中，搬迁服务时需另行安全复制 `kns/audit/`。插件 ZIP/SBOM 不包括用户运行状态。

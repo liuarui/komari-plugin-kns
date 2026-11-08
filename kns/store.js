@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { createAuditLog } = require("./audit-log");
 
 const CURRENT_SCHEMA = 1;
 
@@ -18,8 +19,8 @@ function initialState() {
       publicBaseUrl: "",
       converterUrl: "http://23.146.156.234:25500/sub",
       converterTarget: "clash",
-      oneboxScriptUrl: "https://raw.githubusercontent.com/liuarui/onebox/d9b98f0fd00fe3c9687697baff5c99e398a020b2/install.sh",
-      oneboxScriptSha256: "f5b4a1fde9b773f7963f558411a11003a71183ddb8201fce55801461f5faa65e",
+      oneboxScriptUrl: "https://raw.githubusercontent.com/liuarui/onebox/a36b55cd455053f66cdf18fe3045e306d06d3934/install.sh",
+      oneboxScriptSha256: "507801b3ce9b1226657420bd17a0601e7ac2fe4508ebf2dd440c5e0514b0477f",
       healthIntervalSeconds: 300,
       addressSyncIntervalSeconds: 60,
       privateSite: false,
@@ -59,6 +60,7 @@ function createStore(storageDir) {
   const backupDir = path.join(root, "backups");
   const snapshotDir = path.join(root, "snapshots");
   const subscriptionSnapshotDir = path.join(root, "subscriptions");
+  const auditLog = createAuditLog(storageRoot);
 
   function ensureDirectories() {
     fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
@@ -321,6 +323,7 @@ function createStore(storageDir) {
     if (!/^state-\d{4}-\d{2}-\d{2}\.json$/.test(String(name))) throw new Error("Invalid backup name.");
     const source = path.join(backupDir, name);
     const restored = validateState(JSON.parse(fs.readFileSync(source, "utf8")));
+    auditLog.importHistory(restored.audit);
     const dayKey = String(name).slice("state-".length, -".json".length);
     const keyBackup = path.join(backupDir, "master-" + dayKey + ".key");
     const keyPath = path.join(root, "master.key");
@@ -371,6 +374,7 @@ function createStore(storageDir) {
   function importBackup(value, key) {
     ensureDirectories();
     const restored = validateState(value);
+    auditLog.importHistory(restored.audit);
     const importedKey = Buffer.from(key || []);
     if (importedKey.length !== 32) throw new Error("Imported KNS master key has an invalid length.");
     backupIfDue();
@@ -418,7 +422,7 @@ function createStore(storageDir) {
     }
   }
 
-  return { backupDir, backupStorageBeforeChange, ensureDirectories, importBackup, initialState, listBackups, preparePluginVersion, pruneSubscriptionSnapshots, read, readSubscriptionSnapshot, recoverInterruptedRestore, restoreBackup, root, snapshotDir, stateFile, subscriptionSnapshotDir, write, writeSubscriptionSnapshot };
+  return { appendAudit: auditLog.append, auditRoot: auditLog.root, auditRetention: auditLog.retention, backupDir, backupStorageBeforeChange, ensureDirectories, importBackup, importLegacyAudit: auditLog.importLegacy, initialState, listAudit: auditLog.list, listBackups, preparePluginVersion, pruneSubscriptionSnapshots, read, readSubscriptionSnapshot, recoverInterruptedRestore, restoreBackup, root, snapshotDir, stateFile, subscriptionSnapshotDir, write, writeSubscriptionSnapshot };
 }
 
 module.exports = { CURRENT_SCHEMA, createStore, initialState, validateState };

@@ -13,9 +13,9 @@ const PLUGIN_VERSION = require("../komari-plugin.json").version;
 const API = "/api/kns";
 const LEGACY_API = "/api/onebox-bridge";
 const SOURCE_URL = "https://github.com/liuarui/komari-plugin-kns/tree/v" + PLUGIN_VERSION;
-const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/d9b98f0fd00fe3c9687697baff5c99e398a020b2/install.sh";
-const INSTALLER_SHA256 = "f5b4a1fde9b773f7963f558411a11003a71183ddb8201fce55801461f5faa65e";
-const ONEBOX_ADAPTER_VERSION = "1.3.0";
+const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/a36b55cd455053f66cdf18fe3045e306d06d3934/install.sh";
+const INSTALLER_SHA256 = "507801b3ce9b1226657420bd17a0601e7ac2fe4508ebf2dd440c5e0514b0477f";
+const ONEBOX_ADAPTER_VERSION = "1.4.0";
 const SUBSCRIPTION_RULES_VERSION = "kns-subscription-v1";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -204,6 +204,7 @@ function profileFilterFields(body, current) {
 function getState() {
   let state = store.read();
   if (state) {
+    store.importLegacyAudit(state.audit);
     try { return store.preparePluginVersion(state, PLUGIN_VERSION); }
     catch (error) {
       const cause = safeText(error && error.message || error, 160);
@@ -222,6 +223,7 @@ function getState() {
     catch (_) { fail("master_key_unavailable", "迁移需要的 KNS 主密钥不可用，原状态已保留。", 500); }
     if (legacy && typeof legacy === "object") migrateLegacy(state, legacy);
   }
+  store.importLegacyAudit(state.audit);
   state.pluginVersion = PLUGIN_VERSION;
   return store.write(state);
 }
@@ -368,7 +370,9 @@ function scheduleSubscriptionRefresh() {
 
 function audit(state, req, action, details) {
   const principal = req && req.context && req.context.principal ? req.context.principal : {};
-  state.audit.push({ id: randomId("audit"), at: now(), action, actor: safeText(principal.username || principal.name || principal.id || "admin", 80), details: details || {} });
+  const event = { id: randomId("audit"), at: now(), action, actor: safeText(principal.username || principal.name || principal.id || "admin", 80), details: details || {} };
+  store.appendAudit(event);
+  state.audit.push(event);
   state.snapshotPending = true;
   if (state.audit.length > 1000) state.audit = state.audit.slice(-1000);
 }
@@ -544,6 +548,7 @@ function safeJob(job) {
 }
 
 function publicState(state) {
+  const auditPage = store.listAudit(200);
   return {
     schemaVersion: state.schemaVersion,
     revision: state.revision,
@@ -553,6 +558,10 @@ function publicState(state) {
     runtimes: state.runtimes,
     instances: state.instances.map(safeInstance),
     jobs: state.jobs.slice(-200).reverse().map(safeJob),
+    audit: auditPage.events,
+    auditCursor: auditPage.nextCursor,
+    auditHasMore: auditPage.hasMore,
+    auditRetention: auditPage.retention,
     profiles: state.profiles.map((profile) => ({ id: profile.id, name: profile.name, createdAt: profile.createdAt, expiresAt: profile.expiresAt || "", revokedAt: profile.revokedAt || "", tokens: profileTokenRecords(profile).map(safeProfileToken), formats: profile.formats, instanceIds: profile.instanceIds || null, machineUuids: profile.machineUuids || null, excludeMachineUuids: profile.excludeMachineUuids || [], protocols: profile.protocols || null, includeTags: profile.includeTags || [], excludeUnhealthy: profile.excludeUnhealthy !== false, addressMode: profile.addressMode || "auto", sortBy: profile.sortBy || "name", legacy: !!profile.legacy })),
     backups: store.listBackups(),
     subscriptionFormats: Array.from(FORMATS),
@@ -1825,7 +1834,8 @@ function registerRoutes() {
   registerAdmin("GET", "/admin/logs", (req, res) => {
     const state = getState();
     const limit = Math.max(1, Math.min(500, Number((req.query || {}).limit) || 100));
-    json(res, 200, { audit: state.audit.slice(-limit).reverse(), jobs: state.jobs.slice(-limit).reverse().map(safeJob) });
+    const logs = store.listAudit(limit, safeText((req.query || {}).before || "", 120));
+    json(res, 200, { audit: logs.events.reverse(), nextCursor: logs.nextCursor, hasMore: logs.hasMore, auditRetention: logs.retention, jobs: state.jobs.slice(-limit).reverse().map(safeJob) });
   });
   registerAdmin("GET", "/admin/export", (_req, res) => json(res, 405, { error: { code: "encrypted_export_required", message: "请在管理页输入独立口令，创建加密备份。" } }));
   registerAdmin("POST", "/admin/import", (req, res) => {
@@ -1868,7 +1878,7 @@ function load() {
   server.cron("@every 1m", () => { try { flushTokenUsage(); } catch (error) { console.error("[KNS] token usage save failed:", safeText(error.message || error, 200)); } });
   server.cron("@every 5m", () => { refreshHealth().catch((error) => console.error("[KNS] health check failed:", safeText(error.message || error, 200))); });
   server.cron("@every 5m", () => { scheduleSubscriptionRefresh(); });
-  server.cron("0 3 * * *", () => { try { const state = getState(); store.write(state); } catch (_) {} });
+  server.cron("0 3 * * *", () => { try { const state = getState(); store.write(state); } catch (error) { console.error("[KNS] daily backup failed:", safeText(error && error.message || error, 200)); } });
   scheduleSubscriptionRefresh();
   try { syncMachines(); } catch (_) {}
 }

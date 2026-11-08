@@ -6,9 +6,9 @@
 
 | 方法与路径 | 权限 | 用途 |
 | --- | --- | --- |
-| `GET /api/kns/admin/state` | Admin | 状态快照、机器/实例/任务/订阅档案、备份清单。凭据与 token 不返回 |
+| `GET /api/kns/admin/state` | Admin | 状态快照、机器/实例/任务/订阅档案、最近 200 条审计记录、审计保留检查点和备份清单。凭据与 token 不返回 |
 | `POST /api/kns/admin/action` | Admin + 受信 Origin | 单一动作入口；JSON 请求体见下表 |
-| `GET /api/kns/admin/logs?limit=100` | Admin | 最近审计记录和任务摘要，最大 500 |
+| `GET /api/kns/admin/logs?limit=100&before=<event-id>` | Admin | 审计记录分页、保留策略/清理检查点和任务摘要，最大 500；日志保留最近 365 天且最多 16 MiB |
 | `GET /api/kns/admin/export` | Admin | 兼容路径，返回 `405 encrypted_export_required`；原始状态导出已关闭 |
 | `POST /api/kns/admin/import` | Admin + 受信 Origin | 校验并恢复口令加密导出；请求体上限 16 MiB，导入前保留本地 state/key 副本 |
 | `POST /api/kns/report` | OneBox Bearer token | OneBox 一次性任务回调；不需要管理员 session |
