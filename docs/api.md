@@ -1,22 +1,22 @@
 # 管理 API 与错误码
 
-基础路径 `/api/kns`。插件通过 Komari 插件 route API 在现有服务器注册路由；管理 API 每次验证 `req.context.principal` 的 admin 角色。写请求还要求同源 `Origin`，或受信 `Bearer` 身份 / `Sec-Fetch-Site: same-origin`。所有 JSON 响应带 `Cache-Control: no-store`。详情见 [Komari 插件开发文档](https://komari-document.pages.dev/en/dev/plugin/)。
+基础路径 `/api/kns`。插件通过 Komari 插件 route API 在现有服务器注册路由；管理 API 每次验证 `req.context.principal` 的 admin 角色。写请求还要求浏览器 Origin 与请求 Host 相同，或与管理员配置的 Komari HTTPS 公网 Origin 相同（用于反代上游 Host 被改写的部署）；不会信任任意 `X-Forwarded-*`。缺少 Origin 时只接受受信 Bearer 身份或 `Sec-Fetch-Site: same-origin`。所有 JSON 响应带 `Cache-Control: no-store`。详情见 [Komari 插件开发文档](https://komari-document.pages.dev/en/dev/plugin/)。
 
 ## 路由
 
 | 方法与路径 | 权限 | 用途 |
 | --- | --- | --- |
 | `GET /api/kns/admin/state` | Admin | 状态快照、机器/实例/任务/订阅档案、备份清单。凭据与 token 不返回 |
-| `POST /api/kns/admin/action` | Admin + 同源 | 单一动作入口；JSON 请求体见下表 |
+| `POST /api/kns/admin/action` | Admin + 受信 Origin | 单一动作入口；JSON 请求体见下表 |
 | `GET /api/kns/admin/logs?limit=100` | Admin | 最近审计记录和任务摘要，最大 500 |
 | `GET /api/kns/admin/export` | Admin | 兼容路径，返回 `405 encrypted_export_required`；原始状态导出已关闭 |
-| `POST /api/kns/admin/import` | Admin + 同源 | 校验并恢复口令加密导出；请求体上限 16 MiB，导入前保留本地 state/key 副本 |
+| `POST /api/kns/admin/import` | Admin + 受信 Origin | 校验并恢复口令加密导出；请求体上限 16 MiB，导入前保留本地 state/key 副本 |
 | `POST /api/kns/report` | OneBox Bearer token | OneBox 一次性任务回调；不需要管理员 session |
 | `GET /api/kns/sub?profile=…&format=…&token=…` | 高熵订阅 token | 输出 URI、Mihomo 或 sing-box 订阅 |
 | `GET /api/onebox-bridge/subscribe?token=…` | 旧版 token | 迁移订阅的 URI 兼容路由 |
 | `GET /api/onebox-bridge/state` | Admin | 旧版只读状态路由 |
 
-订阅格式为 `uri`、`mihomo-full`、`mihomo-provider`、`singbox-full`、`singbox-outbounds`。GET 只读取已生成的加密快照，不在请求期间构建订阅；响应有 ETag、`Vary: Authorization, Cookie`、`X-Content-Type-Options: nosniff` 和 no-store 缓存控制，并返回快照生成时间、成功数和跳过数。`success` 按输出条目计数（URI 行或配置节点）；`skipped` 按未输出的已发布实例计数。快照尚未生成或来源哈希已过期时返回 `503` 与 `Retry-After: 2`；档案/实例变更会触发生成，另有每 5 分钟兜底刷新。
+KNS 原生订阅格式为 `uri`、`mihomo-full`、`mihomo-provider`、`singbox-full`、`singbox-outbounds`。GET 只读取已生成的加密快照，不在请求期间构建订阅；响应有 ETag、`Vary: Authorization, Cookie`、`X-Content-Type-Options: nosniff` 和 no-store 缓存控制，并返回快照生成时间、成功数和跳过数。`success` 按输出条目计数（URI 行或配置节点）；`skipped` 按未输出的已发布实例计数。快照尚未生成或来源哈希已过期时返回 `503` 与 `Retry-After: 2`；档案/实例变更会触发生成，另有每 5 分钟兜底刷新。订阅档案含 `uri` 时，创建/轮换令牌的响应还会生成 SubConverter target 链接：`clash`、`clashr`、`surge`、`quan`、`quanx`、`loon`、`surfboard`、`stash`、`mellow`、`singbox`、`ss`、`ssd`、`ssr`、`sssub`、`v2ray`、`v2rayn`、`v2rayng`、`shadowrocket`、`trojan`、`vless`、`hysteria2`、`mixed`。该白名单已从用户配置的 SubConverter-Extended `/sub` 响应核对；这些是外部转换链接，不是 KNS 原生格式，目标无法表达的协议可能被转换器跳过。[上游 target 说明](https://github.com/tindy2013/subconverter/blob/master/README.md#supported-types)
 
 ## `POST /admin/action` 动作
 
@@ -25,9 +25,9 @@
 | `action` | 常用字段 | 返回 |
 | --- | --- | --- |
 | `machine.policy.update` | `machineUuid`, `policy.deployAllowed`, `policy.addressMode`, `policy.manualAddress`, `policy.ddnsHostname`, `policy.tags` | 更新并返回机器策略 |
-| `machine.discover` | `machineUuid`, `idempotencyKey`, 可选 `twoFactorCode` | `202` 只读扫描任务；只返回安全元数据，不含节点凭据 |
+| `machine.discover` | `machineUuid`, `idempotencyKey`, 可选 `twoFactorCode` | `202` 单机只读扫描任务；后台页可批量选择最多 100 台在线探针并逐台提交，结果各自成为 job；只返回安全元数据，不含节点凭据 |
 | `machine.import` | `machineUuid`, `legacyTag`, `confirm:true`, `idempotencyKey`, 可选 `endpointHost`, `externalPort`, `twoFactorCode` | `202` 一次性导入任务；HTTPS 回调后加密登记为外部只读节点 |
-| `settings.update` | `publicBaseUrl`（HTTPS），可选 `converterUrl`, `converterTarget`, `privateSite` | 更新回调、订阅转换和私有地址设置 |
+| `settings.update` | `publicBaseUrl`（HTTPS），可选 `converterUrl`, `converterTarget`（见支持列表）, `privateSite` | 更新回调、订阅转换和私有地址设置 |
 | `install` | `machineUuid`, `protocol`, `listenPort`, `listenAddress`, `options`, 可选 `name`, `tags`, `endpointHost`, `externalPort`, `idempotencyKey`, `confirm:true`, `twoFactorCode` | `202` job |
 | `reconfigure`, `reinstall` | 同上并带已有 `instanceId` | `202` job |
 | `enable`, `disable`, `uninstall` | `machineUuid`, `instanceId`, `idempotencyKey`, `confirm:true`, 可选 `twoFactorCode` | `202` job |
@@ -35,7 +35,7 @@
 | `instance.publish.update` | `instanceId`, `publish:boolean` | 仅控制是否出现在订阅中 |
 | `instance.metadata.update` | `instanceId`, 可选 `name`, `tags`, `endpointHost`, `endpointPort`, `externalPort` | 更新实例展示或端点信息 |
 | `instance.deduplicate` | `keepInstanceId`, `confirm:true` | 隐藏完全匹配的重复实例，不卸载远端实例 |
-| `profile.create` | `name`, `formats[]`, 可选 `instanceIds`, `machineUuids`, `excludeMachineUuids`, `protocols`, `includeTags`, `addressMode`, `sortBy`, `expiresAt`, `excludeUnhealthy` | `201`，只为白名单格式返回 `subscriptionUrls`；仅启用 `uri` 时返回 SubConverter 链接，明文 token URL 只显示一次 |
+| `profile.create` | `name`, `formats[]`, 可选 `instanceIds`, `machineUuids`, `excludeMachineUuids`, `protocols`, `includeTags`, `addressMode`, `sortBy`, `expiresAt`, `excludeUnhealthy` | `201`，只为白名单原生格式返回 `subscriptionUrls`；含 `uri` 时返回 `converterUrls` 全部受支持 target，明文 token URL 只显示一次 |
 | `profile.update` | `profileId`, 上述任意可选档案字段 | 更新档案格式、筛选、排序或过期策略 |
 | `profile.token.create` | `profileId`, 可选 `expiresAt` | `201`，新增独立令牌并只为白名单格式返回 URL；每档案最多 50 条令牌记录 |
 | `profile.token.revoke` | `profileId`, `tokenId` | `200`，仅撤销指定令牌 |

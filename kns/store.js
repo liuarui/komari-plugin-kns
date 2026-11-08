@@ -73,6 +73,33 @@ function createStore(storageDir) {
     finally { fs.closeSync(fd); }
   }
 
+  function syncDirectory(directory) {
+    let fd;
+    try { fd = fs.openSync(directory, "r"); fs.fsyncSync(fd); }
+    catch (_) {}
+    finally { if (fd !== undefined) try { fs.closeSync(fd); } catch (_) {} }
+  }
+
+  function writeAtomicBytes(destination, contents, mode) {
+    const temporary = destination + "." + crypto.randomBytes(8).toString("hex") + ".tmp";
+    try {
+      fs.writeFileSync(temporary, contents, { mode: mode || 0o600, flag: "wx" });
+      try { fs.chmodSync(temporary, mode || 0o600); } catch (_) {}
+      syncFile(temporary);
+      fs.renameSync(temporary, destination);
+      try { fs.chmodSync(destination, mode || 0o600); } catch (_) {}
+      syncDirectory(path.dirname(destination));
+    } catch (error) {
+      try { fs.unlinkSync(temporary); } catch (_) {}
+      throw error;
+    }
+  }
+
+  function stateRequiresMasterKey(value) {
+    return (Array.isArray(value && value.instances) && value.instances.some((item) => !!(item && item.credentialCiphertext))) ||
+      (Array.isArray(value && value.legacyNodes) && value.legacyNodes.some((item) => !!(item && item.ciphertext)));
+  }
+
   function backupStorageBeforeChange(reason) {
     if (!["migration", "upgrade"].includes(reason)) throw new Error("Invalid storage snapshot reason.");
     const suffix = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomBytes(5).toString("hex");
@@ -165,18 +192,21 @@ function createStore(storageDir) {
     const day = new Date().toISOString().slice(0, 10);
     const destination = path.join(backupDir, "state-" + day + ".json");
     if (fs.existsSync(destination)) return;
-    const temp = destination + ".tmp";
-    fs.copyFileSync(stateFile, temp);
-    try { fs.chmodSync(temp, 0o600); } catch (_) {}
-    fs.renameSync(temp, destination);
     const keyPath = path.join(root, "master.key");
-    if (fs.existsSync(keyPath)) {
-      const keyBackup = path.join(backupDir, "master-" + day + ".key");
-      if (!fs.existsSync(keyBackup)) {
-        fs.copyFileSync(keyPath, keyBackup);
-        try { fs.chmodSync(keyBackup, 0o600); } catch (_) {}
+    const configuredKey = typeof process !== "undefined" && process.env ? process.env.KNS_MASTER_KEY : "";
+    if (configuredKey && !/^[a-f0-9]{64}$/i.test(configuredKey)) throw new Error("KNS_MASTER_KEY must be 64 hexadecimal characters.");
+    const currentState = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    if (!configuredKey) {
+      if (fs.existsSync(keyPath)) {
+        const keyBackup = path.join(backupDir, "master-" + day + ".key");
+        // Publish the matching key first. If copying the state fails, the next
+        // attempt refreshes this key before it publishes the state file.
+        writeAtomicBytes(keyBackup, fs.readFileSync(keyPath), 0o600);
+      } else if (stateRequiresMasterKey(currentState)) {
+        throw new Error("Cannot create a consistent daily backup without the KNS master key.");
       }
     }
+    writeAtomicBytes(destination, fs.readFileSync(stateFile), 0o600);
     const backups = fs.readdirSync(backupDir).filter((name) => /^state-\d{4}-\d{2}-\d{2}\.json$/.test(name)).sort();
     while (backups.length > 7) {
       const oldest = backups.shift();
@@ -259,26 +289,82 @@ function createStore(storageDir) {
     return fs.readdirSync(backupDir).filter((name) => /^state-\d{4}-\d{2}-\d{2}\.json$/.test(name)).sort().reverse();
   }
 
+  function recoverInterruptedRestore() {
+    const transactionPath = path.join(backupDir, "restore-transaction.json");
+    if (!fs.existsSync(transactionPath)) return false;
+    const transaction = JSON.parse(fs.readFileSync(transactionPath, "utf8"));
+    if (!transaction || transaction.format !== "KNS-RESTORE-TRANSACTION-v1" || !/^pre-restore-[0-9]+-[a-f0-9]{12}\.json$/.test(String(transaction.stateBackup || "")) || !/^pre-restore-[0-9]+-[a-f0-9]{12}\.key$/.test(String(transaction.keyBackup || ""))) {
+      throw new Error("Interrupted KNS restore journal is invalid; existing files were left untouched.");
+    }
+    if (transaction.keyChanged === true) {
+      const keyPath = path.join(root, "master.key");
+      if (transaction.hadKey === true) {
+        const oldKeyPath = path.join(backupDir, transaction.keyBackup);
+        if (!fs.existsSync(oldKeyPath)) throw new Error("Interrupted KNS restore cannot recover the previous master key.");
+        writeAtomicBytes(keyPath, fs.readFileSync(oldKeyPath), 0o600);
+      } else if (fs.existsSync(keyPath)) fs.unlinkSync(keyPath);
+    }
+    if (transaction.hadState === true) {
+      const oldStatePath = path.join(backupDir, transaction.stateBackup);
+      if (!fs.existsSync(oldStatePath)) throw new Error("Interrupted KNS restore cannot recover the previous state.");
+      writeAtomicBytes(stateFile, fs.readFileSync(oldStatePath), 0o600);
+    } else if (fs.existsSync(stateFile)) fs.unlinkSync(stateFile);
+    fs.unlinkSync(transactionPath);
+    syncDirectory(backupDir);
+    return true;
+  }
+
   function restoreBackup(name) {
     ensureDirectories();
+    recoverInterruptedRestore();
     if (!/^state-\d{4}-\d{2}-\d{2}\.json$/.test(String(name))) throw new Error("Invalid backup name.");
     const source = path.join(backupDir, name);
     const restored = validateState(JSON.parse(fs.readFileSync(source, "utf8")));
     const dayKey = String(name).slice("state-".length, -".json".length);
     const keyBackup = path.join(backupDir, "master-" + dayKey + ".key");
-    if (fs.existsSync(keyBackup)) {
-      const keyPath = path.join(root, "master.key");
-      const keyTemp = keyPath + ".restore";
-      fs.copyFileSync(keyBackup, keyTemp);
-      try { fs.chmodSync(keyTemp, 0o600); } catch (_) {}
-      fs.renameSync(keyTemp, keyPath);
+    const keyPath = path.join(root, "master.key");
+    const configuredKey = typeof process !== "undefined" && process.env ? process.env.KNS_MASTER_KEY : "";
+    const requiresKey = stateRequiresMasterKey(restored);
+    let restoredKey = null;
+    let keyChanged = false;
+    if (configuredKey) {
+      if (!/^[a-f0-9]{64}$/i.test(configuredKey)) throw new Error("KNS_MASTER_KEY must be 64 hexadecimal characters.");
+      restoredKey = Buffer.from(configuredKey, "hex");
+      if (fs.existsSync(keyBackup)) {
+        const backupKey = fs.readFileSync(keyBackup);
+        if (backupKey.length !== 32 || !crypto.timingSafeEqual(backupKey, restoredKey)) throw new Error("This backup uses a different KNS_MASTER_KEY; restore was stopped.");
+      }
+    } else if (fs.existsSync(keyBackup)) {
+      restoredKey = fs.readFileSync(keyBackup);
+      if (restoredKey.length !== 32) throw new Error("KNS master-key backup has an invalid length.");
+      keyChanged = true;
+    } else if (requiresKey) {
+      throw new Error("This state backup has encrypted credentials but no matching master-key backup; current state was left untouched.");
     }
-    if (fs.existsSync(stateFile)) {
-      const preRestore = path.join(backupDir, "pre-restore-" + Date.now() + ".json");
-      fs.copyFileSync(stateFile, preRestore);
-      try { fs.chmodSync(preRestore, 0o600); } catch (_) {}
+
+    // Preserve today's state/key pair before replacing either member. The
+    // daily backup is also the recovery point if the process stops mid-write.
+    backupIfDue();
+    const suffix = Date.now() + "-" + crypto.randomBytes(6).toString("hex");
+    const stateBackup = "pre-restore-" + suffix + ".json";
+    const keyBackupName = "pre-restore-" + suffix + ".key";
+    const hadState = fs.existsSync(stateFile);
+    const hadKey = fs.existsSync(keyPath);
+    if (hadState) writeAtomicBytes(path.join(backupDir, stateBackup), fs.readFileSync(stateFile), 0o600);
+    if (hadKey) writeAtomicBytes(path.join(backupDir, keyBackupName), fs.readFileSync(keyPath), 0o600);
+    const transaction = { format: "KNS-RESTORE-TRANSACTION-v1", stateBackup, keyBackup: keyBackupName, hadState, hadKey, keyChanged };
+    writeAtomicBytes(path.join(backupDir, "restore-transaction.json"), JSON.stringify(transaction), 0o600);
+    try {
+      if (keyChanged && restoredKey) writeAtomicBytes(keyPath, restoredKey, 0o600);
+      const result = write(restored);
+      fs.unlinkSync(path.join(backupDir, "restore-transaction.json"));
+      syncDirectory(backupDir);
+      return result;
+    } catch (error) {
+      try { recoverInterruptedRestore(); }
+      catch (recoveryError) { throw new Error((error.message || String(error)) + "; restore rollback also failed: " + (recoveryError.message || String(recoveryError))); }
+      throw error;
     }
-    return write(restored);
   }
 
   function importBackup(value, key) {
@@ -331,7 +417,7 @@ function createStore(storageDir) {
     }
   }
 
-  return { backupDir, backupStorageBeforeChange, ensureDirectories, importBackup, initialState, listBackups, preparePluginVersion, pruneSubscriptionSnapshots, read, readSubscriptionSnapshot, restoreBackup, root, snapshotDir, stateFile, subscriptionSnapshotDir, write, writeSubscriptionSnapshot };
+  return { backupDir, backupStorageBeforeChange, ensureDirectories, importBackup, initialState, listBackups, preparePluginVersion, pruneSubscriptionSnapshots, read, readSubscriptionSnapshot, recoverInterruptedRestore, restoreBackup, root, snapshotDir, stateFile, subscriptionSnapshotDir, write, writeSubscriptionSnapshot };
 }
 
 module.exports = { CURRENT_SCHEMA, createStore, initialState, validateState };

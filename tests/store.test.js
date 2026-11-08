@@ -25,6 +25,99 @@ test("store writes atomically and restores the daily state/key backup", () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("daily backup publishes the key before the matching state and retries a partial attempt", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-daily-backup-pair-"));
+  const priorEnvKey = process.env.KNS_MASTER_KEY;
+  delete process.env.KNS_MASTER_KEY;
+  const originalRead = fs.readFileSync;
+  try {
+    const store = createStore(root);
+    store.write(store.initialState());
+    const keyPath = path.join(store.root, "master.key");
+    fs.writeFileSync(keyPath, Buffer.alloc(32, 5), { mode: 0o600 });
+    const next = store.read(); next.settings.privateSite = true;
+    fs.readFileSync = function (filename, ...args) {
+      if (filename === keyPath) throw new Error("simulated key backup read failure");
+      return originalRead.call(this, filename, ...args);
+    };
+    assert.throws(() => store.write(next), /simulated key backup read failure/);
+    const day = new Date().toISOString().slice(0, 10);
+    assert.equal(fs.existsSync(path.join(store.backupDir, "state-" + day + ".json")), false);
+    assert.equal(fs.existsSync(path.join(store.backupDir, "master-" + day + ".key")), false);
+    fs.readFileSync = originalRead;
+    store.write(next);
+    assert.equal(fs.existsSync(path.join(store.backupDir, "state-" + day + ".json")), true);
+    assert.deepEqual(fs.readFileSync(path.join(store.backupDir, "master-" + day + ".key")), Buffer.alloc(32, 5));
+  } finally {
+    fs.readFileSync = originalRead;
+    if (priorEnvKey === undefined) delete process.env.KNS_MASTER_KEY;
+    else process.env.KNS_MASTER_KEY = priorEnvKey;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("failed daily restore rolls back the previous state and master key", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-restore-rollback-"));
+  const priorEnvKey = process.env.KNS_MASTER_KEY;
+  delete process.env.KNS_MASTER_KEY;
+  const originalRename = fs.renameSync;
+  try {
+    const store = createStore(root);
+    store.write(store.initialState());
+    const keyPath = path.join(store.root, "master.key");
+    fs.writeFileSync(keyPath, Buffer.alloc(32, 3), { mode: 0o600 });
+    const current = store.read(); current.settings.privateSite = true; store.write(current);
+    const backupName = store.listBackups()[0];
+    fs.writeFileSync(keyPath, Buffer.alloc(32, 4), { mode: 0o600 });
+    let failOnce = true;
+    fs.renameSync = function (source, destination) {
+      if (destination === store.stateFile && failOnce) { failOnce = false; throw new Error("simulated state commit failure"); }
+      return originalRename.call(this, source, destination);
+    };
+    assert.throws(() => store.restoreBackup(backupName), /simulated state commit failure/);
+    assert.equal(store.read().settings.privateSite, true);
+    assert.deepEqual(fs.readFileSync(keyPath), Buffer.alloc(32, 4));
+    assert.equal(fs.existsSync(path.join(store.backupDir, "restore-transaction.json")), false);
+  } finally {
+    fs.renameSync = originalRename;
+    if (priorEnvKey === undefined) delete process.env.KNS_MASTER_KEY;
+    else process.env.KNS_MASTER_KEY = priorEnvKey;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("startup recovery reverts a restore transaction interrupted between file commits", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-restore-recovery-"));
+  const priorEnvKey = process.env.KNS_MASTER_KEY;
+  delete process.env.KNS_MASTER_KEY;
+  try {
+    const store = createStore(root);
+    store.write(store.initialState());
+    const keyPath = path.join(store.root, "master.key");
+    const oldKey = Buffer.alloc(32, 6);
+    fs.writeFileSync(keyPath, oldKey, { mode: 0o600 });
+    const current = store.read(); current.settings.privateSite = true; store.write(current);
+    const priorState = fs.readFileSync(store.stateFile);
+    const suffix = "1234567890-abcdef012345";
+    const stateBackup = "pre-restore-" + suffix + ".json";
+    const keyBackup = "pre-restore-" + suffix + ".key";
+    fs.writeFileSync(path.join(store.backupDir, stateBackup), priorState, { mode: 0o600 });
+    fs.writeFileSync(path.join(store.backupDir, keyBackup), oldKey, { mode: 0o600 });
+    fs.writeFileSync(keyPath, Buffer.alloc(32, 7), { mode: 0o600 });
+    const interrupted = JSON.parse(priorState.toString("utf8")); interrupted.settings.privateSite = false;
+    fs.writeFileSync(store.stateFile, JSON.stringify(interrupted), { mode: 0o600 });
+    fs.writeFileSync(path.join(store.backupDir, "restore-transaction.json"), JSON.stringify({ format: "KNS-RESTORE-TRANSACTION-v1", stateBackup, keyBackup, hadState: true, hadKey: true, keyChanged: true }), { mode: 0o600 });
+    assert.equal(store.recoverInterruptedRestore(), true);
+    assert.equal(store.read().settings.privateSite, true);
+    assert.deepEqual(fs.readFileSync(keyPath), oldKey);
+    assert.equal(fs.existsSync(path.join(store.backupDir, "restore-transaction.json")), false);
+  } finally {
+    if (priorEnvKey === undefined) delete process.env.KNS_MASTER_KEY;
+    else process.env.KNS_MASTER_KEY = priorEnvKey;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("master key creation tolerates Komari's lstat error for a missing key", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-master-key-"));
   const keyPath = path.join(root, "kns", "master.key");

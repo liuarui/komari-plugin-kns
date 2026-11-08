@@ -5,11 +5,11 @@
   },
   "short": "onebox-bridge",
   "description": {
-    "zh_CN": "在 Komari 中管理探针机器的 OneBox 节点部署、状态与地址同步，并发布受令牌保护的 URI、Mihomo 和 sing-box 订阅。",
-    "en": "Manage OneBox deployments, status, and address sync for Komari-monitored machines, and publish token-protected URI, Mihomo, and sing-box subscriptions."
+    "zh_CN": "在 Komari 中管理 OneBox 节点、批量扫描旧版节点并同步地址，发布受令牌保护的 Mihomo、sing-box 与多客户端转换订阅。",
+    "en": "Manage OneBox nodes, batch-scan legacy nodes, sync endpoints, and publish token-protected Mihomo, sing-box, and multi-client converted subscriptions."
   },
   "author": "ajax",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "komari": ">=1.4.3",
   "entry": "script.js",
   "permissions": {

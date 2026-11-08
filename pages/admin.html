@@ -63,7 +63,7 @@
   </section>
 
   <section id="machines" class="panel">
-    <div class="card"><div class="toolbar"><h2 style="margin-right:auto">Komari 探针与部署策略</h2><button id="reloadMachines" class="secondary">同步探针</button></div><p class="muted">机器 UUID 是稳定关联键。部署策略默认关闭；“扫描旧版节点”只读检查 OneBox 配置，导入操作需逐个确认。地址来源顺序为实例地址、机器手动地址、DDNS 域名、Komari 上报地址。</p>
+    <div class="card"><div class="toolbar"><h2 style="margin-right:auto">Komari 探针与部署策略</h2><button id="selectOnlineScans" class="secondary">全选在线探针</button><button id="clearScanSelection" class="secondary">清空选择</button><button id="scanLegacySelected">批量扫描所选旧版节点</button><button id="reloadMachines" class="secondary">同步探针</button></div><p class="muted">机器 UUID 是稳定关联键。部署策略默认关闭；旧版扫描只读检查 OneBox 配置，不会修改节点。可选择多台在线探针批量扫描；扫描结果脱敏显示，导入仍需逐个确认。地址来源顺序为实例地址、机器手动地址、DDNS 域名、Komari 上报地址。</p>
       <div class="table-wrap"><table><thead><tr><th>探针</th><th>状态 / 地址</th><th>部署策略</th><th>Endpoint / 标签</th><th>操作</th></tr></thead><tbody id="machineRows"></tbody></table></div>
     </div>
   </section>
@@ -100,7 +100,7 @@
       <div class="grid"><label>档案名称<input id="profileName" maxlength="80" value="默认订阅"></label><label>过期时间（可选）<input id="profileExpiry" type="datetime-local"></label></div>
       <div id="createProfileFilters" class="profile-filters"></div>
       <div class="format-list">
-        <label><input type="checkbox" value="uri" checked>URI 原始链接</label><label><input type="checkbox" value="mihomo-full" checked>Mihomo 完整配置</label><label><input type="checkbox" value="mihomo-provider" checked>Mihomo Provider</label><label><input type="checkbox" value="singbox-full" checked>sing-box 完整配置</label><label><input type="checkbox" value="singbox-outbounds" checked>sing-box Outbounds</label>
+        <label><input type="checkbox" value="uri" checked>URI 原始链接（用于转换）</label><label><input type="checkbox" value="mihomo-full" checked>Mihomo 完整配置</label><label><input type="checkbox" value="mihomo-provider" checked>Mihomo Provider</label><label><input type="checkbox" value="singbox-full" checked>sing-box 完整配置</label><label><input type="checkbox" value="singbox-outbounds" checked>sing-box Outbounds</label>
       </div>
       <p class="notice">令牌只在创建或轮换时显示一次；服务器状态中只保存带盐哈希。每个档案支持多个独立令牌。订阅 URL 含令牌，分享时请当作密码。</p>
       <div class="actions"><button id="createProfile">生成订阅令牌</button></div>
@@ -110,7 +110,7 @@
   </section>
 
   <section id="settings" class="panel">
-    <div class="card"><h2>服务与转换设置</h2><div class="grid"><label>Komari HTTPS 公网地址<input id="publicBaseUrl" type="url" placeholder="https://monitor.example.com"></label><label>SubConverter 接口<input id="subconverterUrl" type="url" value="http://23.146.156.234:25500/sub"></label><label>转换 target<select id="converterTarget"><option value="clash">clash</option><option value="singbox">singbox</option></select></label><label><input id="privateSite" type="checkbox">允许发布私有 Endpoint（仅内网订阅）</label></div><p class="notice">KNS 回调要求 HTTPS 公网地址。现有 SubConverter 默认 HTTP，HTTP 会暴露订阅令牌和节点凭据，建议为转换服务配置 HTTPS。</p><div class="actions"><button id="saveSettings">保存设置</button><span id="settingsStatus" class="status muted"></span></div><p class="small muted">OneBox 安装脚本固定到已审查的 Git commit 和 SHA256，不从可变 main 分支执行。</p><p id="installerPin" class="small"></p></div>
+    <div class="card"><h2>服务与转换设置</h2><div class="grid"><label>Komari HTTPS 公网地址<input id="publicBaseUrl" type="url" placeholder="https://monitor.example.com"></label><label>SubConverter 接口<input id="subconverterUrl" type="url" value="http://23.146.156.234:25500/sub"></label><label>默认转换 target<select id="converterTarget"><option value="clash">Clash</option><option value="clashr">ClashR</option><option value="surge">Surge</option><option value="quan">Quantumult</option><option value="quanx">Quantumult X</option><option value="loon">Loon</option><option value="surfboard">Surfboard</option><option value="stash">Stash</option><option value="mellow">Mellow</option><option value="singbox">sing-box</option><option value="ss">SS</option><option value="ssd">SSD</option><option value="ssr">SSR</option><option value="sssub">SSSub</option><option value="v2ray">V2Ray</option><option value="v2rayn">V2RayN</option><option value="v2rayng">V2RayNG</option><option value="shadowrocket">Shadowrocket</option><option value="trojan">Trojan</option><option value="vless">VLESS</option><option value="hysteria2">Hysteria2</option><option value="mixed">Mixed</option></select></label><label><input id="privateSite" type="checkbox">允许发布私有 Endpoint（仅内网订阅）</label></div><p class="muted small">令牌创建或轮换后，可在订阅结果中切换已验证 SubConverter 服务支持的 target。转换端会跳过目标客户端无法表示的协议。</p><p class="notice">KNS 回调要求 HTTPS 公网地址。现有 SubConverter 默认 HTTP，HTTP 会暴露订阅令牌和节点凭据，建议为转换服务配置 HTTPS。</p><div class="actions"><button id="saveSettings">保存设置</button><span id="settingsStatus" class="status muted"></span></div><p class="small muted">OneBox 安装脚本固定到已审查的 Git commit 和 SHA256，不从可变 main 分支执行。</p><p id="installerPin" class="small"></p></div>
     <div class="card"><h2>数据恢复</h2><p class="muted">每日保留 7 份状态和密钥备份。加密导入会替换当前 KNS 状态与密钥；操作前会保留本地恢复副本。</p><div class="toolbar"><select id="backupSelect"></select><button id="restoreBackup" class="danger">恢复所选备份</button><button id="exportState" class="secondary">导出加密备份</button><input id="importBackupFile" type="file" accept="application/json,.json"><button id="importBackup" class="danger">导入加密备份</button></div></div>
     <div class="card"><h2>审计日志</h2><div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>详情</th></tr></thead><tbody id="auditRows"></tbody></table></div></div>
     <div class="card"><h2>兼容性与运行限制</h2><p id="compatibility" class="muted">该插件依赖 Komari MoeJS 插件路由、定时任务、admin:listClients、admin:exec 和 admin:getSpecificTaskResult。最终需在目标 Komari Server/Agent 版本实测。</p></div>
@@ -124,6 +124,8 @@
   let state = null;
   let lastCreatedNative = "";
   let createProfileFiltersReady = false;
+  const legacyScanSelection = new Set();
+  const legacyScanFailures = new Map();
 
   async function request(path, options = {}) {
     const response = await fetch(api + path, Object.assign({ credentials: "same-origin", cache: "no-store" }, options));
@@ -168,6 +170,56 @@
     } catch (error) { setStatus("globalStatus", error.message, "error"); }
   }
 
+  async function discoverLegacyNodesBatch() {
+    const selected = state.machines.filter((machine) => legacyScanSelection.has(machine.uuid));
+    if (!selected.length) { setStatus("globalStatus", "先勾选一台或多台在线探针。", "error"); return; }
+    if (selected.length > 100) { setStatus("globalStatus", "每批最多扫描 100 台探针，请分批选择。", "error"); return; }
+    const online = selected.filter((machine) => machine.online === true);
+    const offlineCount = selected.length - online.length;
+    if (!online.length) { setStatus("globalStatus", "所选探针当前都不在线，未提交扫描。", "error"); return; }
+    if (!confirm("将对 " + online.length + " 台在线探针执行只读 OneBox 配置扫描；不会安装、修改或卸载节点。" + (offlineCount ? "\n" + offlineCount + " 台离线探针将跳过。" : "") + "\n继续？")) return;
+    const twoFactorCode = prompt("Komari 启用了 2FA 时请输入当前验证码；未启用则留空。", "");
+    if (twoFactorCode === null) return;
+    legacyScanFailures.clear();
+    const results = new Array(online.length);
+    let cursor = 0;
+    let completed = 0;
+    const worker = async () => {
+      while (cursor < online.length) {
+        const index = cursor++;
+        const machine = online[index];
+        try {
+          const result = await postAction({ action:"machine.discover", machineUuid:machine.uuid, twoFactorCode:twoFactorCode.trim() || undefined, idempotencyKey:idempotencyKey() });
+          results[index] = { ok: !!result.ok, reused: !!result.reused, job: result.job, machine };
+          if (!result.ok) legacyScanFailures.set(machine.uuid, result.job&&result.job.message||"扫描任务提交失败。");
+        } catch (error) { results[index] = { ok:false, error:error.message, machine }; legacyScanFailures.set(machine.uuid,error.message); }
+        completed += 1;
+        const failures = results.slice(0, completed).filter((item) => item && !item.ok).length;
+        setStatus("globalStatus", "批量扫描提交中：" + completed + "/" + online.length + "，提交失败 " + failures + "。", failures ? "error" : "muted");
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(5, online.length) }, worker));
+    legacyScanSelection.clear();
+    await refresh();
+    const failed = results.filter((item) => !item.ok).length;
+    const submitted = online.length - failed;
+    const summary = "扫描任务已提交 " + submitted + "/" + online.length + " 台；提交失败 " + failed + " 台；离线跳过 " + offlineCount + " 台。远程扫描结果请查看机器行和任务列表。";
+    setStatus("globalStatus", summary, failed ? "error" : "success");
+  }
+
+  function selectOnlineLegacyScanMachines() {
+    legacyScanSelection.clear();
+    state.machines.filter((machine) => machine.online === true).forEach((machine) => legacyScanSelection.add(machine.uuid));
+    renderMachines();
+    setStatus("globalStatus", "已选择 " + legacyScanSelection.size + " 台在线探针；每批最多提交 100 台。", "muted");
+  }
+
+  function clearLegacyScanSelection() {
+    legacyScanSelection.clear();
+    renderMachines();
+    setStatus("globalStatus", "已清空旧版节点扫描选择。", "muted");
+  }
+
   async function importLegacyNode(machine, node) {
     const accepted = confirm("导入旧节点「" + node.tag + "」？\n\nKNS 会通过 HTTPS 一次性回调读取协议凭据并加密保存，随后允许将此节点加入订阅。OneBox 配置和服务不会被修改。导入后节点生命周期仍由 OneBox 管理。");
     if (!accepted) return;
@@ -187,9 +239,10 @@
     const body=$("machineRows"); body.replaceChildren();
     for (const machine of state.machines) {
       const row=document.createElement("tr");
-      const identity=el("td"); identity.append(el("strong",machine.name),el("small",machine.uuid,"muted small"),el("small",[machine.os,machine.arch,machine.region].filter(Boolean).join(" · "),"muted small"));
+      const identity=el("td"); const scanChoice=document.createElement("input"); scanChoice.type="checkbox"; scanChoice.checked=legacyScanSelection.has(machine.uuid); scanChoice.disabled=machine.online!==true; scanChoice.setAttribute("aria-label","选择 "+machine.name+" 扫描旧版节点"); scanChoice.addEventListener("change",()=>{if(scanChoice.checked)legacyScanSelection.add(machine.uuid);else legacyScanSelection.delete(machine.uuid);}); identity.append(scanChoice,el("strong",machine.name),el("small",machine.uuid,"muted small"),el("small",[machine.os,machine.arch,machine.region].filter(Boolean).join(" · "),"muted small"));
       const discovered=Array.isArray(machine.discoveredNodes)?machine.discoveredNodes:[];
       if(machine.discoveredAt) identity.append(el("small","旧节点扫描："+new Date(machine.discoveredAt).toLocaleString()+" · "+discovered.length+" 个","muted small"));
+      if(legacyScanFailures.has(machine.uuid)) identity.append(el("small","扫描提交失败："+legacyScanFailures.get(machine.uuid),"error small"));
       for(const node of discovered){
         const imported=state.instances.some((instance)=>instance.machineUuid===machine.uuid&&instance.managedBy==="legacy_import"&&instance.legacyTag===node.tag&&!instance.deletedAt);
         const detail=el("small",node.tag+" · "+node.protocol+" · "+(node.listen.port||"端口未知")+" · "+(node.managed?"OneBox 已托管":imported?"已导入":node.importable?"可导入":"暂不支持"),node.importable&&!imported&&!node.managed?"success small":"muted small");
@@ -318,12 +371,12 @@
   function render(){if(!state)return;if(!createProfileFiltersReady){$("createProfileFilters").append(profileFilterEditor({machineUuids:[],excludeMachineUuids:[],protocols:[],includeTags:[],addressMode:"auto",sortBy:"name",excludeUnhealthy:true},"createProfileFilter"));createProfileFiltersReady=true;}renderOverview();renderMachines();renderInstances();renderJobs();renderProfiles();renderSettings();renderAudit();refreshProfileMachineOptions();}
 
   async function refresh(){setStatus("globalStatus","正在同步 Komari 探针…");try{state=await request("/admin/state");render();setStatus("globalStatus","数据已刷新 · revision "+state.revision,"success");}catch(error){setStatus("globalStatus",error.message,"error");}}
-  function showSecret(result){const links=$("resultLinks");links.replaceChildren();for(const [format,url] of Object.entries(result.subscriptionUrls||{})){links.append(el("p",format+" 订阅：","small"),el("div",url,"secret"));}if(result.converterUrl){links.append(el("p","SubConverter 输出：","small"),el("div",result.converterUrl,"secret"));}lastCreatedNative=result.nativeUrl||result.tokenUrl||"";$("copyNative").disabled=!lastCreatedNative;$("copyNative").textContent=result.nativeFormat?"复制 "+result.nativeFormat:"复制订阅地址";$("newProfileResult").hidden=false;$("newProfileResult").scrollIntoView({behavior:"smooth",block:"nearest"});}
+  function showSecret(result){const links=$("resultLinks");links.replaceChildren();for(const [format,url] of Object.entries(result.subscriptionUrls||{})){links.append(el("p",format+" 订阅：","small"),el("div",url,"secret"));}const converters=result.converterUrls||{};const targets=Object.keys(converters);if(targets.length){links.append(el("p","SubConverter 客户端转换链接：","small"));const select=document.createElement("select");select.setAttribute("aria-label","SubConverter target");targets.forEach((target)=>{const option=document.createElement("option");option.value=target;option.textContent=target;select.append(option);});select.value=converters[result.converterTarget]?result.converterTarget:targets[0];const url=el("div",converters[select.value],"secret");const copy=actionButton("复制转换链接",async()=>{try{await navigator.clipboard.writeText(url.textContent);setStatus("globalStatus","已复制 "+select.value+" 转换链接。","success");}catch(_){setStatus("globalStatus","浏览器未允许剪贴板访问，请手动复制链接。","error");}});select.addEventListener("change",()=>{url.textContent=converters[select.value]||"";});links.append(select,url,copy);}else if(result.converterUrl){links.append(el("p","SubConverter 输出：","small"),el("div",result.converterUrl,"secret"));}lastCreatedNative=result.nativeUrl||result.tokenUrl||"";$("copyNative").disabled=!lastCreatedNative;$("copyNative").textContent=result.nativeFormat?"复制 "+result.nativeFormat:"复制订阅地址";$("newProfileResult").hidden=false;$("newProfileResult").scrollIntoView({behavior:"smooth",block:"nearest"});}
   async function exportEncryptedBackup(){const passphrase=prompt("设置独立备份口令（至少 12 个字符）。此口令不会保存在 KNS 中。","");if(passphrase===null)return;if(passphrase.length<12){setStatus("globalStatus","备份口令至少需要 12 个字符。","error");return;}const confirmation=prompt("再次输入备份口令以确认。","");if(confirmation===null)return;if(passphrase!==confirmation){setStatus("globalStatus","两次输入的口令不一致。","error");return;}try{const envelope=await postAction({action:"backup.export",passphrase});const blob=new Blob([JSON.stringify(envelope,null,2)],{type:"application/json"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="kns-encrypted-export.json";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setStatus("settingsStatus","加密备份已下载。请把口令保存在独立的密码管理器中。","success");}catch(error){setStatus("globalStatus",error.message,"error");}}
   async function importEncryptedBackup(){const file=$("importBackupFile").files[0];if(!file){setStatus("settingsStatus","先选择 KNS 加密备份文件。","error");return;}const passphrase=prompt("输入该备份的独立口令。","");if(passphrase===null)return;if(!confirm("导入会替换当前 KNS 状态和密钥，并保留本地恢复副本。继续？"))return;try{const envelope=JSON.parse(await file.text());await request("/admin/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({envelope,passphrase})});$("importBackupFile").value="";await refresh();setStatus("settingsStatus","加密备份已导入。","success");}catch(error){setStatus("settingsStatus",error.message,"error");}}
 
   document.querySelectorAll(".tab").forEach((tab)=>tab.addEventListener("click",()=>{document.querySelectorAll(".tab").forEach((x)=>x.classList.toggle("active",x===tab));document.querySelectorAll("section.panel").forEach((x)=>x.classList.toggle("active",x.id===tab.dataset.panel));}));
-  $("refresh").addEventListener("click",refresh);$("reloadMachines").addEventListener("click",refresh);$("export").addEventListener("click",exportEncryptedBackup);$("exportState").addEventListener("click",exportEncryptedBackup);$("importBackup").addEventListener("click",importEncryptedBackup);
+  $("refresh").addEventListener("click",refresh);$("reloadMachines").addEventListener("click",refresh);$("selectOnlineScans").addEventListener("click",selectOnlineLegacyScanMachines);$("clearScanSelection").addEventListener("click",clearLegacyScanSelection);$("scanLegacySelected").addEventListener("click",discoverLegacyNodesBatch);$("export").addEventListener("click",exportEncryptedBackup);$("exportState").addEventListener("click",exportEncryptedBackup);$("importBackup").addEventListener("click",importEncryptedBackup);
   $("protocol").addEventListener("change",()=>{$("ssMethodLabel").style.display=$("protocol").value==="shadowsocks"?"block":"none";});$("ssMethodLabel").style.display="none";
   $("installBatch").addEventListener("click",async()=>{
     const machines=Array.from($("installMachines").selectedOptions).map((o)=>o.value);if(!machines.length){setStatus("installStatus","先选择一台或多台已允许部署的探针。","error");return;}const maxBatch=Math.max(1,Math.min(10,Number(state&&state.settings&&state.settings.maxBatch)||10));if(machines.length>maxBatch){setStatus("installStatus","每次最多选择 "+maxBatch+" 台探针。","error");return;}

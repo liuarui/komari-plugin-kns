@@ -58,6 +58,18 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.update", publicBaseUrl: "https://monitor.example" }) }, settingsRes);
     assert.equal(settingsRes.statusCode, 200);
 
+    const reverseProxyPolicyRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "komari.internal:25774", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { addressMode: "dual" } }) }, reverseProxyPolicyRes);
+    assert.equal(reverseProxyPolicyRes.statusCode, 200, reverseProxyPolicyRes.body);
+    const crossSitePolicyRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "komari.internal:25774", origin: "https://attacker.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { addressMode: "ipv4" } }) }, crossSitePolicyRes);
+    assert.equal(crossSitePolicyRes.statusCode, 403);
+    assert.equal(JSON.parse(crossSitePolicyRes.body).error.code, "csrf_origin");
+    const insecureSameHostPolicyRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "http://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { addressMode: "ipv4" } }) }, insecureSameHostPolicyRes);
+    assert.equal(insecureSameHostPolicyRes.statusCode, 403);
+    assert.equal(JSON.parse(insecureSameHostPolicyRes.body).error.code, "csrf_origin");
+
     const invalidNatRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({
       action: "install", machineUuid, protocol: "vless", listenPort: 443, listenAddress: "::", options: { security: "reality" },
@@ -226,8 +238,12 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("POST /api/kns/admin/import")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ envelope, passphrase: "wrong passphrase 2026" }) }, badImportRes);
     assert.equal(badImportRes.statusCode, 400);
     const changedSettingsRes = response();
-    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.update", publicBaseUrl: "https://monitor.example", converterTarget: "singbox" }) }, changedSettingsRes);
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.update", publicBaseUrl: "https://monitor.example", converterTarget: "loon" }) }, changedSettingsRes);
     assert.equal(changedSettingsRes.statusCode, 200);
+    assert.equal(JSON.parse(changedSettingsRes.body).settings.converterTarget, "loon");
+    const invalidConverterTargetRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.update", publicBaseUrl: "https://monitor.example", converterTarget: "unsupported" }) }, invalidConverterTargetRes);
+    assert.equal(invalidConverterTargetRes.statusCode, 400);
     const importRes = response();
     await routes.get("POST /api/kns/admin/import")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ envelope, passphrase: exportPassphrase }) }, importRes);
     assert.equal(importRes.statusCode, 200, importRes.body);
@@ -235,12 +251,20 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, importedStateRes);
     assert.equal(JSON.parse(importedStateRes.body).settings.converterTarget, "clash");
 
+    const postImportSettingsRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.update", publicBaseUrl: "https://monitor.example", converterTarget: "loon" }) }, postImportSettingsRes);
+    assert.equal(postImportSettingsRes.statusCode, 200);
+
     const profileRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.create", name: "test", formats: ["uri", "mihomo-full"], machineUuids: [machineUuid], excludeMachineUuids: [], protocols: ["vless"], includeTags: ["prod"], addressMode: "ipv4", sortBy: "machine" }) }, profileRes);
     const created = JSON.parse(profileRes.body);
     const url = new URL(created.tokenUrl);
     assert.deepEqual(Object.keys(created.subscriptionUrls).sort(), ["mihomo-full", "uri"]);
     assert.equal(new URL(created.converterUrl).searchParams.get("url"), created.tokenUrl);
+    assert.equal(new URL(created.converterUrl).searchParams.get("target"), "loon");
+    assert.equal(new URL(created.converterUrls.clash).searchParams.get("target"), "clash");
+    assert.equal(new URL(created.converterUrls.quanx).searchParams.get("url"), created.tokenUrl);
+    assert.equal(Object.keys(created.converterUrls).length, 22);
     const profileStateRes = response();
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, profileStateRes);
     const profileState = JSON.parse(profileStateRes.body).profiles[0];

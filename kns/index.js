@@ -28,6 +28,7 @@ const PROTOCOLS = {
   anytls: { transport: "tcp", security: "tls" },
 };
 const FORMATS = new Set(["uri", "mihomo-full", "mihomo-provider", "singbox-full", "singbox-outbounds"]);
+const CONVERTER_TARGETS = new Set(["clash", "clashr", "surge", "quan", "quanx", "loon", "surfboard", "stash", "mellow", "singbox", "ss", "ssd", "ssr", "sssub", "v2ray", "v2rayn", "v2rayng", "shadowrocket", "trojan", "vless", "hysteria2", "mixed"]);
 const store = createStore(__storageDir__);
 let masterKey = null;
 
@@ -119,10 +120,25 @@ function checkOrigin(req) {
     if (String(headers.authorization || "").startsWith("Bearer ") || String(headers["sec-fetch-site"] || "") === "same-origin") return;
     fail("csrf_origin", "管理写入请求必须带同源 Origin 或 Bearer API 身份。", 403);
   }
-  const host = String(headers.host || "").toLowerCase();
-  let originHost = "";
-  try { originHost = new URLConstructor(origin).host.toLowerCase(); } catch (_) { fail("csrf_origin", "请求来源无效。", 403); }
-  if (!host || originHost !== host) fail("csrf_origin", "跨站管理请求已拒绝。", 403);
+  let parsedOrigin;
+  try { parsedOrigin = new URLConstructor(origin); } catch (_) { fail("csrf_origin", "请求来源无效。", 403); }
+  if (!["https:", "http:"].includes(parsedOrigin.protocol) || parsedOrigin.username || parsedOrigin.password || parsedOrigin.origin === "null") fail("csrf_origin", "请求来源无效。", 403);
+  const originHost = String(parsedOrigin.host || "").toLowerCase();
+  const requestHost = String(headers.host || "").toLowerCase();
+
+  // Komari may receive requests through a reverse proxy whose upstream Host is
+  // different from the browser-visible authority. Trust only the administrator
+  // configured public URL; never accept arbitrary X-Forwarded-Host values.
+  let configuredOrigin = "";
+  try {
+    const publicBaseUrl = String((getState().settings || {}).publicBaseUrl || "");
+    if (publicBaseUrl) configuredOrigin = new URLConstructor(publicBaseUrl).origin.toLowerCase();
+  } catch (_) {}
+  if (configuredOrigin && parsedOrigin.origin.toLowerCase() === configuredOrigin) return;
+  // Origin includes scheme as well as host. The Host fallback is for a
+  // same-host HTTPS request; it must not treat HTTP and HTTPS as same-origin.
+  if (parsedOrigin.protocol === "https:" && requestHost && originHost === requestHost) return;
+  fail("csrf_origin", "跨站管理请求已拒绝。请确认浏览器访问域名与 KNS 公网地址设置一致。", 403);
 }
 
 function readBody(req, maxBytes) {
@@ -209,7 +225,7 @@ function getState() {
 function migrateLegacy(state, legacy) {
   if (legacy.settings && typeof legacy.settings === "object") {
     if (legacy.settings.converterUrl) state.settings.converterUrl = safeText(legacy.settings.converterUrl, 300);
-    if (["clash", "singbox"].includes(legacy.settings.converterTarget)) state.settings.converterTarget = legacy.settings.converterTarget;
+    if (CONVERTER_TARGETS.has(String(legacy.settings.converterTarget || ""))) state.settings.converterTarget = legacy.settings.converterTarget;
   }
   const oldToken = typeof legacy.token === "string" ? legacy.token : "";
   if (oldToken.length >= 32) {
@@ -1184,7 +1200,7 @@ async function handleAction(req, res) {
       state.settings.converterUrl = converter.toString();
     }
     if (body.converterTarget != null) {
-      if (!["clash", "singbox"].includes(String(body.converterTarget))) fail("invalid_converter_target", "SubConverter target 只支持 clash 或 singbox。", 400);
+      if (!CONVERTER_TARGETS.has(String(body.converterTarget))) fail("invalid_converter_target", "SubConverter target 不在支持列表中。", 400);
       state.settings.converterTarget = String(body.converterTarget);
     }
     audit(state, req, "settings.updated", { privateSite: state.settings.privateSite });
@@ -1471,13 +1487,21 @@ function profileUrl(state, profileId, token, format) {
   return state.settings.publicBaseUrl.replace(/\/$/, "") + API + "/sub?profile=" + encodeURIComponent(profileId) + "&format=" + encodeURIComponent(format || "mihomo-full") + "&token=" + encodeURIComponent(token);
 }
 
-function buildConverterUrl(state, sourceUrl) {
+function buildConverterUrl(state, sourceUrl, target) {
   try {
     const converter = new URLConstructor(state.settings.converterUrl || "http://23.146.156.234:25500/sub");
-    converter.searchParams.set("target", state.settings.converterTarget || "clash");
+    const selectedTarget = String(target || state.settings.converterTarget || "clash");
+    if (!CONVERTER_TARGETS.has(selectedTarget)) return "";
+    converter.searchParams.set("target", selectedTarget);
     converter.searchParams.set("url", sourceUrl);
     return converter.toString();
   } catch (_) { return ""; }
+}
+
+function buildConverterUrls(state, sourceUrl) {
+  const urls = {};
+  for (const target of CONVERTER_TARGETS) urls[target] = buildConverterUrl(state, sourceUrl, target);
+  return urls;
 }
 
 function buildProfileTokenLinks(state, profile, token) {
@@ -1492,7 +1516,9 @@ function buildProfileTokenLinks(state, profile, token) {
     tokenUrl,
     nativeUrl: nativeFormat ? subscriptionUrls[nativeFormat] : "",
     nativeFormat,
+    converterTarget: state.settings.converterTarget || "clash",
     converterUrl: tokenUrl ? buildConverterUrl(state, tokenUrl) : "",
+    converterUrls: tokenUrl ? buildConverterUrls(state, tokenUrl) : {},
   };
 }
 
@@ -1826,9 +1852,10 @@ async function cronTick() {
 
 function load() {
   subscriptionRefreshStopped = false;
-  getState();
   store.ensureDirectories();
+  store.recoverInterruptedRestore();
   if (!masterKey) masterKey = secrets.getMasterKey(__storageDir__);
+  getState();
   registerRoutes();
   server.cron("@every 15s", () => { cronTick(); });
   server.cron("@every 1m", () => { syncMachines().then(refreshEndpoints).catch((error) => console.error("[KNS] machine sync failed:", safeText(error.message || error, 200))); });

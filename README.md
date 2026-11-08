@@ -5,11 +5,11 @@ Komari KNS 是运行在 Komari 插件宿主中的原生插件。它通过 Komari
 ## 功能
 
 - 从 Komari 同步探针机器；新机器的部署策略默认关闭。
-- 可只读扫描历史 OneBox 安装的入站；管理员逐个确认后，通过一次性 HTTPS 回调加密导入支持的旧节点。导入不会改 OneBox 配置，导入实例保持外部只读归属。
+- 可批量只读扫描最多 100 台在线探针上的历史 OneBox 入站；管理员逐个确认后，通过一次性 HTTPS 回调加密导入支持的旧节点。导入不会改 OneBox 配置，导入实例保持外部只读归属。
 - 管理 VLESS Reality、Hysteria2、TUIC、AnyTLS、Shadowsocks、Trojan、VMess 实例，支持安装、重配置、重装、启用、停用、卸载和只读状态核查。
 - 通过 OneBox 一次性回调和 Agent 远程状态双重核验，避免只凭命令退出码登记节点。
 - 解析机器 IP、手动公网地址或 DDNS 域名；支持 IPv4、IPv6、双栈和 NAT 外部端口。地址变化后会重新核对公网映射；发现冲突时自动暂停该实例的订阅发布并在管理页提示。插件只读 DNS，不写 DNS 记录。
-- 发布 URI、Mihomo YAML 和 sing-box JSON 订阅；支持创建、筛选、隐藏、轮换和撤销订阅档案。
+- 发布 URI、Mihomo YAML 和 sing-box JSON 原生订阅；含 URI 的档案可切换 SubConverter-Extended 支持的 Clash、Loon、Surge、Quantumult X、Stash、sing-box 等 target。支持创建、筛选、隐藏、轮换和撤销订阅档案。
 - 采用原子状态写入、每日滚动备份、AES-256-GCM 凭据与订阅快照加密、订阅令牌哈希和审计记录。每个订阅档案可管理多个令牌，支持独立撤销、宽限轮换、到期时间和使用统计；管理员可导出带口令加密的状态/密钥包。订阅 GET 只读取已生成的快照。
 - 卸载前要求最近的 OneBox 状态核查，展示配置、证书、防火墙和共享服务资源影响；共享监听仍被引用时保留对应防火墙规则。
 
@@ -39,7 +39,7 @@ sha256sum -c dist/onebox-bridge.zip.sha256
 2. 在设置中填写 Komari 的公网 HTTPS 基地址，例如 `https://status.example.com`。OneBox 回调使用此地址。
 3. 检查 SubConverter 地址与目标格式。当前配置默认使用 `http://23.146.156.234:25500/sub`、`clash`。
 4. 在机器策略中明确允许要管理的探针，并选择 `auto`、`ipv4`、`ipv6` 或 `dual` 地址模式。部署策略默认关闭。
-5. 在机器行点“扫描旧版节点”识别已有 OneBox 入站；需要发布的旧节点可以逐个确认导入。导入前为机器设置可用公网地址或 DDNS；NAT 可在确认时填写公网端口。
+5. 在机器列表勾选多台在线探针，点“批量扫描所选旧版节点”识别历史 OneBox 入站；也可只扫描单台。扫描是只读的，导入仍需逐个确认。导入前为机器设置可用公网地址或 DDNS；NAT 可在确认时填写公网端口。
 6. 对需要新建的节点，设置机器地址并安装 OneBox 实例。
 7. 创建订阅档案并保存一次性显示的订阅 URL。可直接使用 KNS 原生 URL，也可使用生成的 SubConverter URL。
 
@@ -76,4 +76,4 @@ python3 scripts/package.py
 
 ## 版本
 
-插件作者为 `ajax`，插件包版本为 `1.1.2`，manifest 声明最低 Komari Server `1.4.3`（源码核验下限，尚未在该版实机测试）。当前目标服务器为 `1.6.1`。OneBox KNS 适配器固定到已审查的源码提交和 SHA-256，见 [兼容性矩阵](docs/compatibility-matrix.md)。可直接上传 Komari 的 [v1.1.2 ZIP](https://raw.githubusercontent.com/liuarui/komari-plugin-kns/v1.1.2/dist/onebox-bridge.zip)，仓库内路径为 `dist/onebox-bridge.zip`。源码仓库为 [liuarui/komari-plugin-kns](https://github.com/liuarui/komari-plugin-kns)，分支 `main`。
+插件作者为 `ajax`，插件包版本为 `1.1.3`，manifest 声明最低 Komari Server `1.4.3`（源码核验下限，尚未在该版实机测试）。当前目标服务器为 `1.6.1`。OneBox KNS 适配器固定到已审查的源码提交和 SHA-256，见 [兼容性矩阵](docs/compatibility-matrix.md)。可直接上传 Komari 的 [v1.1.3 ZIP](https://raw.githubusercontent.com/liuarui/komari-plugin-kns/v1.1.3/dist/onebox-bridge.zip)，仓库内路径为 `dist/onebox-bridge.zip`。源码仓库为 [liuarui/komari-plugin-kns](https://github.com/liuarui/komari-plugin-kns)，分支 `main`。

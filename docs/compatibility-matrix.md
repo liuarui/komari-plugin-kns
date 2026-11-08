@@ -4,16 +4,16 @@
 
 | 组件 | 本次识别/实现 | 验收状态 |
 | --- | --- | --- |
-| Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | 上传后曾因首次缺少 `kns/master.key` 的兼容文件系统 `lstat` 错误而无法启用；v1.1.2 工作区已加入缺失文件兼容修复，重新安装/启用待确认 |
+| Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | v1.1.3 保留首次 `master.key` 的缺失文件兼容修复，并允许管理 Origin 与管理员设置的公网 Origin 匹配以适配反代上游 Host 改写；两者均待在目标面板复测 |
 | Komari Agent | 目标 Agent 版本未提供；使用 `admin:exec` 与 `admin:getSpecificTaskResult` | 未在目标探针运行 |
 | OneBox | adapter schema 1，版本 `1.3.0`；[提交 `d9b98f0`](https://github.com/liuarui/onebox/commit/d9b98f0fd00fe3c9687697baff5c99e398a020b2)，分支 `codex/kns-adapter` | 安装脚本固定 SHA-256 `f5b4a1fde9b773f7963f558411a11003a71183ddb8201fce55801461f5faa65e`；Linux/LXC 真机未执行；低 PID/内存预检阈值见 OneBox README |
 | sing-box | OneBox 共享 `onebox-main` Runtime；实际 target 版本由 OneBox 安装过程决定，未锁定 | 结构通过本地生成/JSON 解析，未对目标二进制 `check` |
 | Mihomo | 输出 Mihomo full/provider YAML | 已检查生成文本片段；未用冻结客户端导入 |
-| SubConverter | `23.146.156.234:25500` 响应 `/sub` 缺少参数请求（HTTP 400）；服务器首页标识为 SubConverter-Extended，页面声明 GPL-3.0；具体二进制版本未知 | 服务存在；未执行带真实 KNS 订阅的转换 |
+| SubConverter | 用户配置的 `23.146.156.234:25500` 返回 `SubConverter-Extended/v1.9.7`。`/sub` 错误响应列出 22 个 target；KNS 允许并生成对应链接：Clash、ClashR、Surge、Quantumult、Quantumult X、Loon、Surfboard、Stash、Mellow、sing-box、SS、SSD、SSR、SSSub、V2Ray、V2RayN、V2RayNG、Shadowrocket、Trojan、VLESS、Hysteria2、Mixed | 使用虚构 VLESS URI 对 `clash`、`loon`、`quanx` 发起只读 GET，均返回 HTTP 200 并包含唯一测试标记；没有发送真实 KNS token，也没有执行真实客户端导入。响应还含测试源地址以外的 IP/域名文本，暂不能判断是转换服务附加节点还是模板内容；投入生产前应检查服务端配置。客户端可能跳过无法表达的协议 |
 | 操作系统 | installer 既有支持平台以 OneBox 的 Linux / systemd 或 OpenRC 检测为准；未实测架构清单 | 待目标系统矩阵验证 |
 | 客户端 | Mihomo、sing-box、其他客户端版本均未由用户指定 | URI/YAML/JSON 导出；客户端实际导入待验收 |
 
-本次从用户提供的 SubConverter 主机对 `/version` 进行了只读 GET，返回了 SubConverter-Extended 首页；对 `/sub` 空参数请求返回 HTTP 400。此结果仅证明 HTTP 服务在响应与 `/sub` 路由存在，不能确认构建版本、有效转换、客户端兼容或生产访问控制。
+`Server` 响应头标识 `SubConverter-Extended/v1.9.7`。向 `/sub` 发送虚构 URI 和三个 target 的请求均成功返回；这只验证服务端接受 target 并产生带测试标记的响应，不证明节点清单纯净、客户端兼容或生产访问控制。该服务当前使用 HTTP，订阅 token 和节点凭据会明文经过转换服务与网络链路。
 
 ## 协议覆盖
 
@@ -32,7 +32,7 @@
 - OneBox 以外的远端安装器/Runtime。
 - DNS 服务商写记录、证书签发、NAT 或云安全组 API。
 - gRPC/WebSocket 等当前 adapter schema 未支持的传输。
-- Surge、Loon、Quantumult X 等 P1 订阅格式。
+- KNS 内置 Surge、Loon、Quantumult X 原生序列化器；这些格式通过外部 SubConverter target 链接提供，实际转换与客户端导入待验收。
 - UDP/QUIC L3 握手和代理可用性检测。
 - Komari private_site 下的真实匿名订阅兼容测试。
 
