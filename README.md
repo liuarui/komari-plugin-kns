@@ -15,14 +15,14 @@ Komari KNS 是运行在 Komari 插件宿主中的原生插件。它通过 Komari
 
 ## 运行要求
 
-- Komari 的 MoeJS 插件功能和下述权限：`node`、`allowRoutes`、`allowSystemRPC`。
+- Komari 插件 NodeJS 运行模式和下述权限：`node`、`allowRoutes`、`allowSystemRPC`。
 - 目标探针启用了 Komari Agent 远程控制，Agent 以 root 运行，并可访问 OneBox 固定安装器与软件源。
 - KNS 回调地址必须是公网可达的 HTTPS Komari URL。
-- SubConverter 使用 `http://23.146.156.234:25500/sub` 作为初始配置；应以管理页显示的地址为准。插件本身的原生订阅也可直接交给客户端，不依赖 SubConverter。
+- SubConverter 使用 `http://23.146.156.234:25500/sub` 作为初始配置；HTTP 会明文传输订阅令牌和节点凭据，公网使用前应配置 HTTPS。插件本身的原生订阅也可直接交给客户端，不依赖 SubConverter。
 - OneBox 管理操作需要受支持的 Linux、systemd 或 OpenRC、`curl` 或 `wget`、`base64`、`sha256sum`、`jq` 和 sing-box 服务。
 - 低资源 LXC 会依据可见 PID/内存余量自动限制 OneBox 操作；具体发现/导入/安装门槛见 [兼容性矩阵](docs/compatibility-matrix.md) 与 OneBox README。门槛触发时任务会说明资源类型；未挂载或宿主隐藏的限制无法预先判断。
 
-具体 Komari、Agent、OneBox、sing-box 和 SubConverter 版本应在目标环境确认后记录。当前版本与环境边界见 [兼容性矩阵](docs/compatibility-matrix.md)。
+插件作者为 **ajax**。manifest 声明最低 Komari Server **1.4.3**（`komari: ">=1.4.3"`）；该下限根据固定 tag 的 API/Node 模块源码核对，尚未在 1.4.3 运行时验收。用户后台已观察到 Komari `1.6.1 (96cf0f7)`，这是当前目标环境版本；Agent、OneBox、sing-box 和 SubConverter 的具体版本及验证边界见 [兼容性矩阵](docs/compatibility-matrix.md)。
 
 ## 构建与安装
 
@@ -76,4 +76,4 @@ python3 scripts/package.py
 
 ## 版本
 
-插件包版本为 `1.1.1`；OneBox KNS 适配器固定到已审查的源码提交和 SHA-256，见 [兼容性矩阵](docs/compatibility-matrix.md)。可上传 Komari 的 ZIP 为 `dist/onebox-bridge.zip`。源码仓库为 [liuarui/komari-plugin-kns](https://github.com/liuarui/komari-plugin-kns)，分支 `main`。
+插件作者为 `ajax`，插件包版本为 `1.1.2`，manifest 声明最低 Komari Server `1.4.3`（源码核验下限，尚未在该版实机测试）。当前目标服务器为 `1.6.1`。OneBox KNS 适配器固定到已审查的源码提交和 SHA-256，见 [兼容性矩阵](docs/compatibility-matrix.md)。可上传 Komari 的 ZIP 为 `dist/onebox-bridge.zip`。源码仓库为 [liuarui/komari-plugin-kns](https://github.com/liuarui/komari-plugin-kns)，分支 `main`。

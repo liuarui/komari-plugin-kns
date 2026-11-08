@@ -73,7 +73,7 @@
       <h2>新建 OneBox 实例</h2>
       <p class="muted">同一探针上的多个实例共用 OneBox sing-box Runtime。端口冲突按 TCP/UDP 传输检查。</p>
       <div class="grid">
-        <label>目标探针（可多选）<select id="installMachines" multiple size="4"></select></label>
+        <label>目标探针（最多 10 台）<select id="installMachines" multiple size="4"></select></label>
         <label>协议<select id="protocol"><option value="vless">VLESS + Reality</option><option value="trojan">Trojan</option><option value="vmess">VMess</option><option value="shadowsocks">Shadowsocks</option><option value="hysteria2">Hysteria2</option><option value="tuic">TUIC</option><option value="anytls">AnyTLS</option></select></label>
         <label>实例名称<input id="instanceName" maxlength="80" placeholder="例如：新加坡入口"></label>
         <label>监听端口<input id="listenPort" type="number" min="1" max="65535" value="443"></label>
@@ -326,7 +326,7 @@
   $("refresh").addEventListener("click",refresh);$("reloadMachines").addEventListener("click",refresh);$("export").addEventListener("click",exportEncryptedBackup);$("exportState").addEventListener("click",exportEncryptedBackup);$("importBackup").addEventListener("click",importEncryptedBackup);
   $("protocol").addEventListener("change",()=>{$("ssMethodLabel").style.display=$("protocol").value==="shadowsocks"?"block":"none";});$("ssMethodLabel").style.display="none";
   $("installBatch").addEventListener("click",async()=>{
-    const machines=Array.from($("installMachines").selectedOptions).map((o)=>o.value);if(!machines.length){setStatus("installStatus","先选择一台或多台已允许部署的探针。","error");return;}
+    const machines=Array.from($("installMachines").selectedOptions).map((o)=>o.value);if(!machines.length){setStatus("installStatus","先选择一台或多台已允许部署的探针。","error");return;}const maxBatch=Math.max(1,Math.min(10,Number(state&&state.settings&&state.settings.maxBatch)||10));if(machines.length>maxBatch){setStatus("installStatus","每次最多选择 "+maxBatch+" 台探针。","error");return;}
     const protocol=$("protocol").value;const options={};if(protocol==="vless")options.security="reality";if(["trojan","vmess","hysteria2","tuic","anytls"].includes(protocol))options.sni=$("sni").value.trim();if(protocol==="shadowsocks")options.method=$("ssMethod").value;
     const warning="将在 "+machines.length+" 台 root Agent 主机上运行固定 SHA256 的 OneBox 适配脚本，可能修改共享 sing-box 配置和本机防火墙。继续？";if(!confirm(warning))return;
     const twoFactor=$("twoFactor").value.trim();const tags=$("instanceTags").value.split(",").map((x)=>x.trim()).filter(Boolean);const results=[];

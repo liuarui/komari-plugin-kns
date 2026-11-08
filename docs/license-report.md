@@ -2,7 +2,7 @@
 
 ## Komari KNS 插件
 
-- Runtime 无第三方 Node.js package 依赖；仅使用 Komari MoeJS APIs、Node 兼容内置模块 `fs`、`path`、`crypto`、`net`、`tls` 与标准 `fetch`。
+- Runtime 无第三方 Node.js package 依赖；仅使用 Komari 插件 APIs、Node 兼容内置模块 `fs`、`path`、`crypto`、`net`、`tls`、`url` 与标准 `fetch`。Komari 1.6.1 使用 MoeJS；兼容下限所审查的 1.4.3 使用 Goja。
 - `scripts/package.py` 与生成器只使用 Python 标准库 `hashlib`、`json`、`pathlib`、`zipfile`。
 - 此工作区没有 KNS 项目许可证文件或已确认的 SPDX 标识；发布到公开源码仓库前需由项目权利人选择并加入许可证。当前 SBOM 不把宿主 Komari、OneBox 或客户端当作内置依赖。
 

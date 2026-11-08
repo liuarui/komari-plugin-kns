@@ -1,12 +1,12 @@
 # 数据模型与状态 Schema
 
-插件状态保存于 Komari 提供的 `__storageDir__` 下的 `kns/state.json`。目录、状态、备份、快照和密钥文件权限设为 `0700/0600`（宿主文件系统支持时）。状态写入使用同目录临时文件和原子 rename。未知字段会保留，当前 schema 版本为 `1`。
+插件状态保存于 Komari 提供的 `__storageDir__` 下的 `kns/state.json`。目录、状态、备份、快照和密钥文件权限设为 `0700/0600`（宿主文件系统支持时）。状态与订阅快照写入会在原子 rename 前调用 `fsync` 同步临时文件。Komari 1.6.1 兼容文件系统上，对可选状态/密钥文件先用 `existsSync` 判断，避免对缺失路径的 `readFileSync` 触发 `lstat` 错误。未知字段会保留，当前 schema 版本为 `1`。
 
 ## 顶层对象
 
 | 字段 | 说明 |
 | --- | --- |
-| `schemaVersion`, `revision`, `createdAt`, `updatedAt` | 版本和递增修订信息 |
+| `schemaVersion`, `pluginVersion`, `revision`, `createdAt`, `updatedAt` | 数据结构版本、最后成功加载此状态的插件版本及递增修订信息 |
 | `settings` | HTTPS 回调基地址、SubConverter、固定 OneBox installer SHA、健康/同步间隔、私有站点开关、批量上限 |
 | `machines[]` | Komari Agent 探针快照及管理员部署/地址策略 |
 | `runtimes[]` | 每台机器上的共享 OneBox `sing-box/onebox-main` 服务引用计数 |
@@ -39,6 +39,7 @@
   "required": ["schemaVersion", "revision", "settings", "machines", "runtimes", "instances", "jobs", "profiles", "audit", "legacyNodes"],
   "properties": {
     "schemaVersion": { "const": 1 },
+    "pluginVersion": { "type": "string" },
     "revision": { "type": "integer", "minimum": 0 },
     "settings": { "type": "object" },
     "machines": { "type": "array", "items": { "type": "object", "required": ["uuid", "policy"] } },

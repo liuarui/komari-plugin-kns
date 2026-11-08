@@ -5,11 +5,12 @@
   },
   "short": "onebox-bridge",
   "description": {
-    "zh_CN": "通过 Komari Agent 管理 OneBox 节点实例、机器策略、健康状态及多格式订阅。",
-    "en": "Manage OneBox node instances, machine policies, health, and multi-format subscriptions through Komari Agents."
+    "zh_CN": "在 Komari 中管理探针机器的 OneBox 节点部署、状态与地址同步，并发布受令牌保护的 URI、Mihomo 和 sing-box 订阅。",
+    "en": "Manage OneBox deployments, status, and address sync for Komari-monitored machines, and publish token-protected URI, Mihomo, and sing-box subscriptions."
   },
-  "author": "Workspace",
-  "version": "1.1.1",
+  "author": "ajax",
+  "version": "1.1.2",
+  "komari": ">=1.4.3",
   "entry": "script.js",
   "permissions": {
     "node": true,

@@ -25,6 +25,87 @@ test("store writes atomically and restores the daily state/key backup", () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("master key creation tolerates Komari's lstat error for a missing key", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-master-key-"));
+  const keyPath = path.join(root, "kns", "master.key");
+  const compatFs = new Proxy(fs, {
+    get(target, property) {
+      if (property === "readFileSync") return (filename, ...args) => {
+        if (filename === keyPath && !fs.existsSync(filename)) throw new Error("lstat " + filename + ": no such file or directory");
+        return fs.readFileSync(filename, ...args);
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  try {
+    const key = secrets.getMasterKey(root, compatFs);
+    assert.equal(key.length, 32);
+    assert.deepEqual(secrets.getMasterKey(root, compatFs), key);
+    assert.deepEqual(fs.readFileSync(keyPath), key);
+    assert.equal(fs.statSync(keyPath).mode & 0o777, 0o600);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("URL constructors fall back to node:url when the host does not expose globals", () => {
+  const priorURL = globalThis.URL;
+  const priorURLSearchParams = globalThis.URLSearchParams;
+  globalThis.URL = undefined;
+  globalThis.URLSearchParams = undefined;
+  const modulePath = require.resolve("../kns/url");
+  delete require.cache[modulePath];
+  try {
+    const url = require("../kns/url");
+    assert.equal(new url.URL("https://example.com:8443/a").port, "8443");
+    assert.equal(new url.URLSearchParams("token=x%2By").get("token"), "x+y");
+  } finally {
+    globalThis.URL = priorURL;
+    globalThis.URLSearchParams = priorURLSearchParams;
+    delete require.cache[modulePath];
+  }
+});
+
+test("migration snapshots the complete plugin storage directory privately", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-migration-store-"));
+  try {
+    const store = createStore(root);
+    fs.writeFileSync(path.join(root, "onebox-bridge.json"), JSON.stringify({ token: "legacy-secret" }), { mode: 0o600 });
+    fs.mkdirSync(store.root, { recursive: true });
+    fs.writeFileSync(path.join(store.root, "master.key"), Buffer.alloc(32, 8), { mode: 0o600 });
+    fs.mkdirSync(path.join(root, "other-plugin-data"));
+    fs.writeFileSync(path.join(root, "other-plugin-data", "state.json"), "preserve me");
+    const backup = store.backupStorageBeforeChange("migration");
+    assert.equal(fs.readFileSync(path.join(backup, "onebox-bridge.json"), "utf8"), JSON.stringify({ token: "legacy-secret" }));
+    assert.deepEqual(fs.readFileSync(path.join(backup, "kns", "master.key")), Buffer.alloc(32, 8));
+    assert.equal(fs.readFileSync(path.join(backup, "other-plugin-data", "state.json"), "utf8"), "preserve me");
+    assert.equal(fs.statSync(backup).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(path.join(backup, "onebox-bridge.json")).mode & 0o777, 0o600);
+    assert.equal(fs.existsSync(path.join(backup, "kns", "backups", path.basename(backup))), false);
+    const nextBackup = store.backupStorageBeforeChange("migration");
+    assert.equal(fs.existsSync(path.join(nextBackup, "kns", "backups", path.basename(backup))), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("plugin version updates snapshot state and refuse downgrades", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-upgrade-store-"));
+  try {
+    const store = createStore(root);
+    const state = store.initialState();
+    state.pluginVersion = "1.1.1";
+    state.settings.privateSite = true;
+    store.write(state);
+    const upgraded = store.preparePluginVersion(store.read(), "1.1.2");
+    assert.equal(upgraded.pluginVersion, "1.1.2");
+    assert.equal(upgraded.settings.privateSite, true);
+    const backupName = fs.readdirSync(store.backupDir).find((name) => name.startsWith("pre-upgrade-"));
+    assert.ok(backupName);
+    const oldState = JSON.parse(fs.readFileSync(path.join(store.backupDir, backupName, "kns", "state.json"), "utf8"));
+    assert.equal(oldState.pluginVersion, "1.1.1");
+    assert.equal(fs.statSync(path.join(store.backupDir, backupName)).mode & 0o777, 0o700);
+    assert.throws(() => store.preparePluginVersion(store.read(), "1.1.0"), /newer plugin version/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("secret tokens are salted hashes and credential boxes authenticate", () => {
   const token = secrets.createToken();
   const record = secrets.tokenRecord(token);

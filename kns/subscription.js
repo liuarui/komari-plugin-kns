@@ -1,5 +1,7 @@
 "use strict";
 
+const { URLSearchParams: URLSearchParamsConstructor } = require("./url");
+
 function quoteYaml(value) { return JSON.stringify(String(value == null ? "" : value)); }
 
 function cleanLabel(value) {
@@ -12,7 +14,7 @@ function hostPort(host, port) {
 }
 
 function query(values) {
-  const out = new URLSearchParams();
+  const out = new URLSearchParamsConstructor();
   Object.keys(values).sort().forEach((key) => {
     const value = values[key];
     if (value !== undefined && value !== null && String(value) !== "") out.set(key, String(value));

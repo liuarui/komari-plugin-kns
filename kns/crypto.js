@@ -6,7 +6,16 @@ const crypto = require("crypto");
 
 function hex(value) { return Buffer.from(value).toString("hex"); }
 
-function getMasterKey(storageDir) {
+function readMasterKey(fsModule, keyPath) {
+  if (!fsModule.existsSync(keyPath)) return null;
+  const key = fsModule.readFileSync(keyPath);
+  if (key.length !== 32) throw new Error("KNS master key file has an invalid length.");
+  try { fsModule.chmodSync(keyPath, 0o600); } catch (_) {}
+  return key;
+}
+
+function getMasterKey(storageDir, fsModule) {
+  fsModule = fsModule || fs;
   const configured = typeof process !== "undefined" && process.env ? process.env.KNS_MASTER_KEY : "";
   if (configured) {
     if (!/^[a-f0-9]{64}$/i.test(configured)) throw new Error("KNS_MASTER_KEY must be 64 hexadecimal characters.");
@@ -14,20 +23,36 @@ function getMasterKey(storageDir) {
   }
   const dir = path.join(storageDir, "kns");
   const keyPath = path.join(dir, "master.key");
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fsModule.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const existing = readMasterKey(fsModule, keyPath);
+  if (existing) return existing;
+
+  const key = crypto.randomBytes(32);
+  let fd;
+  let created = false;
   try {
-    const key = fs.readFileSync(keyPath);
-    if (key.length !== 32) throw new Error("KNS master key file has an invalid length.");
-    try { fs.chmodSync(keyPath, 0o600); } catch (_) {}
+    // Komari's fs shim implements exclusive open flags, while readFileSync on a
+    // missing path may surface the shim's lstat error without Node's ENOENT code.
+    fd = fsModule.openSync(keyPath, "wx", 0o600);
+    created = true;
+    const written = fsModule.writeSync(fd, key, 0, key.length, null);
+    if (written !== key.length) throw new Error("KNS master key write was incomplete.");
+    fsModule.fsyncSync(fd);
+    fsModule.closeSync(fd);
+    fd = undefined;
+    try { fsModule.chmodSync(keyPath, 0o600); } catch (_) {}
     return key;
   } catch (error) {
-    if (error && error.code !== "ENOENT") throw error;
-    const key = crypto.randomBytes(32);
-    const temporary = keyPath + ".tmp";
-    fs.writeFileSync(temporary, key, { mode: 0o600, flag: "wx" });
-    fs.renameSync(temporary, keyPath);
-    try { fs.chmodSync(keyPath, 0o600); } catch (_) {}
-    return key;
+    if (fd !== undefined) try { fsModule.closeSync(fd); } catch (_) {}
+    let concurrentKey;
+    try { concurrentKey = readMasterKey(fsModule, keyPath); }
+    catch (readError) {
+      if (created) try { fsModule.unlinkSync(keyPath); } catch (_) {}
+      throw readError;
+    }
+    if (concurrentKey) return concurrentKey;
+    if (created) try { fsModule.unlinkSync(keyPath); } catch (_) {}
+    throw error;
   }
 }
 

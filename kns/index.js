@@ -7,6 +7,8 @@ const server = require("server");
 const { createStore, initialState, validateState } = require("./store");
 const secrets = require("./crypto");
 const subscriptions = require("./subscription");
+const { URL: URLConstructor } = require("./url");
+const PLUGIN_VERSION = require("../komari-plugin.json").version;
 
 const API = "/api/kns";
 const LEGACY_API = "/api/onebox-bridge";
@@ -27,7 +29,7 @@ const PROTOCOLS = {
 };
 const FORMATS = new Set(["uri", "mihomo-full", "mihomo-provider", "singbox-full", "singbox-outbounds"]);
 const store = createStore(__storageDir__);
-let masterKey = secrets.getMasterKey(__storageDir__);
+let masterKey = null;
 
 let pollBusy = false;
 let syncBusy = false;
@@ -119,7 +121,7 @@ function checkOrigin(req) {
   }
   const host = String(headers.host || "").toLowerCase();
   let originHost = "";
-  try { originHost = new URL(origin).host.toLowerCase(); } catch (_) { fail("csrf_origin", "请求来源无效。", 403); }
+  try { originHost = new URLConstructor(origin).host.toLowerCase(); } catch (_) { fail("csrf_origin", "请求来源无效。", 403); }
   if (!host || originHost !== host) fail("csrf_origin", "跨站管理请求已拒绝。", 403);
 }
 
@@ -184,15 +186,23 @@ function profileFilterFields(body, current) {
 
 function getState() {
   let state = store.read();
-  if (state) return state;
+  if (state) {
+    try { return store.preparePluginVersion(state, PLUGIN_VERSION); }
+    catch (_) { fail("upgrade_backup_failed", "插件升级前备份或版本检查失败，已停止加载；现有状态未修改。", 500); }
+  }
   state = initialState();
   const legacyPath = path.join(__storageDir__, "onebox-bridge.json");
   if (fs.existsSync(legacyPath)) {
+    try { store.backupStorageBeforeChange("migration"); }
+    catch (error) { fail("migration_backup_failed", "迁移前无法完整备份插件数据目录，已停止升级；原数据未修改。", 500); }
     let legacy;
     try { legacy = JSON.parse(fs.readFileSync(legacyPath, "utf8")); }
     catch (_) { fail("legacy_state_corrupt", "旧版数据文件损坏，已保留原文件；请从备份恢复后再升级。", 500); }
+    try { masterKey = secrets.getMasterKey(__storageDir__); }
+    catch (_) { fail("master_key_unavailable", "迁移需要的 KNS 主密钥不可用，原状态已保留。", 500); }
     if (legacy && typeof legacy === "object") migrateLegacy(state, legacy);
   }
+  state.pluginVersion = PLUGIN_VERSION;
   return store.write(state);
 }
 
@@ -1163,13 +1173,13 @@ async function handleAction(req, res) {
   if (action === "settings.update") {
     const base = String(body.publicBaseUrl || "").trim().replace(/\/$/, "");
     let parsed;
-    try { parsed = new URL(base); } catch (_) { fail("invalid_public_url", "Komari 公网地址必须是 HTTPS URL。", 400); }
+    try { parsed = new URLConstructor(base); } catch (_) { fail("invalid_public_url", "Komari 公网地址必须是 HTTPS URL。", 400); }
     if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) fail("invalid_public_url", "KNS 回调需要不含账号、查询和片段的 HTTPS 地址。", 400);
     state.settings.publicBaseUrl = parsed.origin + parsed.pathname.replace(/\/$/, "");
     state.settings.privateSite = body.privateSite === true;
     if (body.converterUrl != null) {
       let converter;
-      try { converter = new URL(String(body.converterUrl)); } catch (_) { fail("invalid_converter_url", "SubConverter 地址无效。", 400); }
+      try { converter = new URLConstructor(String(body.converterUrl)); } catch (_) { fail("invalid_converter_url", "SubConverter 地址无效。", 400); }
       if (!["http:", "https:"].includes(converter.protocol) || converter.username || converter.password || converter.hash || !converter.pathname.endsWith("/sub")) fail("invalid_converter_url", "SubConverter 地址必须是以 /sub 结尾的 HTTP(S) URL。", 400);
       state.settings.converterUrl = converter.toString();
     }
@@ -1463,7 +1473,7 @@ function profileUrl(state, profileId, token, format) {
 
 function buildConverterUrl(state, sourceUrl) {
   try {
-    const converter = new URL(state.settings.converterUrl || "http://23.146.156.234:25500/sub");
+    const converter = new URLConstructor(state.settings.converterUrl || "http://23.146.156.234:25500/sub");
     converter.searchParams.set("target", state.settings.converterTarget || "clash");
     converter.searchParams.set("url", sourceUrl);
     return converter.toString();
@@ -1817,6 +1827,8 @@ async function cronTick() {
 function load() {
   subscriptionRefreshStopped = false;
   getState();
+  store.ensureDirectories();
+  if (!masterKey) masterKey = secrets.getMasterKey(__storageDir__);
   registerRoutes();
   server.cron("@every 15s", () => { cronTick(); });
   server.cron("@every 1m", () => { syncMachines().then(refreshEndpoints).catch((error) => console.error("[KNS] machine sync failed:", safeText(error.message || error, 200))); });

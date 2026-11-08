@@ -14,7 +14,11 @@ python3 -m py_compile scripts/package.py
 python3 scripts/package.py
 ```
 
-本地 10 项 Node 测试通过范围：模拟 admin policy、agent task、OneBox callback/status、历史节点只读发现/导入与外部只读策略、资源余量失败提示、旧节点凭据进入加密订阅但不进入快照明文；受保护 URI 订阅；state/key 备份恢复；secret 加密与 token hash；多令牌创建、独立撤销、宽限轮换、使用计数与档案有效期上限；口令加密导出往返解密；NAT 公网映射冲突拒绝；加密订阅快照的私有文件写入、替换失败清理、权限、修剪及 GET 只读快照；IPv6 URI 编码；七协议格式生成；机器/协议/标签/地址族筛选、排序与连接去重；profile 筛选字段创建和更新。OneBox 低 PID/内存 guard 与五种旧协议发现另用临时 JSON 夹具做函数级模拟；这些本地模拟都不代表真实机器/客户端验收。
+本地 14 项 Node 测试通过范围：模拟 admin policy、agent task、OneBox callback/status、同探针远程任务互斥、历史节点只读发现/导入与外部只读策略、资源余量失败提示、旧节点凭据进入加密订阅但不进入快照明文；profile 只返回启用格式的链接；Komari 兼容 fs 缺失 master key 时 `lstat` 错误的初始化回归；无全局 URL 构造器时 `node:url` 回退；迁移前私有存储目录快照；插件版本升级前快照和降级拒绝；受保护 URI 订阅；state/key 备份恢复；secret 加密与 token hash；多令牌创建、独立撤销、宽限轮换、使用计数与档案有效期上限；口令加密导出往返解密；NAT 公网映射冲突拒绝；加密订阅快照的私有文件写入、替换失败清理、权限、修剪及 GET 只读快照；IPv6 URI 编码；七协议格式生成；机器/协议/标签/地址族筛选、排序与连接去重；profile 筛选字段创建和更新。OneBox 低 PID/内存 guard 与五种旧协议发现另用临时 JSON 夹具做函数级模拟；这些本地模拟都不代表真实机器/客户端验收。
+
+## 目标 Komari 初始化复测
+
+用户管理后台显示 Komari Server `1.6.1 (96cf0f7)`。首次启用先前 ZIP 时，宿主对缺失的 `kns/master.key` 路径报 `lstat ... no such file or directory`，插件未能启用。v1.1.2 工作区改为先用 Komari 支持的 `existsSync` 检查，再通过排他文件打开生成 32 字节 key，并同步写入；本地测试覆盖了兼容层错误。当前 ZIP 已重新打包，但尚未在目标服务重新上传并启用，因此 Komari 启动验收仍未通过。
 
 ## AT-01 至 AT-32
 
@@ -50,7 +54,7 @@ python3 scripts/package.py
 | 28 | Agent 离线/远控关闭给出原因 | 部分实现 | RPC error code 映射；未在目标 Agent 验证错误码 |
 | 29 | 100 机器订阅 P95 < 1s | **待压测** | 未有目标机规格或压测数据 |
 | 30 | 日志无凭据/token/敏感输出 | 本地审查 + 单测 | 状态脱敏、callback hash 消费、无远端全文持久化；未做线上日志审计 |
-| 31 | Komari 原插件/监控回归 | **待目标环境** | 工作区没有可运行的目标 Komari 实例 |
+| 31 | Komari 原插件/监控回归 | **待目标环境** | 已登录目标管理后台并确认 Server 1.6.1；KNS 未能启用，尚未运行安装后监控回归 |
 | 32 | private_site 下管理/订阅访问 | **阻断：待真机** | 规格要求在 private_site 实测；未绕过/修改 Komari 核心 |
 
 ## 验收结论

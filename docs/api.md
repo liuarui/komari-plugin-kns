@@ -1,6 +1,6 @@
 # 管理 API 与错误码
 
-基础路径 `/api/kns`。插件使用 Komari 现有服务器的 MoeJS routes；管理 API 每次验证 `req.context.principal` 的 admin 角色。写请求还要求同源 `Origin`，或受信 `Bearer` 身份 / `Sec-Fetch-Site: same-origin`。所有 JSON 响应带 `Cache-Control: no-store`。详情见 [Komari 插件开发文档](https://komari-document.pages.dev/en/dev/plugin/)。
+基础路径 `/api/kns`。插件通过 Komari 插件 route API 在现有服务器注册路由；管理 API 每次验证 `req.context.principal` 的 admin 角色。写请求还要求同源 `Origin`，或受信 `Bearer` 身份 / `Sec-Fetch-Site: same-origin`。所有 JSON 响应带 `Cache-Control: no-store`。详情见 [Komari 插件开发文档](https://komari-document.pages.dev/en/dev/plugin/)。
 
 ## 路由
 
