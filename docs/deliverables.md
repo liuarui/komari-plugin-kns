@@ -2,7 +2,7 @@
 
 | DEL | 规格要求 | 交付物/状态 |
 | --- | --- | --- |
-| 01 | 源码仓库与 Git Tag | OneBox 适配代码固定在 `liuarui/onebox` 提交 `a36b55c`（分支 `codex/kns-adapter`）。Komari 插件 v1.2.0 已发布；v1.2.2 已完成目标 Komari 1.6.1 在线状态映射、HTTPS 同源设置保存和只读节点发现验收，正式 tag/release 待发布 |
+| 01 | 源码仓库与 Git Tag | OneBox 适配代码固定在 `liuarui/onebox` 提交 `a36b55c`（分支 `codex/kns-adapter`）。Komari 插件 [v1.2.2 正式发布](https://github.com/liuarui/komari-plugin-kns/releases/tag/v1.2.2)，已完成目标 Komari 1.6.1 在线状态映射、HTTPS 同源设置保存和只读节点发现验收 |
 | 02 | Komari 插件安装/升级 ZIP | `dist/onebox-bridge.zip`，v1.2.2；包含 GNU AGPL v3.0-only 许可证文本，根 manifest、ZIP CRC 与 SHA-256 已核验。新增 `common:getNodesLatestStatus` 在线状态映射与 Fetch Metadata 反代写入兼容；已上传至目标面板并确认 KNS v1.2.2 运行。只读扫描发现一个可导入实例；凭据导入未执行。SHA-256 `ebc777d47b373b1aa3a0ae27c115ae2da5bf4c4df0ccf27410f9be3ee7fb4d64` |
 | 03 | 打包脚本、依赖说明、SHA-256 | `scripts/package.py` 会校验机器可读 `requirements.lock` 并把锁文件哈希写入 CycloneDX SBOM；`dist/onebox-bridge.zip.sha256` |
 | 04 | 安装/查询/卸载/重装适配器源码 | OneBox 仓库 `install.sh` KNS schema 1；包括旧节点 discover/import、install/reconfigure/reinstall/enable/disable/status/uninstall，以及低 PID/内存预检；实施结果与待验收项见 `OneBox_KNS_适配改造说明_2026-11-08.docx` |

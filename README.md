@@ -77,4 +77,4 @@ python3 scripts/package.py
 
 ## 版本
 
-插件作者为 `ajax`，插件包版本为 `1.2.2`，项目许可证为 `AGPL-3.0-only`。manifest 声明最低 Komari Server `1.4.3`（源码核验下限，尚未在该版实机测试）。当前目标服务器为 `1.6.1`。OneBox KNS 适配器固定到已审查的源码提交和 SHA-256，见 [兼容性矩阵](docs/compatibility-matrix.md)。当前构建包位于 `dist/onebox-bridge.zip`，源码仓库为 [liuarui/komari-plugin-kns](https://github.com/liuarui/komari-plugin-kns)。
+插件作者为 `ajax`，插件包版本为 `1.2.2`，项目许可证为 `AGPL-3.0-only`。manifest 声明最低 Komari Server `1.4.3`（源码核验下限，尚未在该版实机测试）。当前目标服务器为 `1.6.1`。OneBox KNS 适配器固定到已审查的源码提交和 SHA-256，见 [兼容性矩阵](docs/compatibility-matrix.md)。[v1.2.2 已正式发布](https://github.com/liuarui/komari-plugin-kns/releases/tag/v1.2.2)，可下载[插件 ZIP](https://github.com/liuarui/komari-plugin-kns/releases/download/v1.2.2/onebox-bridge.zip)和[SHA-256 校验文件](https://github.com/liuarui/komari-plugin-kns/releases/download/v1.2.2/onebox-bridge.zip.sha256)。
