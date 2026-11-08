@@ -4,12 +4,12 @@
 
 | 组件 | 本次识别/实现 | 验收状态 |
 | --- | --- | --- |
-| Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | v1.2.2 从 `common:getNodesLatestStatus` 合并运行时在线状态，并为反代改写 Host 的浏览器同源写入提供 Fetch Metadata 兼容路径；目标面板上传与目标 Agent 扫描仍待本轮验收 |
-| Komari Agent | 目标 Agent 版本未提供；使用 `admin:exec` 与 `admin:getSpecificTaskResult` | 未在目标探针运行 |
+| Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | 目标面板已运行 v1.2.2；在线状态映射、HTTPS 同源设置写入及只读旧节点发现通过。完整 OneBox 生命周期仍未验收 |
+| Komari Agent | 目标 Agent 版本未提供；使用 `admin:exec` 与 `admin:getSpecificTaskResult` | 目标在线探针成功完成只读旧节点扫描并返回一个可导入实例；未读取或导入凭据，安装、重配置、启停及卸载未在目标探针执行 |
 | OneBox | adapter schema 1，版本 `1.4.0`；[提交 `a36b55c`](https://github.com/liuarui/onebox/commit/a36b55cd455053f66cdf18fe3045e306d06d3934)，分支 `codex/kns-adapter` | 安装脚本固定 SHA-256 `507801b3ce9b1226657420bd17a0601e7ac2fe4508ebf2dd440c5e0514b0477f`；Linux/LXC 真机未执行；低 PID/内存预检阈值见 OneBox README |
 | sing-box | OneBox 共享 `onebox-main` Runtime；实际 target 版本由 OneBox 安装过程决定，未锁定 | 结构通过本地生成/JSON 解析，未对目标二进制 `check` |
 | Mihomo | 输出 Mihomo full/provider YAML | 已检查生成文本片段；未用冻结客户端导入 |
-| SubConverter | 用户配置的 `23.146.156.234:25500` 返回 `SubConverter-Extended/v1.9.7`。`/sub` 错误响应列出 22 个 target；KNS 允许并生成对应链接：Clash、ClashR、Surge、Quantumult、Quantumult X、Loon、Surfboard、Stash、Mellow、sing-box、SS、SSD、SSR、SSSub、V2Ray、V2RayN、V2RayNG、Shadowrocket、Trojan、VLESS、Hysteria2、Mixed | 使用虚构 VLESS URI 对 `clash`、`loon`、`quanx` 发起只读 GET，均返回 HTTP 200 并包含唯一测试标记；没有发送真实 KNS token，也没有执行真实客户端导入。响应还含测试源地址以外的 IP/域名文本，暂不能判断是转换服务附加节点还是模板内容；投入生产前应检查服务端配置。客户端可能跳过无法表达的协议 |
+| SubConverter | 用户配置的 SubConverter-Extended `v1.9.7` 服务 `/sub` 错误响应列出 22 个 target；KNS 允许并生成对应链接：Clash、ClashR、Surge、Quantumult、Quantumult X、Loon、Surfboard、Stash、Mellow、sing-box、SS、SSD、SSR、SSSub、V2Ray、V2RayN、V2RayNG、Shadowrocket、Trojan、VLESS、Hysteria2、Mixed | 使用虚构 VLESS URI 对 `clash`、`loon`、`quanx` 发起只读 GET，均返回 HTTP 200 并包含唯一测试标记；没有发送真实 KNS token，也没有执行真实客户端导入。响应还含测试源地址以外的 IP/域名文本，暂不能判断是转换服务附加节点还是模板内容；投入生产前应检查服务端配置。客户端可能跳过无法表达的协议 |
 | 操作系统 | installer 既有支持平台以 OneBox 的 Linux / systemd 或 OpenRC 检测为准；未实测架构清单 | 待目标系统矩阵验证 |
 | 客户端 | Mihomo、sing-box、其他客户端版本均未由用户指定 | URI/YAML/JSON 导出；客户端实际导入待验收 |
 

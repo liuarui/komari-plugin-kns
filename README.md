@@ -18,7 +18,7 @@ Komari KNS 是运行在 Komari 插件宿主中的原生插件。它通过 Komari
 - Komari 插件 NodeJS 运行模式和下述权限：`node`、`allowRoutes`、`allowSystemRPC`。
 - 目标探针启用了 Komari Agent 远程控制，Agent 以 root 运行，并可访问 OneBox 固定安装器与软件源。
 - KNS 回调地址必须是公网可达的 HTTPS Komari URL。
-- SubConverter 使用 `http://23.146.156.234:25500/sub` 作为初始配置；HTTP 会明文传输订阅令牌和节点凭据，公网使用前应配置 HTTPS。插件本身的原生订阅也可直接交给客户端，不依赖 SubConverter。
+- SubConverter 使用初始 HTTP 配置；HTTP 会明文传输订阅令牌和节点凭据，公网使用前应换成受信 HTTPS 服务。插件本身的原生订阅也可直接交给客户端，不依赖 SubConverter。
 - OneBox 管理操作需要受支持的 Linux、systemd 或 OpenRC、`curl` 或 `wget`、`base64`、`sha256sum`、`jq` 和 sing-box 服务。
 - 低资源 LXC 会依据可见 PID/内存余量自动限制 OneBox 操作；具体发现/导入/安装门槛见 [兼容性矩阵](docs/compatibility-matrix.md) 与 OneBox README。门槛触发时任务会说明资源类型；未挂载或宿主隐藏的限制无法预先判断。
 
