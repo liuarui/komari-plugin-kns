@@ -31,7 +31,7 @@ python3 scripts/package.py
 sha256sum -c dist/onebox-bridge.zip.sha256
 ```
 
-在 Komari 插件管理器上传 `dist/onebox-bridge.zip`。核准插件声明的 `node`、`allowRoutes`、`allowSystemRPC` 权限后启用。ZIP 中包含 `komari-plugin.json`、入口脚本、管理页和本地 KNS 模块。
+在 Komari 插件管理器上传 `dist/onebox-bridge.zip`。核准插件声明的 `node`、`allowRoutes`、`allowSystemRPC` 权限后启用。ZIP 中包含 `komari-plugin.json`、入口脚本、管理页、本地 KNS 模块和 GNU AGPL v3.0-only 许可证文本。
 
 ## 首次配置
 
@@ -76,4 +76,4 @@ python3 scripts/package.py
 
 ## 版本
 
-插件作者为 `ajax`，插件包版本为 `1.1.3`，manifest 声明最低 Komari Server `1.4.3`（源码核验下限，尚未在该版实机测试）。当前目标服务器为 `1.6.1`。OneBox KNS 适配器固定到已审查的源码提交和 SHA-256，见 [兼容性矩阵](docs/compatibility-matrix.md)。可直接上传 Komari 的 [v1.1.3 ZIP](https://raw.githubusercontent.com/liuarui/komari-plugin-kns/v1.1.3/dist/onebox-bridge.zip)，仓库内路径为 `dist/onebox-bridge.zip`。源码仓库为 [liuarui/komari-plugin-kns](https://github.com/liuarui/komari-plugin-kns)，分支 `main`。
+插件作者为 `ajax`，插件包版本为 `1.1.4`，项目许可证为 `AGPL-3.0-only`。manifest 声明最低 Komari Server `1.4.3`（源码核验下限，尚未在该版实机测试）。当前目标服务器为 `1.6.1`。OneBox KNS 适配器固定到已审查的源码提交和 SHA-256，见 [兼容性矩阵](docs/compatibility-matrix.md)。可直接上传 Komari 的 [v1.1.4 ZIP](https://raw.githubusercontent.com/liuarui/komari-plugin-kns/v1.1.4/dist/onebox-bridge.zip)，仓库内路径为 `dist/onebox-bridge.zip`。源码仓库为 [liuarui/komari-plugin-kns](https://github.com/liuarui/komari-plugin-kns)，分支 `main`。

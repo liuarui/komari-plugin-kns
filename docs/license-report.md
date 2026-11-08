@@ -4,7 +4,8 @@
 
 - Runtime 无第三方 Node.js package 依赖；仅使用 Komari 插件 APIs、Node 兼容内置模块 `fs`、`path`、`crypto`、`net`、`tls`、`url` 与标准 `fetch`。Komari 1.6.1 使用 MoeJS；兼容下限所审查的 1.4.3 使用 Goja。
 - `scripts/package.py` 与生成器只使用 Python 标准库 `hashlib`、`json`、`pathlib`、`zipfile`。
-- 此工作区没有 KNS 项目许可证文件或已确认的 SPDX 标识；发布到公开源码仓库前需由项目权利人选择并加入许可证。当前 SBOM 不把宿主 Komari、OneBox 或客户端当作内置依赖。
+- KNS 插件按 GNU Affero General Public License version 3 发布，SPDX 标识为 `AGPL-3.0-only`。根目录 `LICENSE` 的完整许可证文本随源码和插件 ZIP 一起分发；管理页与订阅响应也标识该许可证及源码地址。
+- 当前没有第三方 Node.js runtime package。SBOM 将插件本身标为 `AGPL-3.0-only`，不把宿主 Komari、OneBox、SubConverter 或客户端误列为随包内置依赖。
 
 ## 上游与外部服务
 
@@ -15,4 +16,4 @@
 | SubConverter-Extended | 用户已有订阅转换服务；通过 HTTP URL 外部调用 | 访问页面声明 GPL-3.0；未核实运行二进制的 commit/build，也未随包分发 |
 | Mihomo、sing-box | 订阅输出格式和远端 OneBox Runtime | 客户端/Runtime 外部组件；未随 KNS ZIP 分发 |
 
-SBOM 文件见 `sbom.cdx.json`。当前 components 为空是因为插件包无第三方库；运行宿主和远端软件是部署依赖，列在本清单但未作为 ZIP components。打包发布前应根据最终依赖差异更新 SPDX/许可证结论。
+SBOM 文件见 `sbom.cdx.json`。插件源码与运行包使用同一 SPDX 标识；运行宿主和远端软件是部署依赖，列在本清单但未作为 ZIP components。增加或打包第三方组件时应重新核验组件许可证并更新 SBOM。

@@ -2,7 +2,7 @@
 
 ## 原型 `onebox-bridge.json` 到 KNS Schema 1
 
-首次加载时，如果 `kns/state.json` 不存在而旧版 `onebox-bridge.json` 存在，插件先把 `__storageDir__` 的现有内容复制到 `kns/backups/pre-migration-*`，再在内存中读取旧文件并迁移。快照包含已有状态、master key、订阅快照、旧文件及同目录其他数据；新文件按 `0600`、目录按 `0700` 保存。为避免重试时递归复制快照，备份会排除已有的 `pre-migration-*` 和 `pre-upgrade-*` 回滚点。若快照失败，插件停止迁移，旧 JSON 不删除或重写；如果目录发布失败，备份暂存副本会保留在 `__storageDir__` 同级供恢复。迁移写入采用临时文件加原子替换：
+首次加载时，如果 `kns/state.json` 不存在而旧版 `onebox-bridge.json` 存在，插件先把 `__storageDir__` 的现有内容复制到 `kns/backups/pre-migration-*`，再在内存中读取旧文件并迁移。快照包含已有状态、master key、订阅快照、旧文件及同目录其他数据；新文件按 `0600`、目录按 `0700` 保存。为避免重试时递归复制快照，备份会排除当前暂存目录及已有的 `pre-migration-*` 和 `pre-upgrade-*` 回滚点。暂存目录保留在 `__storageDir__` 内，以符合 Komari 文件系统授权范围；发布失败时会尝试清理未完成副本，原始数据不变。迁移写入采用临时文件加原子替换：
 
 1. 复制旧 SubConverter URL 与仍在支持列表内的 `converterTarget`（Clash、ClashR、Surge、Quantumult、Quantumult X、Loon、Surfboard、Stash、Mellow、sing-box、SS、SSD、SSR、SSSub、V2Ray、V2RayN、V2RayNG、Shadowrocket、Trojan、VLESS、Hysteria2、Mixed）。
 2. 将旧订阅 token 转为 KNS salted hash/salt，创建 `legacy-default` 档案；旧 token 继续用于旧 `/api/onebox-bridge/subscribe` 兼容路由。
@@ -17,7 +17,7 @@
 
 ## 插件升级备份
 
-每次插件版本与 state 中记录的 `pluginVersion` 不同，或此前没有版本标记时，读取状态后、注册路由前先复制 `__storageDir__` 现有内容到 `kns/backups/pre-upgrade-*`，成功后才写入新版本标记。备份失败或 state 来自更新版本时停止插件加载，不写入状态。插件状态 schema 仍为 1；已发布的早期 KNS 版本也使用 schema 1，因此当前插件二进制升级不需要字段迁移。未来提升 `schemaVersion` 前，必须增加逐版本迁移函数和相应回滚测试。
+每次插件版本与 state 中记录的 `pluginVersion` 不同，或此前没有版本标记时，读取状态后、注册路由前先复制 `__storageDir__` 现有内容到 `kns/backups/pre-upgrade-*`，成功后才写入新版本标记。暂存目录直接创建在 `__storageDir__` 内，并在复制时排除自身，以适配 Komari 的受限文件系统。备份失败或 state 来自更新版本时停止插件加载，不写入状态；升级错误会显示截断清理后的底层原因。插件状态 schema 仍为 1；已发布的早期 KNS 版本也使用 schema 1，因此当前插件二进制升级不需要字段迁移。未来提升 `schemaVersion` 前，必须增加逐版本迁移函数和相应回滚测试。
 
 ## Schema 版本
 

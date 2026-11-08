@@ -4,7 +4,7 @@
 
 | 组件 | 本次识别/实现 | 验收状态 |
 | --- | --- | --- |
-| Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | v1.1.3 保留首次 `master.key` 的缺失文件兼容修复，并允许管理 Origin 与管理员设置的公网 Origin 匹配以适配反代上游 Host 改写；两者均待在目标面板复测 |
+| Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | v1.1.3 保留首次 `master.key` 缺失文件兼容修复并允许管理 Origin 适配反代 Host 改写；v1.1.4 将升级备份暂存目录移入授权的 `__storageDir__`，并显示清理后的失败原因。本地沙箱回归通过，均待在目标面板复测 |
 | Komari Agent | 目标 Agent 版本未提供；使用 `admin:exec` 与 `admin:getSpecificTaskResult` | 未在目标探针运行 |
 | OneBox | adapter schema 1，版本 `1.3.0`；[提交 `d9b98f0`](https://github.com/liuarui/onebox/commit/d9b98f0fd00fe3c9687697baff5c99e398a020b2)，分支 `codex/kns-adapter` | 安装脚本固定 SHA-256 `f5b4a1fde9b773f7963f558411a11003a71183ddb8201fce55801461f5faa65e`；Linux/LXC 真机未执行；低 PID/内存预检阈值见 OneBox README |
 | sing-box | OneBox 共享 `onebox-main` Runtime；实际 target 版本由 OneBox 安装过程决定，未锁定 | 结构通过本地生成/JSON 解析，未对目标二进制 `check` |

@@ -288,6 +288,8 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.match(subRes.body, new RegExp(legacyCredentialUuid));
     assert.equal(subRes.headers["x-kns-snapshot-success"], "2");
     assert.ok(subRes.headers["x-kns-snapshot-generated-at"]);
+    assert.equal(subRes.headers.link, '<https://github.com/liuarui/komari-plugin-kns/tree/v1.1.4>; rel="source"');
+    assert.equal(subRes.headers["x-kns-license"], "AGPL-3.0-only");
     const singboxOnlyProfileRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.create", name: "singbox-only", formats: ["singbox-full"] }) }, singboxOnlyProfileRes);
     const singboxOnly = JSON.parse(singboxOnlyProfileRes.body);

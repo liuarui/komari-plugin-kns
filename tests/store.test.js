@@ -199,6 +199,53 @@ test("plugin version updates snapshot state and refuse downgrades", () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("plugin upgrade backup stays inside Komari's confined storage root", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-confined-upgrade-store-"));
+  const store = createStore(root);
+  const state = store.initialState();
+  state.pluginVersion = "1.1.3";
+  store.write(state);
+
+  const original = {};
+  const confinedMethods = ["mkdirSync", "writeFileSync", "copyFileSync", "renameSync", "chmodSync", "unlinkSync", "rmSync", "openSync"];
+  let rejectUpgradeBackupPublish = false;
+  function assertInsideStorageRoot(target) {
+    const resolved = path.resolve(String(target));
+    assert.ok(resolved === root || resolved.startsWith(root + path.sep), "plugin file operation escaped __storageDir__: " + resolved);
+  }
+  try {
+    for (const method of confinedMethods) {
+      original[method] = fs[method];
+      fs[method] = function confinedFilesystemOperation(...args) {
+        if (method === "renameSync") {
+          assertInsideStorageRoot(args[0]);
+          assertInsideStorageRoot(args[1]);
+          if (rejectUpgradeBackupPublish && path.resolve(String(args[1])).startsWith(path.join(store.backupDir, "pre-upgrade-"))) {
+            throw new Error("simulated backup publish failure");
+          }
+        } else if (method === "copyFileSync") {
+          assertInsideStorageRoot(args[0]);
+          assertInsideStorageRoot(args[1]);
+        } else {
+          assertInsideStorageRoot(args[0]);
+        }
+        return original[method].apply(this, args);
+      };
+    }
+    rejectUpgradeBackupPublish = true;
+    assert.throws(() => store.preparePluginVersion(store.read(), "1.1.4"), /simulated backup publish failure/);
+    rejectUpgradeBackupPublish = false;
+    assert.equal(store.read().pluginVersion, "1.1.3");
+    assert.equal(fs.readdirSync(root).some((name) => name.startsWith(".pre-upgrade-") && name.endsWith(".tmp")), false);
+    const upgraded = store.preparePluginVersion(store.read(), "1.1.4");
+    assert.equal(upgraded.pluginVersion, "1.1.4");
+    assert.ok(fs.readdirSync(store.backupDir).some((name) => name.startsWith("pre-upgrade-")));
+  } finally {
+    for (const method of confinedMethods) if (original[method]) fs[method] = original[method];
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("secret tokens are salted hashes and credential boxes authenticate", () => {
   const token = secrets.createToken();
   const record = secrets.tokenRecord(token);

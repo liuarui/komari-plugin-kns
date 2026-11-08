@@ -12,6 +12,7 @@ const PLUGIN_VERSION = require("../komari-plugin.json").version;
 
 const API = "/api/kns";
 const LEGACY_API = "/api/onebox-bridge";
+const SOURCE_URL = "https://github.com/liuarui/komari-plugin-kns/tree/v" + PLUGIN_VERSION;
 const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/d9b98f0fd00fe3c9687697baff5c99e398a020b2/install.sh";
 const INSTALLER_SHA256 = "f5b4a1fde9b773f7963f558411a11003a71183ddb8201fce55801461f5faa65e";
 const ONEBOX_ADAPTER_VERSION = "1.3.0";
@@ -204,7 +205,10 @@ function getState() {
   let state = store.read();
   if (state) {
     try { return store.preparePluginVersion(state, PLUGIN_VERSION); }
-    catch (_) { fail("upgrade_backup_failed", "插件升级前备份或版本检查失败，已停止加载；现有状态未修改。", 500); }
+    catch (error) {
+      const cause = safeText(error && error.message || error, 160);
+      fail("upgrade_backup_failed", "插件升级前备份或版本检查失败，已停止加载；现有状态未修改。原因：" + cause, 500);
+    }
   }
   state = initialState();
   const legacyPath = path.join(__storageDir__, "onebox-bridge.json");
@@ -1532,6 +1536,8 @@ function profileValid(profile, token) {
 }
 
 function serveSubscription(req, res, legacy) {
+  res.setHeader("Link", "<" + SOURCE_URL + ">; rel=\"source\"");
+  res.setHeader("X-KNS-License", "AGPL-3.0-only");
   const state = getState();
   const query = req.query || {};
   const profileId = legacy ? "legacy-default" : String(query.profile || "");

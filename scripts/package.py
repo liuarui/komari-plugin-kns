@@ -10,6 +10,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "dist" / "onebox-bridge.zip"
 RUNTIME_FILES = [
+    "LICENSE",
     "komari-plugin.json",
     "script.js",
     "pages/admin.html",
@@ -58,8 +59,8 @@ def main() -> None:
             archive.write(path, relative)
     with ZipFile(OUTPUT) as archive:
         names = set(archive.namelist())
-        if "komari-plugin.json" not in names or "script.js" not in names:
-            raise SystemExit("Plugin ZIP is missing its manifest or entry script.")
+        if "komari-plugin.json" not in names or "script.js" not in names or "LICENSE" not in names:
+            raise SystemExit("Plugin ZIP is missing its manifest, entry script, or license.")
         if archive.testzip() is not None:
             raise SystemExit("Plugin ZIP failed its CRC check.")
     package_hash = sha256_file(OUTPUT)
@@ -70,7 +71,7 @@ def main() -> None:
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
         "version": 1,
-        "metadata": {"component": {"type": "application", "name": "Komari KNS", "version": manifest["version"]}},
+        "metadata": {"component": {"type": "application", "name": "Komari KNS", "version": manifest["version"], "licenses": [{"expression": "AGPL-3.0-only"}]}},
         "components": [],
         "dependencies": [],
         "properties": [

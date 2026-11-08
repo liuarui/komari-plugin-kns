@@ -104,15 +104,17 @@ function createStore(storageDir) {
     if (!["migration", "upgrade"].includes(reason)) throw new Error("Invalid storage snapshot reason.");
     const suffix = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomBytes(5).toString("hex");
     const destination = path.join(backupDir, "pre-" + reason + "-" + suffix);
-    const temporary = path.join(path.dirname(storageRoot), "." + path.basename(storageRoot) + "-pre-" + reason + "-" + suffix + ".tmp");
+    // Komari confines plugin filesystem calls to BaseDir and __storageDir__.
+    // Keep staging inside the storage root so the host filesystem adapter permits it.
+    const temporary = path.join(storageRoot, ".pre-" + reason + "-" + suffix + ".tmp");
     const rootStat = fs.lstatSync(storageRoot);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("Migration snapshot refuses a non-directory storage root.");
     fs.mkdirSync(temporary, { mode: 0o700 });
-    let copyComplete = false;
     try {
       function copyDirectory(source, target) {
         for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
           const sourcePath = path.join(source, entry.name);
+          if (path.resolve(source) === storageRoot && path.resolve(sourcePath) === path.resolve(temporary)) continue;
           if (path.resolve(source) === path.resolve(backupDir) && (entry.name.startsWith("pre-migration-") || entry.name.startsWith("pre-upgrade-"))) continue;
           const targetPath = path.join(target, entry.name);
           if (entry.isSymbolicLink()) throw new Error("Migration backup refuses symbolic links: " + sourcePath);
@@ -128,12 +130,11 @@ function createStore(storageDir) {
         }
       }
       copyDirectory(storageRoot, temporary);
-      copyComplete = true;
       ensureDirectories();
       fs.renameSync(temporary, destination);
       return destination;
     } catch (error) {
-      if (!copyComplete) try { fs.rmSync(temporary, { recursive: true, force: true }); } catch (_) {}
+      try { fs.rmSync(temporary, { recursive: true, force: true }); } catch (_) {}
       throw error;
     }
   }
