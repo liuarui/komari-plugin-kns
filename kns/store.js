@@ -5,7 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { createAuditLog } = require("./audit-log");
 
-const CURRENT_SCHEMA = 1;
+const CURRENT_SCHEMA = 2;
 
 function initialState() {
   const now = new Date().toISOString();
@@ -16,6 +16,10 @@ function initialState() {
     createdAt: now,
     updatedAt: now,
     settings: {
+      setupComplete: false,
+      autoProvisionNewProbes: false,
+      autoProvisionBaselineUuids: [],
+      defaultNode: { protocol: "vless", listenPort: 443, listenAddress: "::", sniMode: "preferred", version: 1, updatedAt: "" },
       publicBaseUrl: "",
       converterUrl: "http://23.146.156.234:25500/sub",
       converterTarget: "clash",
@@ -38,14 +42,41 @@ function initialState() {
   };
 }
 
+function migrateState(value) {
+  let state = value;
+  while (state.schemaVersion < CURRENT_SCHEMA) {
+    if (state.schemaVersion === 1) {
+      const settings = Object.assign({}, state.settings || {});
+      // Existing installs predate the setup flag. Treat them as initialized so
+      // an upgrade never blocks an administrator from their existing data.
+      if (typeof settings.setupComplete !== "boolean") settings.setupComplete = !!(state.pluginVersion || settings.publicBaseUrl);
+      // The target 1.1.x plugin never auto-provisioned new probes. Keep the
+      // capability opt-in when it is introduced by this schema migration.
+      if (typeof settings.autoProvisionNewProbes !== "boolean") settings.autoProvisionNewProbes = false;
+      if (!Array.isArray(settings.autoProvisionBaselineUuids)) settings.autoProvisionBaselineUuids = [];
+      if (!settings.defaultNode || typeof settings.defaultNode !== "object") settings.defaultNode = { protocol: "vless", listenPort: 443, listenAddress: "::", sniMode: "preferred", version: 1, updatedAt: "" };
+      state = Object.assign({}, state, { schemaVersion: 2, settings });
+      continue;
+    }
+    throw new Error("Unsupported KNS state schema version.");
+  }
+  return state;
+}
+
 function validateState(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("KNS state must be a JSON object.");
   if (!Number.isInteger(value.schemaVersion) || value.schemaVersion < 1 || value.schemaVersion > CURRENT_SCHEMA) {
     throw new Error("Unsupported KNS state schema version.");
   }
+  value = migrateState(value);
   const defaults = initialState();
   const state = Object.assign(defaults, value);
   state.settings = Object.assign({}, defaults.settings, value.settings || {});
+  state.settings.defaultNode = Object.assign({}, defaults.settings.defaultNode, state.settings.defaultNode || {});
+  if (typeof state.settings.setupComplete !== "boolean") state.settings.setupComplete = !!(state.pluginVersion || state.settings.publicBaseUrl);
+  if (typeof state.settings.autoProvisionNewProbes !== "boolean") state.settings.autoProvisionNewProbes = false;
+  if (!Array.isArray(state.settings.autoProvisionBaselineUuids)) state.settings.autoProvisionBaselineUuids = [];
+  state.settings.autoProvisionBaselineUuids = Array.from(new Set(state.settings.autoProvisionBaselineUuids.filter((uuid) => typeof uuid === "string" && uuid.length <= 64)));
   for (const field of ["machines", "runtimes", "instances", "jobs", "profiles", "audit", "legacyNodes"]) {
     if (!Array.isArray(state[field])) throw new Error("KNS state field is invalid: " + field);
   }
@@ -220,12 +251,25 @@ function createStore(storageDir) {
     }
   }
 
-  function write(state) {
+  function write(state, options) {
     const value = validateState(state);
+    const current = read();
+    const currentRevision = current ? current.revision : 0;
+    const expectedRevision = options && Number.isSafeInteger(options.expectedRevision)
+      ? options.expectedRevision
+      : Math.max(0, Number(state.revision) || 0);
+    if (currentRevision !== expectedRevision) {
+      const error = new Error("KNS state changed while this action was in progress. Refresh before saving.");
+      error.code = "state_revision_conflict";
+      error.status = 409;
+      error.expectedRevision = expectedRevision;
+      error.currentRevision = currentRevision;
+      throw error;
+    }
     ensureDirectories();
     backupIfDue();
     value.schemaVersion = CURRENT_SCHEMA;
-    value.revision = Math.max(0, Number(value.revision) || 0) + 1;
+    value.revision = currentRevision + 1;
     value.updatedAt = new Date().toISOString();
     const makeSnapshot = value.snapshotPending === true || !value.lastSnapshotAt || Date.now() - Date.parse(value.lastSnapshotAt) >= 5 * 60 * 1000;
     value.snapshotPending = false;
@@ -292,6 +336,36 @@ function createStore(storageDir) {
     return fs.readdirSync(backupDir).filter((name) => /^state-\d{4}-\d{2}-\d{2}\.json$/.test(name)).sort().reverse();
   }
 
+  function inspectBackup(name) {
+    if (!/^state-\d{4}-\d{2}-\d{2}\.json$/.test(String(name))) throw new Error("Invalid backup name.");
+    const restored = validateState(JSON.parse(fs.readFileSync(path.join(backupDir, name), "utf8")));
+    const dayKey = String(name).slice("state-".length, -".json".length);
+    const keyBackup = path.join(backupDir, "master-" + dayKey + ".key");
+    const configuredKey = typeof process !== "undefined" && process.env ? process.env.KNS_MASTER_KEY : "";
+    const requiresKey = stateRequiresMasterKey(restored);
+    let keyAvailable = false;
+    if (configuredKey) {
+      if (!/^[a-f0-9]{64}$/i.test(configuredKey)) throw new Error("KNS_MASTER_KEY must be 64 hexadecimal characters.");
+      if (fs.existsSync(keyBackup)) {
+        const backupKey = fs.readFileSync(keyBackup);
+        const envKey = Buffer.from(configuredKey, "hex");
+        if (backupKey.length !== 32 || !crypto.timingSafeEqual(backupKey, envKey)) throw new Error("This backup uses a different KNS_MASTER_KEY; restore was stopped.");
+      }
+      keyAvailable = true;
+    } else if (fs.existsSync(keyBackup)) {
+      const backupKey = fs.readFileSync(keyBackup);
+      if (backupKey.length !== 32) throw new Error("KNS master-key backup has an invalid length.");
+      keyAvailable = true;
+    } else if (requiresKey) {
+      throw new Error("This state backup has encrypted credentials but no matching master-key backup; current state was left untouched.");
+    }
+    return {
+      name: String(name), schemaVersion: restored.schemaVersion, pluginVersion: restored.pluginVersion || "",
+      createdAt: restored.updatedAt || restored.createdAt || "", requiresMasterKey: requiresKey, keyAvailable,
+      counts: { machines: restored.machines.length, instances: restored.instances.filter((item) => !item.deletedAt).length, profiles: restored.profiles.length, jobs: restored.jobs.length },
+    };
+  }
+
   function recoverInterruptedRestore() {
     const transactionPath = path.join(backupDir, "restore-transaction.json");
     if (!fs.existsSync(transactionPath)) return false;
@@ -317,13 +391,21 @@ function createStore(storageDir) {
     return true;
   }
 
-  function restoreBackup(name) {
+  function restoreBackup(name, options) {
     ensureDirectories();
     recoverInterruptedRestore();
-    if (!/^state-\d{4}-\d{2}-\d{2}\.json$/.test(String(name))) throw new Error("Invalid backup name.");
+    const current = read();
+    const expectedRevision = options && Number.isSafeInteger(options.expectedRevision) ? options.expectedRevision : (current ? current.revision : 0);
+    const currentRevision = current ? current.revision : 0;
+    if (expectedRevision !== currentRevision) {
+      const error = new Error("KNS state changed before restore. Refresh and preview the backup again.");
+      error.code = "state_revision_conflict"; error.status = 409;
+      error.expectedRevision = expectedRevision; error.currentRevision = currentRevision;
+      throw error;
+    }
+    inspectBackup(name);
     const source = path.join(backupDir, name);
     const restored = validateState(JSON.parse(fs.readFileSync(source, "utf8")));
-    auditLog.importHistory(restored.audit);
     const dayKey = String(name).slice("state-".length, -".json".length);
     const keyBackup = path.join(backupDir, "master-" + dayKey + ".key");
     const keyPath = path.join(root, "master.key");
@@ -360,7 +442,9 @@ function createStore(storageDir) {
     writeAtomicBytes(path.join(backupDir, "restore-transaction.json"), JSON.stringify(transaction), 0o600);
     try {
       if (keyChanged && restoredKey) writeAtomicBytes(keyPath, restoredKey, 0o600);
-      const result = write(restored);
+      restored.revision = currentRevision;
+      const result = write(restored, { expectedRevision: currentRevision });
+      auditLog.importHistory(result.audit);
       fs.unlinkSync(path.join(backupDir, "restore-transaction.json"));
       syncDirectory(backupDir);
       return result;
@@ -371,10 +455,18 @@ function createStore(storageDir) {
     }
   }
 
-  function importBackup(value, key) {
+  function importBackup(value, key, options) {
     ensureDirectories();
     const restored = validateState(value);
-    auditLog.importHistory(restored.audit);
+    const current = read();
+    const currentRevision = current ? current.revision : 0;
+    const expectedRevision = options && Number.isSafeInteger(options.expectedRevision) ? options.expectedRevision : currentRevision;
+    if (expectedRevision !== currentRevision) {
+      const error = new Error("KNS state changed before import. Refresh and review the file again.");
+      error.code = "state_revision_conflict"; error.status = 409;
+      error.expectedRevision = expectedRevision; error.currentRevision = currentRevision;
+      throw error;
+    }
     const importedKey = Buffer.from(key || []);
     if (importedKey.length !== 32) throw new Error("Imported KNS master key has an invalid length.");
     backupIfDue();
@@ -400,7 +492,10 @@ function createStore(storageDir) {
       keyChanged = true;
     }
     try {
-      return write(restored);
+      restored.revision = currentRevision;
+      const result = write(restored, { expectedRevision: currentRevision });
+      auditLog.importHistory(result.audit);
+      return result;
     } catch (error) {
       let committed = false;
       try {
@@ -422,7 +517,7 @@ function createStore(storageDir) {
     }
   }
 
-  return { appendAudit: auditLog.append, auditRoot: auditLog.root, auditRetention: auditLog.retention, backupDir, backupStorageBeforeChange, ensureDirectories, importBackup, importLegacyAudit: auditLog.importLegacy, initialState, listAudit: auditLog.list, listBackups, preparePluginVersion, pruneSubscriptionSnapshots, read, readSubscriptionSnapshot, recoverInterruptedRestore, restoreBackup, root, snapshotDir, stateFile, subscriptionSnapshotDir, write, writeSubscriptionSnapshot };
+  return { appendAudit: auditLog.append, auditRoot: auditLog.root, auditRetention: auditLog.retention, backupDir, backupStorageBeforeChange, ensureDirectories, importBackup, importLegacyAudit: auditLog.importLegacy, initialState, inspectBackup, listAudit: auditLog.list, listBackups, preparePluginVersion, pruneSubscriptionSnapshots, read, readSubscriptionSnapshot, recoverInterruptedRestore, restoreBackup, root, snapshotDir, stateFile, subscriptionSnapshotDir, write, writeSubscriptionSnapshot };
 }
 
-module.exports = { CURRENT_SCHEMA, createStore, initialState, validateState };
+module.exports = { CURRENT_SCHEMA, createStore, initialState, migrateState, validateState };

@@ -21,12 +21,15 @@ test("admin policy, task callback, remote status, and protected URI subscription
   const machineUuid = "123e4567-e89b-42d3-a456-426614174000";
   let taskResult = null;
   let execParams = null;
+  let execCalls = 0;
+  let nextExecError = null;
+  let failListClients = false;
   const mockServer = {
     route(method, url, handler) { routes.set(method + " " + url, handler); },
     cron(expression, handler) { crons.push({ expression, handler }); },
     async call(method, params) {
-      if (method === "admin:listClients") return [{ uuid: machineUuid, name: "test-node", ipv4: "1.2.3.4", online: true, os: "linux", arch: "amd64" }];
-      if (method === "admin:exec") { execParams = params; return { task_id: "task-1" }; }
+      if (method === "admin:listClients") { if (failListClients) throw new Error("simulated probe sync failure"); return [{ uuid: machineUuid, name: "test-node", ipv4: "1.2.3.4", online: true, os: "linux", arch: "amd64" }]; }
+      if (method === "admin:exec") { execParams = params; execCalls += 1; if (nextExecError) { const error = nextExecError; nextExecError = null; throw error; } return { task_id: "task-1" }; }
       if (method === "admin:getSpecificTaskResult") return taskResult;
       throw new Error("unexpected RPC " + method);
     },
@@ -49,10 +52,67 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const initial = JSON.parse(stateRes.body);
     assert.equal(initial.machines.length, 1);
     assert.equal(initial.machines[0].policy.deployAllowed, false);
+    assert.equal(initial.settings.setupComplete, false);
+
+    const setupGateRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { deployAllowed: true } }) }, setupGateRes);
+    assert.equal(setupGateRes.statusCode, 409);
+    assert.equal(JSON.parse(setupGateRes.body).error.code, "setup_required");
+
+    const invalidSetupRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "setup.complete", publicBaseUrl: "http://monitor.example", defaultNode: { protocol: "vless", listenPort: 443, listenAddress: "::" }, autoProvisionNewProbes: false }) }, invalidSetupRes);
+    assert.equal(invalidSetupRes.statusCode, 400);
+    assert.equal(JSON.parse(invalidSetupRes.body).error.code, "invalid_public_url");
+
+    const unconfirmedAutomationRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "setup.complete", publicBaseUrl: "https://monitor.example", defaultNode: { protocol: "vless", listenPort: 443, listenAddress: "::" }, autoProvisionNewProbes: true }) }, unconfirmedAutomationRes);
+    assert.equal(unconfirmedAutomationRes.statusCode, 400);
+    assert.equal(JSON.parse(unconfirmedAutomationRes.body).error.code, "auto_provision_confirmation_required");
+
+    failListClients = true;
+    const syncFailureRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "setup.complete", publicBaseUrl: "https://monitor.example", defaultNode: { protocol: "vless", listenPort: 443, listenAddress: "::" }, autoProvisionNewProbes: false }) }, syncFailureRes);
+    assert.equal(syncFailureRes.statusCode, 503);
+    assert.equal(JSON.parse(syncFailureRes.body).error.code, "probe_sync_required");
+    const failedSetupStateRes = response();
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, failedSetupStateRes);
+    const failedSetupState = JSON.parse(failedSetupStateRes.body);
+    assert.equal(failedSetupState.settings.setupComplete, false);
+    assert.equal(failedSetupState.profiles.length, 0);
+    failListClients = false;
+
+    const setupRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "setup.complete", publicBaseUrl: "https://monitor.example", defaultNode: { protocol: "vless", listenPort: 443, listenAddress: "::" }, autoProvisionNewProbes: false }) }, setupRes);
+    assert.equal(setupRes.statusCode, 200, setupRes.body);
+    const setupResult = JSON.parse(setupRes.body);
+    assert.equal(setupResult.baselineMachineCount, 1);
+    assert.ok(setupResult.subscriptionUrls.uri);
+    assert.ok(setupResult.subscriptionUrls["mihomo-full"]);
+    const completedSetupStateRes = response();
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, completedSetupStateRes);
+    const completedSetupState = JSON.parse(completedSetupStateRes.body);
+    assert.equal(completedSetupState.settings.setupComplete, true);
+    assert.equal(completedSetupState.settings.autoProvisionNewProbes, false);
+    assert.deepEqual(completedSetupState.settings.autoProvisionBaselineUuids, [machineUuid]);
+    const defaultProfile = completedSetupState.profiles.find((item) => item.name === "KNS 默认订阅");
+    assert.equal(defaultProfile.tokens.length, 1);
+    assert.ok(completedSetupState.audit.some((event) => event.action === "setup.completed"));
+    const repeatSetupRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "setup.complete", publicBaseUrl: "https://monitor.example", defaultNode: { protocol: "vless", listenPort: 443, listenAddress: "::" }, autoProvisionNewProbes: false }) }, repeatSetupRes);
+    assert.equal(repeatSetupRes.statusCode, 200);
+    assert.equal(JSON.parse(repeatSetupRes.body).alreadyComplete, true);
+    const repeatedSetupStateRes = response();
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, repeatedSetupStateRes);
+    assert.equal(JSON.parse(repeatedSetupStateRes.body).profiles.find((item) => item.name === "KNS 默认订阅").tokens.length, 1);
 
     const policyRes = response();
-    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { deployAllowed: true, addressMode: "ipv4" } }) }, policyRes);
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { deployAllowed: true, addressMode: "ipv4" }, expectedRevision: completedSetupState.revision }) }, policyRes);
     assert.equal(policyRes.statusCode, 200);
+    const staleWriteRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { deployAllowed: false }, expectedRevision: completedSetupState.revision }) }, staleWriteRes);
+    assert.equal(staleWriteRes.statusCode, 409);
+    assert.equal(JSON.parse(staleWriteRes.body).error.code, "state_revision_conflict");
+    assert.ok(JSON.parse(staleWriteRes.body).error.currentRevision > JSON.parse(staleWriteRes.body).error.expectedRevision);
     const auditStateRes = response();
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, auditStateRes);
     const auditState = JSON.parse(auditStateRes.body);
@@ -67,6 +127,17 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const settingsRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.update", publicBaseUrl: "https://monitor.example" }) }, settingsRes);
     assert.equal(settingsRes.statusCode, 200);
+
+    const unconfirmedDefaultsRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.defaults.update", defaultNode: { protocol: "vless", listenPort: 8443, listenAddress: "::" }, autoProvisionNewProbes: true }) }, unconfirmedDefaultsRes);
+    assert.equal(unconfirmedDefaultsRes.statusCode, 400);
+    assert.equal(JSON.parse(unconfirmedDefaultsRes.body).error.code, "auto_provision_confirmation_required");
+    const confirmedDefaultsRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.defaults.update", defaultNode: { protocol: "vless", listenPort: 8443, listenAddress: "::" }, autoProvisionNewProbes: true, confirmAutoProvision: true }) }, confirmedDefaultsRes);
+    assert.equal(confirmedDefaultsRes.statusCode, 200, confirmedDefaultsRes.body);
+    const disabledDefaultsRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.defaults.update", defaultNode: { protocol: "vless", listenPort: 8443, listenAddress: "::" }, autoProvisionNewProbes: false }) }, disabledDefaultsRes);
+    assert.equal(disabledDefaultsRes.statusCode, 200);
 
     const denyPolicyRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { deployAllowed: false } }) }, denyPolicyRes);
@@ -138,6 +209,16 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.equal(after.instances[0].nat.publicHost, "node.example.com");
     assert.equal("credential" in after.instances[0], false);
 
+    const jobsBeforeRename = after.jobs.length;
+    const renameRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "instance.metadata.update", instanceId: request.instance.id, name: "renamed for display" }) }, renameRes);
+    assert.equal(renameRes.statusCode, 200);
+    const renamedStateRes = response();
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, renamedStateRes);
+    const renamedState = JSON.parse(renamedStateRes.body);
+    assert.equal(renamedState.instances.find((item) => item.id === request.instance.id).name, "renamed for display");
+    assert.equal(renamedState.jobs.length, jobsBeforeRename);
+
     taskResult = { exit_code: 0, stdout: "KNS_STATUS=" + JSON.stringify({ schema: 1, runtime: { engine: "sing-box", id: "onebox-main" }, instance: { id: request.instance.id, machineUuid, installed: true, enabled: true, serviceState: "active", healthLevel: "L1", uninstallPreview: { complete: true, serviceImpact: "reload" }, resources: [{ type: "runtimeService", id: "onebox", owned: false, shared: true, present: true, referenceCount: 2, action: "reload" }] } }) };
     const statusJobRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "instance.status", machineUuid, instanceId: request.instance.id, idempotencyKey: "status-preview-1" }) }, statusJobRes);
@@ -149,6 +230,11 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const remoteStatusState = JSON.parse(remoteStatusStateRes.body);
     assert.equal(remoteStatusState.instances[0].remoteStatus.uninstallPreview.complete, true);
     assert.equal(remoteStatusState.instances[0].remoteStatus.resources[0].referenceCount, 2);
+    assert.match(remoteStatusState.instances[0].remoteStatus.uninstallPreview.version, /^[a-f0-9]{64}$/);
+    const changedUninstallPreviewRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "uninstall", machineUuid, instanceId: request.instance.id, previewVersion: "0".repeat(64), confirm: true, idempotencyKey: "uninstall-stale-preview-1", expectedRevision: remoteStatusState.revision }) }, changedUninstallPreviewRes);
+    assert.equal(changedUninstallPreviewRes.statusCode, 409);
+    assert.equal(JSON.parse(changedUninstallPreviewRes.body).error.code, "uninstall_preview_changed");
 
     const legacyDiscoveryRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.discover", machineUuid, idempotencyKey: "legacy-discovery-1" }) }, legacyDiscoveryRes);
@@ -268,7 +354,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.update", publicBaseUrl: "https://monitor.example", converterTarget: "unsupported" }) }, invalidConverterTargetRes);
     assert.equal(invalidConverterTargetRes.statusCode, 400);
     const importRes = response();
-    await routes.get("POST /api/kns/admin/import")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ envelope, passphrase: exportPassphrase }) }, importRes);
+    await routes.get("POST /api/kns/admin/import")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ envelope, passphrase: exportPassphrase, confirmPhrase: "恢复" }) }, importRes);
     assert.equal(importRes.statusCode, 200, importRes.body);
     const importedStateRes = response();
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, importedStateRes);
@@ -290,7 +376,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.equal(Object.keys(created.converterUrls).length, 22);
     const profileStateRes = response();
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, profileStateRes);
-    const profileState = JSON.parse(profileStateRes.body).profiles[0];
+    const profileState = JSON.parse(profileStateRes.body).profiles.find((item) => item.name === "test");
     assert.deepEqual(profileState.machineUuids, [machineUuid]);
     assert.deepEqual(profileState.protocols, ["vless"]);
     assert.equal(profileState.addressMode, "ipv4");
@@ -311,7 +397,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.match(subRes.body, new RegExp(legacyCredentialUuid));
     assert.equal(subRes.headers["x-kns-snapshot-success"], "2");
     assert.ok(subRes.headers["x-kns-snapshot-generated-at"]);
-    assert.equal(subRes.headers.link, '<https://github.com/liuarui/komari-plugin-kns/tree/v1.1.5>; rel="source"');
+    assert.equal(subRes.headers.link, '<https://github.com/liuarui/komari-plugin-kns/tree/v1.2.0>; rel="source"');
     assert.equal(subRes.headers["x-kns-license"], "AGPL-3.0-only");
     const singboxOnlyProfileRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.create", name: "singbox-only", formats: ["singbox-full"] }) }, singboxOnlyProfileRes);
@@ -415,7 +501,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.equal(updateProfileRes.statusCode, 200, updateProfileRes.body);
     const updatedStateRes = response();
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, updatedStateRes);
-    const updatedProfile = JSON.parse(updatedStateRes.body).profiles[0];
+    const updatedProfile = JSON.parse(updatedStateRes.body).profiles.find((item) => item.id === profileState.id);
     assert.equal(updatedProfile.machineUuids, null);
     assert.deepEqual(updatedProfile.excludeMachineUuids, [machineUuid]);
     assert.equal(updatedProfile.addressMode, "dual");
@@ -433,6 +519,48 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const revokedRes = response();
     await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(url.searchParams), headers: {} }, revokedRes);
     assert.equal(revokedRes.statusCode, 403);
+
+    nextExecError = Object.assign(new Error("admin session expired"), { code: "-32040" });
+    const retryBatchBody = { action: "install.batch", machineUuids: [machineUuid], batchId: "batch-retry-12345678", protocol: "vless", listenPort: 9444, listenAddress: "::", options: { security: "reality" }, confirm: true };
+    const retryBatchRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify(retryBatchBody) }, retryBatchRes);
+    assert.equal(retryBatchRes.statusCode, 202, retryBatchRes.body);
+    const failedJob = JSON.parse(retryBatchRes.body).results[0].job;
+    const failedJobsStateRes = response();
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, failedJobsStateRes);
+    assert.equal(JSON.parse(failedJobsStateRes.body).jobs.find((job) => job.id === failedJob.id).canRetry, true);
+
+    nextExecError = Object.assign(new Error("admin session expired"), { code: "-32040" });
+    const retryBody = { action: "job.retry", jobId: failedJob.id, confirm: true, idempotencyKey: "retry-request-key-12345678" };
+    const retryRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify(retryBody) }, retryRes);
+    assert.equal(retryRes.statusCode, 202, retryRes.body);
+    const retryJob = JSON.parse(retryRes.body).job;
+    assert.equal(retryJob.canRetry, false);
+    assert.equal(Object.hasOwn(retryJob, "retryIdempotencyKey"), false);
+
+    const retryReplayRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify(retryBody) }, retryReplayRes);
+    assert.equal(retryReplayRes.statusCode, 200, retryReplayRes.body);
+    assert.equal(JSON.parse(retryReplayRes.body).reused, true);
+    assert.equal(JSON.parse(retryReplayRes.body).job.id, retryJob.id);
+    const retryConflictRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify(Object.assign({}, retryBody, { idempotencyKey: "different-retry-key-12345678" })) }, retryConflictRes);
+    assert.equal(retryConflictRes.statusCode, 409);
+    assert.equal(JSON.parse(retryConflictRes.body).error.code, "idempotency_conflict");
+
+    const batchBody = { action: "install.batch", machineUuids: [machineUuid], batchId: "batch-test-12345678", protocol: "vless", listenPort: 9443, listenAddress: "::", options: { security: "reality" }, confirm: true };
+    const callsBeforeBatch = execCalls;
+    const batchRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify(batchBody) }, batchRes);
+    assert.equal(batchRes.statusCode, 202, batchRes.body);
+    assert.equal(JSON.parse(batchRes.body).results[0].accepted, true);
+    assert.equal(execCalls, callsBeforeBatch + 1);
+    const batchReplayRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify(batchBody) }, batchReplayRes);
+    assert.equal(batchReplayRes.statusCode, 202, batchReplayRes.body);
+    assert.equal(JSON.parse(batchReplayRes.body).results[0].reused, true);
+    assert.equal(execCalls, callsBeforeBatch + 1);
   } finally {
     if (plugin) plugin.unload();
     Module._load = originalLoad;

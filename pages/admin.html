@@ -35,6 +35,12 @@
     .format-list { display:flex; flex-wrap:wrap; gap:12px; margin:8px 0; } .format-list label { font-weight:400; }
     .profile-filters { margin:14px 0; } .profile-filters select[multiple] { min-height:100px; } .profile-filters small { display:block; margin-top:4px; }
     .row-actions { display:flex; flex-wrap:wrap; gap:5px; }
+    .operation-copy { white-space:pre-wrap; }
+    .operation-field { margin:10px 0; }
+    .draft-notice { padding:8px 10px; border-left:4px solid #d59b1a; background:color-mix(in srgb,#e3aa22 11%,transparent); }
+    .setup-steps { display:grid; gap:12px; }
+    .deploy-steps { display:grid; gap:12px; }
+    .delivery-grid { display:grid; gap:12px; }
     @media(max-width:850px) { .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
     @media(max-width:560px) { body { padding:12px; } .grid,.metrics { grid-template-columns:1fr; } }
   </style>
@@ -45,21 +51,37 @@
     <h1>Komari 节点系统（KNS）</h1>
     <p class="muted">通过 Komari Agent 在探针机器上管理 OneBox 实例，并发布受订阅令牌保护的节点订阅。</p>
     <p id="globalStatus" class="status muted" role="status"></p>
+    <div id="draftNotice" class="draft-notice small" role="status" hidden>有未保存更改。自动刷新会保留草稿；保存时会检查服务器修订号。</div>
+    <div class="actions"><button id="compareConflict" class="secondary" type="button" hidden>比较服务器更新</button><button id="discardDrafts" class="secondary" type="button" hidden>放弃草稿并刷新</button></div>
   </header>
   <nav class="tabs" aria-label="KNS 管理区">
-    <button class="tab active" data-panel="overview">总览</button><button class="tab" data-panel="machines">机器</button>
-    <button class="tab" data-panel="instances">实例</button><button class="tab" data-panel="jobs">任务</button>
-    <button class="tab" data-panel="subscriptions">订阅</button><button class="tab" data-panel="settings">设置与日志</button>
+    <button class="tab active" data-panel="overview">总览</button><button class="tab" data-panel="machines">探针</button>
+    <button class="tab" data-panel="instances">节点</button><button class="tab" data-panel="jobs">任务</button>
+    <button class="tab" data-panel="subscriptions">订阅</button><button class="tab" data-panel="settings">设置</button>
   </nav>
 
   <section id="overview" class="panel active">
+    <div id="setupCard" class="card" hidden><h2>先完成连接设置，再部署节点</h2><p class="muted">未完成初始化时，页面允许只读浏览。保存前会同步既有探针并建立基线；不会对基线内机器批量安装。</p><button id="startSetup">开始设置</button></div>
     <div class="metrics" id="metrics"></div>
     <div class="card">
       <h2>当前运行状态</h2>
       <p id="overviewSummary" class="muted">读取中…</p>
       <div class="actions"><button id="refresh" class="secondary">刷新数据</button><button id="export" class="secondary">导出加密备份</button></div>
+      <h3>需要处理</h3><div id="overviewTodos" class="result-list"><p class="muted">正在读取真实状态…</p></div>
     </div>
     <div class="card"><h2>安全边界</h2><p class="notice">每台探针默认禁止自动部署。先为机器启用部署策略，再逐次确认具体任务；Komari Agent 必须以 root 运行。KNS 不创建 DNS 记录、不修改云安全组。</p><p class="small muted">UDP / QUIC 协议的外部握手在当前插件约束下标记为 unverified；状态不会伪装成代理协议握手结果。</p></div>
+  </section>
+
+  <section id="setupWizard" class="card" hidden aria-labelledby="setupTitle">
+    <form id="setupForm">
+      <h2 id="setupTitle">首次配置</h2>
+      <div class="wizard-progress"><span data-setup-progress="1">1. 连接地址</span><span data-setup-progress="2">2. 默认模板与授权</span><span data-setup-progress="3">3. 核对并完成</span></div>
+      <section id="setupStep1" class="setup-steps"><label>机器可访问的 Komari HTTPS 地址<input id="setupPublicBaseUrl" type="url" placeholder="https://komari.example.com" required></label><p class="small muted">填写机器可以访问的地址，不要使用浏览器本机地址。格式检查不代表探针已验证可达。</p></section>
+      <section id="setupStep2" class="setup-steps" hidden><div class="grid"><label>默认协议<input value="VLESS + Reality" disabled></label><label>默认监听端口<input id="setupDefaultPort" type="number" min="1" max="65535" value="443" required></label><label>服务监听地址<select id="setupDefaultAddress"><option value="::">双栈通配 ::</option><option value="0.0.0.0">IPv4 通配 0.0.0.0</option></select></label></div><p class="small muted">SNI 由 OneBox 自动优选；模板只影响之后的新探针，既有节点不变。</p><label><input id="setupAutoProvision" type="checkbox">之后首次发现的新探针自动部署默认节点</label><p class="notice small">开启后会在新探针上运行固定校验的 OneBox 安装器，可能修改代理配置与防火墙。首次同步的已有探针只建立基线，不会批量安装。</p><label id="setupAutoProvisionConfirmLabel" hidden><input id="setupAutoProvisionConfirm" type="checkbox">我明确授权之后新发现的探针自动运行安装任务</label></section>
+      <section id="setupStep3" class="setup-steps" hidden><div id="setupReview" class="setup-summary"></div><p class="small muted">完成时先同步探针；同步失败会保留此表单并停止初始化。随后会创建默认订阅并显示一次性链接。</p></section>
+      <p id="setupStatus" class="status muted" role="status"></p>
+      <div class="actions"><button id="setupCancel" type="button" class="secondary">稍后配置</button><button id="setupBack" type="button" class="secondary" hidden>上一步</button><button id="setupNext" type="button">下一步</button><button id="setupComplete" type="submit" hidden>同步探针并创建默认订阅</button></div>
+    </form>
   </section>
 
   <section id="machines" class="panel">
@@ -70,24 +92,36 @@
 
   <section id="instances" class="panel">
     <div class="card">
-      <h2>新建 OneBox 实例</h2>
-      <p class="muted">同一探针上的多个实例共用 OneBox sing-box Runtime。端口冲突按 TCP/UDP 传输检查。</p>
-      <div class="grid">
+      <h2>部署 OneBox 节点</h2>
+      <p class="muted">分三步选择探针、配置服务与网络、核对逐机结果。同一探针上的多个节点共用 OneBox sing-box Runtime。</p>
+      <div class="wizard-progress"><span data-deploy-progress="1">1. 选择探针</span><span data-deploy-progress="2">2. 协议与网络</span><span data-deploy-progress="3">3. 核对与提交</span></div>
+      <section id="deployStep1" class="deploy-steps">
+        <label>查找探针<input id="installMachineSearch" type="search" placeholder="名称或 UUID"></label>
+        <label><input id="onlyAllowedMachines" type="checkbox">仅显示允许部署的探针</label>
         <label>目标探针（最多 10 台）<select id="installMachines" multiple size="4"></select></label>
+      </section>
+      <section id="deployStep2" class="deploy-steps" hidden>
+      <div class="grid">
         <label>协议<select id="protocol"><option value="vless">VLESS + Reality</option><option value="trojan">Trojan</option><option value="vmess">VMess</option><option value="shadowsocks">Shadowsocks</option><option value="hysteria2">Hysteria2</option><option value="tuic">TUIC</option><option value="anytls">AnyTLS</option></select></label>
-        <label>实例名称<input id="instanceName" maxlength="80" placeholder="例如：新加坡入口"></label>
-        <label>监听端口<input id="listenPort" type="number" min="1" max="65535" value="443"></label>
+        <label>节点名称（留空使用探针名与协议）<input id="instanceName" maxlength="80" placeholder="自动按探针名称生成"></label>
+        <label>服务监听端口<input id="listenPort" type="number" min="1" max="65535" value="443" required></label>
         <label>监听地址<select id="listenAddress"><option value="::">双栈/IPv6 通配 ::</option><option value="0.0.0.0">IPv4 通配 0.0.0.0</option></select></label>
-        <label>TLS SNI<input id="sni" placeholder="node.example.com"></label>
-        <label id="ssMethodLabel">Shadowsocks 加密方法<select id="ssMethod"><option value="aes-128-gcm">aes-128-gcm</option><option value="aes-256-gcm">aes-256-gcm</option><option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option></select></label>
-        <label>Endpoint 覆盖（可选）<input id="endpointHost" placeholder="域名或公网 IP"></label>
-        <label>NAT 外部端口（可选）<input id="externalPort" type="number" min="1" max="65535" placeholder="留空时使用监听端口"></label>
-        <label>实例标签<input id="instanceTags" placeholder="例如：prod,sg"></label>
-        <label>2FA 验证码（如启用）<input id="twoFactor" type="password" inputmode="numeric" autocomplete="one-time-code"></label>
+        <label id="sniLabel" hidden>TLS SNI<input id="sni" placeholder="node.example.com"></label>
+        <label id="ssMethodLabel" hidden>Shadowsocks 加密方法<select id="ssMethod"><option value="aes-128-gcm">aes-128-gcm</option><option value="aes-256-gcm">aes-256-gcm</option><option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option></select></label>
+        <label>客户端对外地址覆盖（可选）<input id="endpointHost" placeholder="留空继承探针地址策略"></label>
+        <label>NAT 客户端外部端口（可选）<input id="externalPort" type="number" min="1" max="65535" placeholder="留空使用监听端口"></label>
+        <label>节点标签<input id="instanceTags" placeholder="例如：prod,sg"></label>
       </div>
-      <div class="actions"><button id="installBatch">安装到所选机器</button><span id="installStatus" class="status muted"></span></div>
+      <p class="small muted">监听端口是机器本地端口；Endpoint 与 NAT 外部端口是客户端连接入口。同一 Endpoint/NAT 覆盖会用于全部目标；映射不同请拆分批次。VLESS + Reality 的 SNI 由 OneBox 自动优选。</p>
+      </section>
+      <section id="deployStep3" class="deploy-steps" hidden>
+        <div id="deployReview" class="operation-copy"></div>
+        <p class="notice small">此处只做本地字段与逐机策略预检；不会预先探测远端端口。提交后仍需查看每台机器的 Agent、回调和远端状态核验结果。</p>
+      </section>
+      <div class="actions"><button id="deployBack" type="button" class="secondary" hidden>上一步</button><button id="deployNext" type="button">下一步</button><button id="installBatch" hidden>核对并提交部署</button><span id="installStatus" class="status muted"></span></div>
     </div>
-    <div class="card"><h2>实例列表</h2><div class="table-wrap"><table><thead><tr><th>实例</th><th>协议 / Runtime</th><th>监听 → Endpoint</th><th>健康 / 发布</th><th>操作</th></tr></thead><tbody id="instanceRows"></tbody></table></div></div>
+    <div id="deploymentResults" class="card" hidden><h2>本次提交结果</h2><p class="small muted">已受理不代表远端安装完成。最终结果可在任务页恢复查看。</p><div id="deploymentResultRows" class="result-list"></div></div>
+    <div class="card"><h2>实例列表</h2><div id="instanceMachineFilter" class="notice small" hidden></div><div class="table-wrap"><table><thead><tr><th>节点</th><th>运行</th><th>检测</th><th>发布</th><th>操作</th></tr></thead><tbody id="instanceRows"></tbody></table></div></div>
   </section>
 
   <section id="jobs" class="panel">
@@ -100,54 +134,280 @@
       <div class="grid"><label>档案名称<input id="profileName" maxlength="80" value="默认订阅"></label><label>过期时间（可选）<input id="profileExpiry" type="datetime-local"></label></div>
       <div id="createProfileFilters" class="profile-filters"></div>
       <div class="format-list">
-        <label><input type="checkbox" value="uri" checked>URI 原始链接（用于转换）</label><label><input type="checkbox" value="mihomo-full" checked>Mihomo 完整配置</label><label><input type="checkbox" value="mihomo-provider" checked>Mihomo Provider</label><label><input type="checkbox" value="singbox-full" checked>sing-box 完整配置</label><label><input type="checkbox" value="singbox-outbounds" checked>sing-box Outbounds</label>
+        <label><input type="checkbox" value="uri" checked>URI 原始链接（用于转换）</label><label><input type="checkbox" value="mihomo-full" checked>Mihomo 完整配置</label><label><input type="checkbox" value="mihomo-provider">Mihomo Provider</label><label><input type="checkbox" value="singbox-full">sing-box 完整配置</label><label><input type="checkbox" value="singbox-outbounds">sing-box Outbounds</label>
       </div>
+      <p class="small muted">默认选择 URI 和 Mihomo 完整配置。没有服务端筛选预览接口；如筛选结果为空，创建后保留固定链接，节点数待状态核验。</p>
       <p class="notice">令牌只在创建或轮换时显示一次；服务器状态中只保存带盐哈希。每个档案支持多个独立令牌。订阅 URL 含令牌，分享时请当作密码。</p>
-      <div class="actions"><button id="createProfile">生成订阅令牌</button></div>
-      <div id="newProfileResult" hidden><div id="resultLinks"></div><button id="copyNative" class="secondary">复制原生订阅</button></div>
+      <div class="actions"><button id="createProfile">创建订阅并生成访问链接</button></div>
+      <p id="profileCreateStatus" class="small muted" role="status">每种实际输出格式会在创建后单独提供复制，并可保存全部链接到本地文件。</p>
     </div>
     <div class="card"><h2>订阅档案</h2><p class="muted">每个档案可管理多条独立令牌、格式白名单与节点筛选；轮换可设置 0–7 天宽限。</p><div id="profileRows"></div></div>
   </section>
 
   <section id="settings" class="panel">
-    <div class="card"><h2>服务与转换设置</h2><div class="grid"><label>Komari HTTPS 公网地址<input id="publicBaseUrl" type="url" placeholder="https://monitor.example.com"></label><label>SubConverter 接口<input id="subconverterUrl" type="url" value="http://23.146.156.234:25500/sub"></label><label>默认转换 target<select id="converterTarget"><option value="clash">Clash</option><option value="clashr">ClashR</option><option value="surge">Surge</option><option value="quan">Quantumult</option><option value="quanx">Quantumult X</option><option value="loon">Loon</option><option value="surfboard">Surfboard</option><option value="stash">Stash</option><option value="mellow">Mellow</option><option value="singbox">sing-box</option><option value="ss">SS</option><option value="ssd">SSD</option><option value="ssr">SSR</option><option value="sssub">SSSub</option><option value="v2ray">V2Ray</option><option value="v2rayn">V2RayN</option><option value="v2rayng">V2RayNG</option><option value="shadowrocket">Shadowrocket</option><option value="trojan">Trojan</option><option value="vless">VLESS</option><option value="hysteria2">Hysteria2</option><option value="mixed">Mixed</option></select></label><label><input id="privateSite" type="checkbox">允许发布私有 Endpoint（仅内网订阅）</label></div><p class="muted small">令牌创建或轮换后，可在订阅结果中切换已验证 SubConverter 服务支持的 target。转换端会跳过目标客户端无法表示的协议。</p><p class="notice">KNS 回调要求 HTTPS 公网地址。现有 SubConverter 默认 HTTP，HTTP 会暴露订阅令牌和节点凭据，建议为转换服务配置 HTTPS。</p><div class="actions"><button id="saveSettings">保存设置</button><span id="settingsStatus" class="status muted"></span></div><p class="small muted">OneBox 安装脚本固定到已审查的 Git commit 和 SHA256，不从可变 main 分支执行。</p><p id="installerPin" class="small"></p></div>
-    <div class="card"><h2>数据恢复</h2><p class="muted">每日保留 7 份状态和密钥备份。加密导入会替换当前 KNS 状态与密钥；操作前会保留本地恢复副本。</p><div class="toolbar"><select id="backupSelect"></select><button id="restoreBackup" class="danger">恢复所选备份</button><button id="exportState" class="secondary">导出加密备份</button><input id="importBackupFile" type="file" accept="application/json,.json"><button id="importBackup" class="danger">导入加密备份</button></div></div>
+    <div class="card"><h2>服务与转换设置</h2><div class="grid"><label>Komari HTTPS 公网地址<input id="publicBaseUrl" type="url" placeholder="https://monitor.example.com"></label><label>SubConverter 接口<input id="subconverterUrl" type="url" value="http://23.146.156.234:25500/sub"></label><label>默认转换 target<select id="converterTarget"><option value="clash">Clash</option><option value="clashr">ClashR</option><option value="surge">Surge</option><option value="quan">Quantumult</option><option value="quanx">Quantumult X</option><option value="loon">Loon</option><option value="surfboard">Surfboard</option><option value="stash">Stash</option><option value="mellow">Mellow</option><option value="singbox">sing-box</option><option value="ss">SS</option><option value="ssd">SSD</option><option value="ssr">SSR</option><option value="sssub">SSSub</option><option value="v2ray">V2Ray</option><option value="v2rayn">V2RayN</option><option value="v2rayng">V2RayNG</option><option value="shadowrocket">Shadowrocket</option><option value="trojan">Trojan</option><option value="vless">VLESS</option><option value="hysteria2">Hysteria2</option><option value="mixed">Mixed</option></select></label><label><input id="privateSite" type="checkbox">允许发布私有 Endpoint（仅内网订阅）</label></div><p class="muted small">令牌创建或轮换后，可在订阅结果中切换已验证 SubConverter 服务支持的 target。转换端会跳过目标客户端无法表示的协议。</p><p class="notice">KNS 回调要求 HTTPS 公网地址。外部 SubConverter 会收到原始订阅 URI 与其中的凭据；当前默认 HTTP 会明文传输订阅令牌和节点凭据。公网使用前请配置可信 HTTPS 转换器。</p><div class="actions"><button id="saveSettings">保存设置</button><span id="settingsStatus" class="status muted"></span></div><p class="small muted">OneBox 安装脚本固定到已审查的 Git commit 和 SHA256，不从可变 main 分支执行。</p><p id="installerPin" class="small"></p></div>
+    <div class="card"><h2>默认部署与新探针授权</h2><p class="muted">默认模板只应用于首次发现的新探针。自动部署默认关闭；已派发任务不受开关变化影响。</p><div class="grid"><label>默认监听端口<input id="defaultNodePort" type="number" min="1" max="65535"></label><label>默认服务监听地址<select id="defaultNodeAddress"><option value="::">双栈通配 ::</option><option value="0.0.0.0">IPv4 通配 0.0.0.0</option></select></label><label><input id="autoProvisionEnabled" type="checkbox">授权新探针自动部署</label></div><p id="autoProvisionStatus" class="small muted"></p><div class="actions"><button id="saveDefaultNode">保存默认部署设置</button></div></div>
+    <div class="card"><h2>数据恢复</h2><p class="muted">每日保留 7 份状态和密钥备份。恢复前会校验状态与配对密钥；有未完成远程任务时会阻止维护。</p><div class="toolbar"><select id="backupSelect"></select><button id="restoreBackup" class="danger">预览并恢复所选备份</button><button id="exportState" class="secondary">导出加密备份</button><input id="importBackupFile" type="file" accept="application/json,.json"><button id="importBackup" class="danger">预检并导入加密备份</button></div></div>
     <div class="card"><h2>审计日志</h2><p id="auditRetention" class="muted small"></p><div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>详情</th></tr></thead><tbody id="auditRows"></tbody></table></div><button id="auditOlder" type="button" hidden>加载更早记录</button></div>
     <div class="card"><h2>兼容性与运行限制</h2><p id="compatibility" class="muted">该插件依赖 Komari MoeJS 插件路由、定时任务、admin:listClients、admin:exec 和 admin:getSpecificTaskResult。最终需在目标 Komari Server/Agent 版本实测。</p></div>
   </section>
 </main>
+<dialog id="operationDialog" aria-labelledby="operationTitle"><form id="operationForm"><h2 id="operationTitle"></h2><p id="operationDescription" class="operation-copy muted"></p><div id="operationFields"></div><p id="operationStatus" class="status muted" role="status"></p><div class="actions"><button id="operationCancel" type="button" class="secondary">取消</button><button id="operationConfirm" type="submit">继续</button></div></form></dialog>
+<dialog id="deliveryDialog" aria-labelledby="deliveryTitle"><div><h2 id="deliveryTitle">一次性订阅链接</h2><p class="notice">令牌明文只在创建或轮换时显示。逐格式链接可复制；保存到本地会生成含凭据的文本文件。关闭后 KNS 无法再次显示此令牌。</p><div id="deliveryLinks" class="delivery-grid"></div><section id="converterDeliverySection" hidden><h3>外部转换结果</h3><p class="notice small">以下链接会把原始订阅 URI 和节点凭据发送到所配置的外部 SubConverter；仅使用你信任的转换器。</p><div id="converterDeliveryLinks" class="delivery-grid"></div></section><div class="actions"><button id="saveLinkBundle" type="button" class="secondary">保存全部链接到文件</button><button id="closeDelivery" type="button">关闭并清除链接</button></div></div></dialog>
 <script>
 (() => {
   "use strict";
   const api = "/api/kns";
   const $ = (id) => document.getElementById(id);
   let state = null;
-  let lastCreatedNative = "";
+  let lastSuccessfulRefreshAt = null;
+  let latestServerSnapshot = null;
+  let draftConflict = null;
+  let setupStep = 1;
+  let setupDraftInitialized = false;
+  let deployStep = 1;
+  let instanceMachineFilter = "";
+  let deliveryState = null;
+  let deploymentBatch = [];
+  const draftScopes = new Map();
+  const installMachineSelection = new Set();
+  const retryRequestKeys = new Map();
   let createProfileFiltersReady = false;
   const legacyScanSelection = new Set();
   const legacyScanFailures = new Map();
 
   async function request(path, options = {}) {
-    const response = await fetch(api + path, Object.assign({ credentials: "same-origin", cache: "no-store" }, options));
+    const timeoutMs = Number(options.timeoutMs) || 20000;
+    const fetchOptions = Object.assign({}, options);
+    delete fetchOptions.timeoutMs;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    let response;
+    try {
+      response = await fetch(api + path, Object.assign({ credentials: "same-origin", cache: "no-store" }, fetchOptions, { signal: controller.signal }));
+    } catch (cause) {
+      if (cause && cause.name === "AbortError") {
+        const error = new Error("请求等待超过 " + Math.round(timeoutMs / 1000) + " 秒，提交结果待确认。先刷新任务与状态，确认服务端是否已受理，再决定是否重试。");
+        error.code = "request_timeout";
+        throw error;
+      }
+      throw cause;
+    } finally { clearTimeout(timeout); }
     const type = response.headers.get("content-type") || "";
     const body = type.includes("application/json") ? await response.json() : { error: { message: await response.text() } };
-    if (!response.ok) throw new Error(body.error && body.error.message || body.message || ("HTTP " + response.status));
+    if (!response.ok) {
+      const error = new Error(body.error && body.error.message || body.message || ("HTTP " + response.status));
+      error.code = body.error && body.error.code; error.status = response.status;
+      error.currentRevision = body.error && body.error.currentRevision; error.expectedRevision = body.error && body.error.expectedRevision;
+      throw error;
+    }
     return body;
   }
   function setStatus(id, message, kind = "muted") { const element = $(id); if (!element) return; element.textContent = message || ""; element.className = "status " + kind; }
   function el(tag, text, cls) { const node = document.createElement(tag); if (text != null) node.textContent = String(text); if (cls) node.className = cls; return node; }
   function actionButton(text, action, css = "secondary") { const button = el("button", text, css); button.type = "button"; button.addEventListener("click", action); return button; }
-  async function postAction(body) { return request("/admin/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
+  function updateDraftControls() {
+    const dirty = draftScopes.size > 0;
+    $("draftNotice").hidden = !dirty;
+    $("discardDrafts").hidden = !dirty;
+    $("compareConflict").hidden = !draftConflict;
+  }
+  function draftScopeFor(target) {
+    if (!target || target.matches('[type="search"],[data-no-draft]')) return "";
+    const row = target.closest("tr[data-machine-uuid]");
+    if (row) return "machine:" + row.dataset.machineUuid;
+    const profileCard = target.closest("[data-profile-id]");
+    if (profileCard) return "profile:" + profileCard.dataset.profileId;
+    if (target.closest("#createProfileFilters,.format-list") || ["profileName","profileExpiry"].includes(target.id)) return "profile:create";
+    if (["publicBaseUrl","subconverterUrl","converterTarget","privateSite"].includes(target.id)) return "settings:connection";
+    if (["defaultNodePort","defaultNodeAddress","autoProvisionEnabled"].includes(target.id)) return "settings:defaults";
+    if (["setupPublicBaseUrl","setupDefaultPort","setupDefaultAddress","setupAutoProvision","setupAutoProvisionConfirm"].includes(target.id)) return "setup";
+    if (["installMachines","installMachineSearch","onlyAllowedMachines","protocol","instanceName","listenPort","listenAddress","sni","ssMethod","endpointHost","externalPort","instanceTags"].includes(target.id)) return "deploy";
+    return "";
+  }
+  document.addEventListener("input", (event) => {
+    const scope = draftScopeFor(event.target);
+    if (scope && !draftScopes.has(scope) && state) draftScopes.set(scope, state.revision);
+    updateDraftControls();
+  });
+  document.addEventListener("change", (event) => {
+    const scope = draftScopeFor(event.target);
+    if (scope && !draftScopes.has(scope) && state) draftScopes.set(scope, state.revision);
+    updateDraftControls();
+  });
+  async function postAction(body, scope = "") {
+    const expectedRevision = body.expectedRevision != null ? Number(body.expectedRevision) : (scope && draftScopes.has(scope) ? draftScopes.get(scope) : (state ? state.revision : 0));
+    try {
+      const result = await request("/admin/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({}, body, { expectedRevision })) });
+      if (scope) draftScopes.delete(scope);
+      updateDraftControls();
+      return result;
+    } catch (error) {
+      if (error.code === "state_revision_conflict") {
+        try {
+          const latest = await request("/admin/state");
+          const machine = body.machineUuid && latest.machines.find((item) => item.uuid === body.machineUuid);
+          const profile = body.profileId && latest.profiles.find((item) => item.id === body.profileId);
+          const relevant = machine ? { machine: machine.name, policy: machine.policy, updatedAt: machine.updatedAt } : profile ? { profile: profile.name, formats: profile.formats, filters: { machineUuids: profile.machineUuids, protocols: profile.protocols, includeTags: profile.includeTags } } : { settings: latest.settings };
+          const draft = Object.fromEntries(Object.entries(body).filter(([key]) => !/twoFactor|passphrase|envelope|token/i.test(key)));
+          draftConflict = { expectedRevision, currentRevision: latest.revision, serverUpdatedAt: latest.updatedAt, relevant, draft };
+          updateDraftControls();
+        } catch (_) {}
+      }
+      throw error;
+    }
+  }
   function idempotencyKey() { return (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)); }
+
+  function operationField(spec) {
+    const label = el("label", spec.label, "operation-field");
+    let control;
+    if (spec.type === "textarea") { control = document.createElement("textarea"); control.rows = spec.rows || 3; control.value = spec.value || ""; }
+    else if (spec.type === "select") { control = document.createElement("select"); for (const [value,text] of spec.options || []) { const option=el("option",text); option.value=value; option.selected=value===spec.value; control.append(option); } }
+    else { control = document.createElement("input"); control.type = spec.type || "text"; control.value = spec.value || ""; }
+    control.name = spec.name; control.required = !!spec.required; control.autocomplete = spec.autocomplete || "off";
+    if (spec.inputMode) control.inputMode = spec.inputMode;
+    if (spec.placeholder) control.placeholder = spec.placeholder;
+    if (spec.min != null) control.min = String(spec.min);
+    if (spec.max != null) control.max = String(spec.max);
+    label.append(control);
+    if (spec.hint) label.append(el("small", spec.hint, "small muted"));
+    return control;
+  }
+
+  function askOperation(spec) {
+    const dialog = $("operationDialog"); const form = $("operationForm");
+    $("operationTitle").textContent = spec.title || "确认操作";
+    $("operationDescription").textContent = spec.description || "";
+    $("operationFields").replaceChildren(...(spec.fields || []).map(operationField));
+    $("operationConfirm").textContent = spec.confirmLabel || "继续";
+    $("operationConfirm").className = spec.danger ? "danger" : "";
+    setStatus("operationStatus", "", "muted");
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => { if (settled) return; settled = true; resolve(value); };
+      form.onsubmit = (event) => {
+        event.preventDefault();
+        if (!form.reportValidity()) return;
+        if (typeof spec.validate === "function") {
+          const message = spec.validate(new FormData(form));
+          if (message) { setStatus("operationStatus", message, "error"); return; }
+        }
+        const values = Object.fromEntries(new FormData(form).entries());
+        finish(values); dialog.close();
+      };
+      $("operationCancel").onclick = () => { finish(null); dialog.close(); };
+      dialog.addEventListener("cancel", (event) => { event.preventDefault(); finish(null); dialog.close(); }, { once: true });
+      dialog.addEventListener("close", () => {
+        dialog.querySelectorAll('input[type="password"]').forEach((field) => { field.value = ""; });
+        $("operationFields").replaceChildren(); form.onsubmit = null; $("operationCancel").onclick = null;
+        finish(null);
+      }, { once: true });
+      dialog.showModal();
+      const first = dialog.querySelector("input,select,textarea,button"); if (first) first.focus();
+    });
+  }
+
+  function showInfoDialog(title, description) { return askOperation({ title, description, confirmLabel: "关闭" }).then(() => null); }
+
+  function safeRevisionConflictAction() {
+    if (!draftConflict) return;
+    showInfoDialog("服务器配置与本地草稿", JSON.stringify(draftConflict, null, 2));
+  }
+
+  function renderSetupStep(step) {
+    setupStep=Math.max(1,Math.min(3,step));
+    for(let index=1;index<=3;index++){
+      $("setupStep"+index).hidden=index!==setupStep;
+      const marker=document.querySelector('[data-setup-progress="'+index+'"]');if(marker)marker.classList.toggle("current",index===setupStep);
+    }
+    $("setupBack").hidden=setupStep===1;$("setupNext").hidden=setupStep===3;$("setupComplete").hidden=setupStep!==3;
+    if(setupStep===3){const enabled=$("setupAutoProvision").checked;$("setupReview").textContent=["服务地址："+$("setupPublicBaseUrl").value.trim(),"默认模板：VLESS + Reality · "+$("setupDefaultPort").value+" · "+$("setupDefaultAddress").value+" · SNI 自动优选","新探针自动部署："+(enabled?"已明确授权":"关闭"),"同步前已发现探针："+((state&&state.machines.length)||0)+" 台；同步后以服务端基线为准，不批量安装"].join("\n");}
+  }
+
+  function renderProtocolFields(){
+    const protocol=$("protocol").value;
+    const needsSni=["trojan","vmess","hysteria2","tuic","anytls"].includes(protocol);
+    $("sniLabel").hidden=!needsSni;$("sni").required=needsSni;
+    $("ssMethodLabel").hidden=protocol!=="shadowsocks";
+  }
+
+  function renderDeployStep(step){
+    deployStep=Math.max(1,Math.min(3,step));
+    for(let index=1;index<=3;index++){$("deployStep"+index).hidden=index!==deployStep;const marker=document.querySelector('[data-deploy-progress="'+index+'"]');if(marker)marker.classList.toggle("current",index===deployStep);}
+    $("deployBack").hidden=deployStep===1;$("deployNext").hidden=deployStep===3;$("installBatch").hidden=deployStep!==3;
+    if(deployStep===3)renderDeployReview();
+  }
+
+  function renderDeployReview(){
+    const selected=new Set(Array.from($("installMachines").selectedOptions).map((option)=>option.value));
+    installMachineSelection.forEach((uuid)=>selected.add(uuid));
+    const chosen=state.machines.filter((machine)=>selected.has(machine.uuid));
+    const protocol=$("protocol").value;const protocolText=$("protocol").selectedOptions[0].textContent;
+    const transport=protocol==="shadowsocks"?"TCP + UDP":(["hysteria2","tuic"].includes(protocol)?"UDP":"TCP");
+    const override=$("endpointHost").value.trim();const externalPort=$("externalPort").value;
+    const lines=["本地配置核对","目标："+chosen.length+" 台（最多 "+Math.max(1,Math.min(10,Number(state.settings.maxBatch)||10))+" 台）","协议："+protocolText+" · "+transport,"服务监听："+$("listenAddress").value+":"+$("listenPort").value,"对外入口："+(override||"继承每台探针的地址策略")+(externalPort?" · NAT 外部端口 "+externalPort:" · 使用监听端口"),"节点名称："+($("instanceName").value.trim()||"各探针名称 + 协议"),"目标预检："];
+    for(const machine of chosen){const allowed=machine.online===true&&machine.policy&&machine.policy.deployAllowed===true;const reason=machine.online!==true?"离线或状态未知":!machine.policy||machine.policy.deployAllowed!==true?"未授权部署":"在线且已授权";const policy=machine.policy||{};const source=policy.manualAddress?"手动 "+policy.manualAddress:policy.ddnsHostname?"DDNS "+policy.ddnsHostname:"Komari 上报地址（"+(policy.addressMode||"auto")+"）";lines.push("• "+machine.name+" · "+machine.uuid+" — "+(allowed?"可提交":"阻断："+reason)+"；地址来源 "+source);}
+    if(externalPort&&chosen.length>1)lines.push("提示：相同 NAT 外部端口会应用于所有目标；不同映射请分批提交，服务端仍会逐机检查冲突。");
+    $("deployReview").textContent=lines.join("\n");
+  }
+
+  function openSetupWizard(){
+    if(!state||state.settings.setupComplete===true)return;
+    $("setupCard").hidden=true;$("setupWizard").hidden=false;
+    if(!setupDraftInitialized){
+      $("setupPublicBaseUrl").value=state.settings.publicBaseUrl||"";
+      $("setupDefaultPort").value=state.settings.defaultNode&&state.settings.defaultNode.listenPort||443;
+      $("setupDefaultAddress").value=state.settings.defaultNode&&state.settings.defaultNode.listenAddress||"::";
+      $("setupAutoProvision").checked=state.settings.autoProvisionNewProbes===true;
+      $("setupAutoProvisionConfirm").checked=false;$("setupAutoProvisionConfirmLabel").hidden=!$("setupAutoProvision").checked;
+      setupDraftInitialized=true;
+    }
+    setStatus("setupStatus","","muted");renderSetupStep(1);$("setupPublicBaseUrl").focus();
+  }
+
+  async function completeSetup(event){
+    event.preventDefault();
+    const base=$("setupPublicBaseUrl").value.trim();let parsed;
+    try{parsed=new URL(base);}catch(_){setStatus("setupStatus","请输入有效 HTTPS URL。","error");renderSetupStep(1);return;}
+    if(parsed.protocol!=="https:"||parsed.username||parsed.password||parsed.search||parsed.hash){setStatus("setupStatus","地址必须是无账号、查询和片段的 HTTPS URL。","error");renderSetupStep(1);return;}
+    const autoProvision=$("setupAutoProvision").checked;
+    if(autoProvision&&!$("setupAutoProvisionConfirm").checked){setStatus("setupStatus","开启自动部署前请明确确认后续新探针的 root 安装影响。","error");renderSetupStep(2);return;}
+    const button=$("setupComplete");button.disabled=true;setStatus("setupStatus","正在同步既有探针并建立基线…同步失败时不会完成初始化。","muted");
+    try{
+      const result=await postAction({action:"setup.complete",publicBaseUrl:base,defaultNode:{protocol:"vless",listenPort:Number($("setupDefaultPort").value),listenAddress:$("setupDefaultAddress").value},autoProvisionNewProbes:autoProvision,confirmAutoProvision:$("setupAutoProvisionConfirm").checked},"setup");
+      $("setupWizard").hidden=true;
+      if(result.subscriptionUrls)showSecret(result);else setStatus("globalStatus","初始化已完成；如上次响应丢失，请到订阅页新增令牌生成一次性链接。","success");
+      draftScopes.clear();updateDraftControls();await refresh();
+    }catch(error){
+      if(error.code==="request_timeout"){
+        try{
+          const latest=await request("/admin/state");latestServerSnapshot=latest;
+          if(latest.settings&&latest.settings.setupComplete===true){state=latest;draftScopes.delete("setup");updateDraftControls();render();$("setupWizard").hidden=true;setStatus("globalStatus","初始化已完成，但一次性订阅链接的响应未收到。请到订阅页新增令牌生成新链接；不会重复创建默认订阅。","error");return;}
+        }catch(_){}
+      }
+      setStatus("setupStatus",error.message+" 表单内容已保留；提交结果不确定时先刷新状态再决定是否重试。","error");
+    }
+    finally{button.disabled=false;}
+  }
 
   function renderOverview() {
     const online = state.machines.filter((m) => m.online === true).length;
-    const active = state.instances.filter((i) => i.enabled && !i.deletedAt).length;
+    const active = state.instances.filter((i) => !i.deletedAt).length;
     const pending = state.jobs.filter((j) => ["authorized", "dispatched", "running", "verifying"].includes(j.state)).length;
     const profiles = state.profiles.filter((p) => !p.revokedAt).length;
-    const items = [["探针", state.machines.length, online + " 在线"], ["实例", active, state.instances.length + " 登记"], ["进行中任务", pending, "需回调与远程状态双重验证"], ["订阅档案", profiles, "独立令牌"]];
+    const failed = state.jobs.filter((job) => ["failed","needs_reconcile","timed_out"].includes(job.state));
+    const items = [["探针", state.machines.length, online + " 在线"], ["节点", active, "不以探针在线推断运行状态"], ["进行中任务", pending, "等待远端核验"], ["订阅", profiles, "有效档案"]];
     const host = $("metrics"); host.replaceChildren(...items.map(([label, value, note]) => { const box=el("div",null,"metric"); box.append(el("span",label,"muted"),el("strong",value),el("span",note,"small muted")); return box; }));
-    $("overviewSummary").textContent = "数据 revision " + state.revision + " · 最近更新 " + (state.updatedAt || "—") + " · 共享 Runtime: sing-box / onebox-main。";
+    $("setupCard").hidden = state.settings.setupComplete === true;
+    $("overviewSummary").textContent = "数据 revision " + state.revision + " · 最近成功刷新 " + (lastSuccessfulRefreshAt ? new Date(lastSuccessfulRefreshAt).toLocaleString() : "刚刚") + " · 最近状态更新 " + (state.updatedAt || "—") + "。";
+    const todos = $("overviewTodos"); todos.replaceChildren();
+    if (state.settings.setupComplete !== true) todos.append(el("p","尚未完成初始化；部署、节点变更和订阅创建由服务端阻止。","notice"));
+    for (const job of failed.slice(0,5)) {
+      const item=el("div",null,"result-item");item.append(el("strong",(job.machineName||job.machineUuid||"目标未知")+" · "+job.action),el("p",job.message||job.state),el("small","任务 "+job.id+" · "+job.state,"small muted"));
+      item.append(actionButton("查看任务",()=>{document.querySelector('[data-panel="jobs"]').click();showJobDetail(job);}));todos.append(item);
+    }
+    if (state.settings.setupComplete === true && !failed.length && !pending) todos.append(el("p","当前没有待处理任务。","muted"));
   }
 
   async function updatePolicy(uuid, row) {
@@ -158,7 +418,7 @@
     const ddnsHostname = row.querySelector("[data-policy=ddns]").value.trim();
     const tags = row.querySelector("[data-policy=tags]").value.split(",").map((x) => x.trim()).filter(Boolean);
     try {
-      await postAction({ action:"machine.policy.update", machineUuid:uuid, policy:{ deployAllowed,addressMode,manualAddress,ddnsHostname,tags } });
+      await postAction({ action:"machine.policy.update", machineUuid:uuid, policy:{ deployAllowed,addressMode,manualAddress,ddnsHostname,tags } }, "machine:"+uuid);
       setStatus("globalStatus", "已保存 " + machine.name + " 的机器策略。", "success"); await refresh();
     } catch (error) { setStatus("globalStatus", error.message, "error"); }
   }
@@ -177,9 +437,9 @@
     const online = selected.filter((machine) => machine.online === true);
     const offlineCount = selected.length - online.length;
     if (!online.length) { setStatus("globalStatus", "所选探针当前都不在线，未提交扫描。", "error"); return; }
-    if (!confirm("将对 " + online.length + " 台在线探针执行只读 OneBox 配置扫描；不会安装、修改或卸载节点。" + (offlineCount ? "\n" + offlineCount + " 台离线探针将跳过。" : "") + "\n继续？")) return;
-    const twoFactorCode = prompt("Komari 启用了 2FA 时请输入当前验证码；未启用则留空。", "");
-    if (twoFactorCode === null) return;
+    const confirmation = await askOperation({ title:"确认只读扫描", description:"将对 "+online.length+" 台在线探针读取 OneBox 配置；不会安装、修改或卸载节点。"+(offlineCount?"\n"+offlineCount+" 台离线探针将跳过。":""), fields:[{name:"twoFactorCode",label:"Komari 2FA 验证码（如果此操作要求）",type:"password",inputMode:"numeric",autocomplete:"one-time-code"}], confirmLabel:"提交只读扫描" });
+    if (!confirmation) return;
+    const twoFactorCode = String(confirmation.twoFactorCode||"").trim();
     legacyScanFailures.clear();
     const results = new Array(online.length);
     let cursor = 0;
@@ -221,25 +481,20 @@
   }
 
   async function importLegacyNode(machine, node) {
-    const accepted = confirm("导入旧节点「" + node.tag + "」？\n\nKNS 会通过 HTTPS 一次性回调读取协议凭据并加密保存，随后允许将此节点加入订阅。OneBox 配置和服务不会被修改。导入后节点生命周期仍由 OneBox 管理。");
-    if (!accepted) return;
-    const endpointHost = prompt("订阅连接地址（留空使用机器策略中的地址）", machine.policy&&machine.policy.manualAddress||"");
-    if (endpointHost === null) return;
-    const externalPort = prompt("NAT 公网端口（留空使用监听端口 " + node.listen.port + "）", "");
-    if (externalPort === null) return;
-    const tags = prompt("实例标签（逗号分隔，可用于订阅筛选）", (machine.policy&&machine.policy.tags||[]).join(","));
-    if (tags === null) return;
+    const values=await askOperation({title:"导入旧版节点",description:"导入「"+node.tag+"」：KNS 将通过 HTTPS 一次性回调读取凭据并加密保存。不会修改 OneBox 配置或服务；后续生命周期仍由 OneBox 管理。",fields:[{name:"endpointHost",label:"订阅对外地址（可选）",value:machine.policy&&machine.policy.manualAddress||"",hint:"留空使用探针地址策略。"},{name:"externalPort",label:"NAT 外部端口（可选）",type:"number",min:1,max:65535,placeholder:"留空使用监听端口 "+node.listen.port},{name:"tags",label:"实例标签",value:(machine.policy&&machine.policy.tags||[]).join(","),hint:"逗号分隔，可用于订阅筛选。"},{name:"twoFactorCode",label:"Komari 2FA 验证码（如果此操作要求）",type:"password",inputMode:"numeric",autocomplete:"one-time-code"}],confirmLabel:"加密导入节点"});
+    if(!values)return;
     try {
-      await postAction({ action:"machine.import", machineUuid:machine.uuid, legacyTag:node.tag, name:node.tag, tags:tags.split(",").map((tag)=>tag.trim()).filter(Boolean), endpointHost:endpointHost.trim(), externalPort:externalPort.trim(), confirm:true, idempotencyKey:idempotencyKey() });
-      setStatus("globalStatus", "已提交「" + node.tag + "」的安全导入任务。", "success"); await refresh();
+      await postAction({ action:"machine.import", machineUuid:machine.uuid, legacyTag:node.tag, name:node.tag, tags:String(values.tags||"").split(",").map((tag)=>tag.trim()).filter(Boolean), endpointHost:String(values.endpointHost||"").trim(), externalPort:String(values.externalPort||"").trim(), twoFactorCode:String(values.twoFactorCode||"").trim(), confirm:true, idempotencyKey:idempotencyKey() });
+      setStatus("globalStatus", "已提交「" + node.tag + "」的加密导入任务；等待双重核验。", "success"); await refresh();
     } catch (error) { setStatus("globalStatus", error.message, "error"); }
   }
 
   function renderMachines() {
     const body=$("machineRows"); body.replaceChildren();
     for (const machine of state.machines) {
-      const row=document.createElement("tr");
-      const identity=el("td"); const scanChoice=document.createElement("input"); scanChoice.type="checkbox"; scanChoice.checked=legacyScanSelection.has(machine.uuid); scanChoice.disabled=machine.online!==true; scanChoice.setAttribute("aria-label","选择 "+machine.name+" 扫描旧版节点"); scanChoice.addEventListener("change",()=>{if(scanChoice.checked)legacyScanSelection.add(machine.uuid);else legacyScanSelection.delete(machine.uuid);}); identity.append(scanChoice,el("strong",machine.name),el("small",machine.uuid,"muted small"),el("small",[machine.os,machine.arch,machine.region].filter(Boolean).join(" · "),"muted small"));
+      const row=document.createElement("tr"); row.dataset.machineUuid=machine.uuid;
+      const identity=el("td"); const scanChoice=document.createElement("input"); scanChoice.type="checkbox"; scanChoice.dataset.noDraft="true"; scanChoice.checked=legacyScanSelection.has(machine.uuid); scanChoice.disabled=machine.online!==true; scanChoice.setAttribute("aria-label","选择 "+machine.name+" 扫描旧版节点"); scanChoice.addEventListener("change",()=>{if(scanChoice.checked)legacyScanSelection.add(machine.uuid);else legacyScanSelection.delete(machine.uuid);}); identity.append(scanChoice,el("strong",machine.name),el("small",machine.uuid,"muted small"),el("small",[machine.os,machine.arch,machine.region].filter(Boolean).join(" · "),"muted small"));
+      if(machine.autoProvision) identity.append(el("small","新探针自动部署："+machine.autoProvision.state+" · "+(machine.autoProvision.message||""),machine.autoProvision.state==="failed"?"error small":"muted small"));
       const discovered=Array.isArray(machine.discoveredNodes)?machine.discoveredNodes:[];
       if(machine.discoveredAt) identity.append(el("small","旧节点扫描："+new Date(machine.discoveredAt).toLocaleString()+" · "+discovered.length+" 个","muted small"));
       if(legacyScanFailures.has(machine.uuid)) identity.append(el("small","扫描提交失败："+legacyScanFailures.get(machine.uuid),"error small"));
@@ -251,7 +506,7 @@
       const observed=el("td"); observed.append(el("span",machine.online===true?"在线":machine.online===false?"离线":"未知",machine.online===true?"success":"muted"),el("small","IPv4: "+(machine.ipv4||"—"),"muted small"),el("small","IPv6: "+(machine.ipv6||"—"),"muted small"),el("small","来源 IP: "+(machine.sourceIp||"—"),"muted small"));
       const policy=el("td"); const deploy=document.createElement("input"); deploy.type="checkbox"; deploy.checked=!!(machine.policy&&machine.policy.deployAllowed); deploy.dataset.policy="deploy"; const deployLabel=el("label","允许部署"); deployLabel.prepend(deploy); policy.append(deployLabel); const mode=document.createElement("select"); mode.dataset.policy="mode"; [["auto","自动"],["ipv4","IPv4"],["ipv6","IPv6"],["dual","双栈"]].forEach(([v,t])=>{const o=document.createElement("option");o.value=v;o.textContent=t;mode.append(o);}); mode.value=machine.policy&&machine.policy.addressMode||"auto"; policy.append(mode);
       const endpoint=el("td"); const manual=document.createElement("input"); manual.placeholder="手动公网 IP / 域名"; manual.value=machine.policy&&machine.policy.manualAddress||""; manual.dataset.policy="manual"; const ddns=document.createElement("input"); ddns.placeholder="DDNS 域名"; ddns.value=machine.policy&&machine.policy.ddnsHostname||""; ddns.dataset.policy="ddns"; const tags=document.createElement("input"); tags.placeholder="标签，逗号分隔"; tags.value=(machine.policy&&machine.policy.tags||[]).join(","); tags.dataset.policy="tags"; endpoint.append(manual,ddns,tags);
-      const ops=el("td"); ops.append(actionButton("保存",()=>updatePolicy(machine.uuid,row)),actionButton("扫描旧版节点",()=>discoverLegacyNodes(machine)));
+      const ops=el("td"); ops.append(actionButton("查看节点",()=>{if(draftScopes.size){setStatus("globalStatus","请先保存或放弃草稿，再打开该探针的节点列表。","error");return;}instanceMachineFilter=machine.uuid;renderInstances();document.querySelector('[data-panel="instances"]').click();}),actionButton("保存",()=>updatePolicy(machine.uuid,row)),actionButton("扫描旧版节点",()=>discoverLegacyNodes(machine)));
       for(const node of discovered){
         const imported=state.instances.some((instance)=>instance.machineUuid===machine.uuid&&instance.managedBy==="legacy_import"&&instance.legacyTag===node.tag&&!instance.deletedAt);
         if(node.importable&&!node.managed&&!imported) ops.append(actionButton("导入 "+node.tag,()=>importLegacyNode(machine,node)));
@@ -259,53 +514,150 @@
       }
       row.append(identity,observed,policy,endpoint,ops); body.append(row);
     }
-    const select=$("installMachines"); const selected=Array.from(select.selectedOptions).map((o)=>o.value); select.replaceChildren();
-    state.machines.forEach((machine)=>{const option=el("option",machine.name+" · "+machine.uuid.slice(0,8)); option.value=machine.uuid; option.disabled=!(machine.policy&&machine.policy.deployAllowed); option.selected=selected.includes(option.value); select.append(option);});
+    renderInstallMachineOptions();
+  }
+
+  function renderInstallMachineOptions(){
+    const select=$("installMachines");if(!select||!state)return;
+    Array.from(select.selectedOptions).forEach((option)=>installMachineSelection.add(option.value));
+    select.replaceChildren();
+    const query=String($("installMachineSearch").value||"").trim().toLowerCase();const onlyAllowed=$("onlyAllowedMachines").checked;
+    state.machines.forEach((machine)=>{const allowed=!!(machine.policy&&machine.policy.deployAllowed);const online=machine.online===true;const reason=!online?" · 离线/未知":!allowed?" · 未授权部署":" · 可部署";const option=el("option",machine.name+" · "+machine.uuid.slice(0,8)+reason);option.value=machine.uuid;option.disabled=!allowed||!online;option.selected=installMachineSelection.has(machine.uuid);const hay=[machine.name,machine.uuid,machine.region,machine.ipv4,machine.ipv6].join(" ").toLowerCase();option.hidden=!!((query&&!hay.includes(query))||(onlyAllowed&&!allowed));select.append(option);});
+    select.onchange=()=>{installMachineSelection.clear();Array.from(select.selectedOptions).forEach((option)=>installMachineSelection.add(option.value));};
+  }
+
+  function wait(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
+
+  async function refreshUninstallPreview(instance) {
+    const values = await askOperation({ title:"卸载前检查机器", description:"当前没有有效的完整资源预览。KNS 会先提交只读状态核查；未取得完整预览前不会提交卸载。检查期间关闭此页面不会取消核查任务。", fields:[{name:"twoFactorCode",label:"Komari 2FA 验证码（如果此操作要求）",type:"password",inputMode:"numeric",autocomplete:"one-time-code"}], confirmLabel:"检查机器上的实际配置" });
+    if (!values) return null;
+    let submitted;
+    try { submitted=await postAction({action:"instance.status",machineUuid:instance.machineUuid,instanceId:instance.id,twoFactorCode:String(values.twoFactorCode||"").trim(),idempotencyKey:idempotencyKey()}); }
+    catch(error){setStatus("globalStatus",error.message,"error");return null;}
+    const jobId=submitted.job&&submitted.job.id;
+    if(!jobId){setStatus("globalStatus","状态核查已提交，但没有任务 ID；请在任务页查看。","error");await refresh();return null;}
+    setStatus("globalStatus","正在等待远端状态核查 · 任务 "+jobId+"。尚未提交卸载。","muted");
+    const deadline=Date.now()+60000;
+    while(Date.now()<deadline){
+      await wait(2000);
+      try{
+        const latest=await request("/admin/state");latestServerSnapshot=latest;
+        const job=(latest.jobs||[]).find((item)=>item.id===jobId);
+        const current=(latest.instances||[]).find((item)=>item.id===instance.id&&item.machineUuid===instance.machineUuid);
+        if(job&&["succeeded","failed","needs_reconcile","timed_out","cancelled"].includes(job.state)){
+          if(job.state!=="succeeded"){if(!draftScopes.size){state=latest;render();}setStatus("globalStatus","卸载未提交：远端核查 "+job.state+"。"+(job.message||"请查看任务详情。"),"error");return null;}
+          if(!draftScopes.size){state=latest;render();}
+          const remote=current&&current.remoteStatus;const checked=Date.parse(remote&&remote.checkedAt||"");
+          if(remote&&remote.installed===true&&remote.uninstallPreview&&remote.uninstallPreview.complete===true&&remote.uninstallPreview.version&&Array.isArray(remote.resources)&&remote.resources.length&&Number.isFinite(checked)&&checked<=Date.now()&&Date.now()-checked<=5*60*1000)return current;
+          setStatus("globalStatus","卸载未提交：核查没有返回完整资源影响预览。请查看任务详情并重新检查。","error");return null;
+        }
+      }catch(error){setStatus("globalStatus","远端核查仍在等待；保留任务记录后可稍后恢复查看。","muted");}
+    }
+    setStatus("globalStatus","状态核查仍未结束；卸载未提交。请在任务页恢复查看任务 "+jobId+"。","error");return null;
   }
 
   async function instanceAction(instance, action) {
-    const prompts={enable:"启用此 OneBox 实例并重新加入共享服务？",disable:"停用此实例会从共享 sing-box Runtime 中移除它的 inbound。",uninstall:"卸载将删除此 KNS 实例和它拥有的资源，不会卸载共享 OneBox Runtime。",reinstall:"按当前登记配置重装此实例？"};
     if (action === "uninstall") {
-      const remote=instance.remoteStatus||{};const checked=Date.parse(remote.checkedAt||"");
-      if(remote.installed!==true||!remote.uninstallPreview||remote.uninstallPreview.complete!==true||!Array.isArray(remote.resources)||!remote.resources.length||!Number.isFinite(checked)||Date.now()-checked>5*60*1000){setStatus("globalStatus","卸载前需要确认实例仍已登记，并取得最新的 OneBox 资源预览。先点“查远端状态”，等待任务成功后刷新页面。","error");return;}
+      let remoteInstance=instance;let remote=remoteInstance.remoteStatus||{};let checked=Date.parse(remote.checkedAt||"");
+      const valid=remote.installed===true&&remote.uninstallPreview&&remote.uninstallPreview.complete===true&&remote.uninstallPreview.version&&Array.isArray(remote.resources)&&remote.resources.length&&Number.isFinite(checked)&&checked<=Date.now()&&Date.now()-checked<=5*60*1000;
+      if(!valid){remoteInstance=await refreshUninstallPreview(instance);if(!remoteInstance)return;remote=remoteInstance.remoteStatus||{};checked=Date.parse(remote.checkedAt||"");}
       const resources=remote.resources.map((item)=>"• "+item.type+" / "+item.id+" — "+item.action+(item.shared?"（共享，引用 "+item.referenceCount+"）":"")).join("\n");
-      const serviceImpact=remote.uninstallPreview.serviceImpact==="reload"?"OneBox 共享服务会重载，其他节点可能短暂重连。":"服务影响未能确认。";
-      const preview="卸载影响预览（核查于 "+new Date(checked).toLocaleString()+"）\n"+serviceImpact+"\n\n"+resources+"\n\n继续卸载？";
-      if(!confirm(preview))return;
-    } else if (action !== "status" && !confirm(prompts[action]||"确认继续？")) return;
-    const twoFactor=action === "status" ? "" : (prompt("如果 Komari 启用了 2FA，请输入验证码；否则留空。","")||"");
-    try { await postAction({ action:action === "status" ? "instance.status" : action,machineUuid:instance.machineUuid,instanceId:instance.id,confirm:true,twoFactorCode:twoFactor,idempotencyKey:idempotencyKey() }); setStatus("globalStatus", action === "status" ? "已提交远端状态核查。" : "已发送 " + action + " 任务。", "success"); await refresh(); }
-    catch(error){setStatus("globalStatus",error.message,"error");}
+      const serviceImpact=remote.uninstallPreview.serviceImpact==="reload"?"OneBox 共享服务会重载，其他节点可能短暂重连。":"服务影响未知；远端预览未说明影响。";
+      const values=await askOperation({title:"确认卸载节点",description:"核查时间："+new Date(checked).toLocaleString()+"\n"+serviceImpact+"\n\n远端资源清单：\n"+resources+"\n\n只会移除本节点拥有的资源；共享资源保留。服务端会核验本次预览版本、有效期和当前登记状态。",fields:[{name:"twoFactorCode",label:"Komari 2FA 验证码（如果此操作要求）",type:"password",inputMode:"numeric",autocomplete:"one-time-code"}],confirmLabel:"提交卸载",danger:true});
+      if(!values)return;
+      try{await postAction({action:"uninstall",machineUuid:remoteInstance.machineUuid,instanceId:remoteInstance.id,previewVersion:remote.uninstallPreview.version,confirm:true,twoFactorCode:String(values.twoFactorCode||"").trim(),idempotencyKey:idempotencyKey()});setStatus("globalStatus","卸载任务已提交；等待 Agent、回调和远端状态核验。","success");await refresh();}catch(error){setStatus("globalStatus",error.message,"error");}return;
+    }
+    const labels={status:"核查机器上的实际配置",enable:"启动服务",disable:"停止服务",reinstall:"重装节点"};
+    const descriptions={status:"只读读取 OneBox 实例、共享 Runtime 和卸载影响预览。",enable:"将此节点重新加入共享 sing-box Runtime；这不会更改订阅令牌。",disable:"将此节点从共享 sing-box Runtime 移除；机器上的 OneBox 服务仍保留。",reinstall:"按当前登记配置运行固定 SHA-256 校验的 OneBox 适配器。"};
+    const fields=action==="status"?[]:[{name:"twoFactorCode",label:"Komari 2FA 验证码（如果此操作要求）",type:"password",inputMode:"numeric",autocomplete:"one-time-code"}];
+    const values=await askOperation({title:labels[action]||"确认操作",description:(descriptions[action]||"")+"\n目标："+(instance.name||instance.id)+" · "+instance.machineUuid,fields,confirmLabel:action==="status"?"提交只读检查":"确认并提交",danger:["disable","reinstall"].includes(action)});
+    if(!values)return;
+    try{await postAction({action:action==="status"?"instance.status":action,machineUuid:instance.machineUuid,instanceId:instance.id,confirm:true,twoFactorCode:String(values.twoFactorCode||"").trim(),idempotencyKey:idempotencyKey()});setStatus("globalStatus",action==="status"?"已提交远端状态核查；最终结果仍待任务核验。":"已提交 "+labels[action]+"任务；尚未代表远端完成。","success");await refresh();}catch(error){setStatus("globalStatus",error.message,"error");}
+  }
+
+  async function renameInstance(instance){
+    const values=await askOperation({title:"重命名节点",description:"只修改 KNS 中的显示名称，不会安装、重启服务、轮换凭据或改变订阅令牌。",fields:[{name:"name",label:"节点显示名称",value:instance.name||instance.id,required:true}],confirmLabel:"保存名称"});
+    if(!values)return;
+    try{await postAction({action:"instance.metadata.update",instanceId:instance.id,name:String(values.name||"").trim()});setStatus("globalStatus","节点显示名称已保存；远端服务未变更。","success");await refresh();}catch(error){setStatus("globalStatus",error.message,"error");}
   }
 
   async function reconfigureInstance(instance) {
-    const port=Number(prompt("新的监听端口：",String(instance.listen.port)));if(!port)return;
+    const fields=[{name:"listenPort",label:"新的服务监听端口",type:"number",value:String(instance.listen.port),required:true,min:1,max:65535}];
     const options=Object.assign({},instance.options||{});
+    if(["trojan","vmess","hysteria2","tuic","anytls"].includes(instance.protocol))fields.push({name:"sni",label:"TLS SNI",value:options.sni||instance.tls&&instance.tls.sni||"",hint:"VLESS + Reality 的 SNI 由 OneBox 自动优选。"});
+    if(instance.protocol==="shadowsocks")fields.push({name:"method",label:"Shadowsocks 加密方法",type:"select",value:options.method||"aes-128-gcm",options:[["aes-128-gcm","AES-128-GCM"],["aes-256-gcm","AES-256-GCM"],["chacha20-ietf-poly1305","ChaCha20-Poly1305"]]});
+    fields.push({name:"twoFactorCode",label:"Komari 2FA 验证码（如果此操作要求）",type:"password",inputMode:"numeric",autocomplete:"one-time-code"});
+    const values=await askOperation({title:"重配置节点",description:"监听地址与对外 Endpoint 分开保存。提交后只显示已受理状态，最终结果需要任务核验。",fields,confirmLabel:"提交重配置"});
+    if(!values)return;
     if(instance.protocol==="vless")options.security="reality";
-    if(["trojan","vmess","hysteria2","tuic","anytls"].includes(instance.protocol))options.sni=prompt("TLS SNI：",options.sni||instance.tls&&instance.tls.sni||"")||"";
-    if(instance.protocol==="shadowsocks")options.method=prompt("Shadowsocks method：",options.method||"aes-128-gcm")||"";
-    const twoFactor=prompt("如果 Komari 启用了 2FA，请输入验证码；否则留空。","")||"";
-    try{await postAction({action:"reconfigure",machineUuid:instance.machineUuid,instanceId:instance.id,protocol:instance.protocol,listenPort:port,listenAddress:instance.listen.address||"::",options,confirm:true,twoFactorCode:twoFactor,idempotencyKey:idempotencyKey()});setStatus("globalStatus","已提交重配置任务。","success");await refresh();}catch(error){setStatus("globalStatus",error.message,"error");}
+    if(["trojan","vmess","hysteria2","tuic","anytls"].includes(instance.protocol))options.sni=String(values.sni||"").trim();
+    if(instance.protocol==="shadowsocks")options.method=values.method;
+    try{await postAction({action:"reconfigure",machineUuid:instance.machineUuid,instanceId:instance.id,protocol:instance.protocol,listenPort:Number(values.listenPort),listenAddress:instance.listen.address||"::",options,confirm:true,twoFactorCode:String(values.twoFactorCode||"").trim(),idempotencyKey:idempotencyKey()});setStatus("globalStatus","已提交重配置任务；等待远端核验。","success");await refresh();}catch(error){setStatus("globalStatus",error.message,"error");}
   }
 
   function renderInstances() {
     const body=$("instanceRows"); body.replaceChildren();
-    for(const instance of state.instances.filter((i)=>!i.deletedAt).slice().reverse()){
+    const filter=$("instanceMachineFilter");filter.replaceChildren();
+    const sourceMachine=instanceMachineFilter&&state.machines.find((machine)=>machine.uuid===instanceMachineFilter);
+    if(instanceMachineFilter&&!sourceMachine)instanceMachineFilter="";
+    if(sourceMachine){filter.hidden=false;filter.append(el("span","探针："+(sourceMachine.name||sourceMachine.uuid)),actionButton("清除筛选",()=>{instanceMachineFilter="";renderInstances();},"secondary"));}
+    else filter.hidden=true;
+    const visibleInstances=state.instances.filter((instance)=>!instance.deletedAt&&(!instanceMachineFilter||instance.machineUuid===instanceMachineFilter)).slice().reverse();
+    if(!visibleInstances.length){const row=document.createElement("tr");const cell=el("td",sourceMachine?"此探针当前没有已登记节点。":"尚无已登记节点。","muted small");cell.colSpan=5;row.append(cell);body.append(row);return;}
+    for(const instance of visibleInstances){
       const machine=state.machines.find((m)=>m.uuid===instance.machineUuid)||{}; const row=document.createElement("tr");
-      const id=el("td"); id.append(el("strong",instance.name||instance.id),el("small",instance.id,"muted small"),el("small",machine.name||instance.machineUuid,"muted small"));
-      const proto=el("td"); proto.append(el("span",instance.protocol),el("small",(instance.runtimeEngine||"sing-box")+" / "+(instance.runtimeId||"onebox-main"),"muted small"));
-      const endpoint=el("td"); endpoint.append(el("code",(instance.listen&&instance.listen.address||"::")+":"+(instance.listen&&instance.listen.port||"?")),el("small","→ "+(instance.endpoint&&instance.endpoint.host||"未配置")+":"+(instance.endpoint&&instance.endpoint.port||"?"),"muted small"),el("small","来源："+(instance.endpoint&&instance.endpoint.source||"—"),"muted small"));
-      const stateCell=el("td"); stateCell.append(el("span",instance.health&&instance.health.state||"unknown",instance.health&&instance.health.state==="healthy"?"success":"muted")); const pub=document.createElement("input");pub.type="checkbox";pub.checked=instance.publish!==false;pub.title="加入订阅";pub.addEventListener("change",async()=>{try{await postAction({action:"instance.publish.update",instanceId:instance.id,publish:pub.checked});await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}});const pubLabel=el("label","加入订阅");pubLabel.prepend(pub);stateCell.append(pubLabel,el("small","探测级别："+(instance.health&&instance.health.level||"L0"),"muted small"));if(instance.nat&&instance.nat.mappingConflict)stateCell.append(el("small","NAT 映射冲突，已暂停订阅发布","error small"));if(instance.remoteStatus&&instance.remoteStatus.checkedAt)stateCell.append(el("small","远端资源核查："+instance.remoteStatus.checkedAt,"muted small"));
+      const node=el("td"); node.append(el("strong",instance.name||instance.id),el("small",instance.protocol+" · "+(instance.runtimeEngine||"sing-box")+" / "+(instance.runtimeId||"onebox-main"),"muted small"),el("small",instance.id,"muted small"),el("small",machine.name||instance.machineUuid,"muted small"),el("code","监听 "+(instance.listen&&instance.listen.address||"::")+":"+(instance.listen&&instance.listen.port||"?")+" → "+(instance.endpoint&&instance.endpoint.host||"未配置")+":"+(instance.endpoint&&instance.endpoint.port||"?"),"small"),el("small","地址来源："+(instance.endpoint&&instance.endpoint.source||"未知"),"muted small"));
+      const remote=instance.remoteStatus||{};const checkedAt=Date.parse(remote.checkedAt||"");const remoteFresh=Number.isFinite(checkedAt)&&Date.now()-checkedAt<=5*60*1000;
+      const run=el("td");let runText="未知（尚未核查）";if(remoteFresh&&remote.installed===false)runText="未安装";else if(remoteFresh&&remote.installed===true)runText=remote.enabled===false?"已停止":remote.serviceState==="active"?"运行中":"已安装，运行状态未知";run.append(el("strong",runText,runText==="运行中"?"success":"muted"),el("small",remote.checkedAt?"核查于 "+remote.checkedAt:"需要远端状态核查","muted small"));
+      const health=instance.health||{};const detect=el("td");let detectText=health.state?String(health.state):"尚未检测";if(health.state==="healthy"&&String(health.level||"").startsWith("L1"))detectText="TCP 可达，未验证代理协议";else if(health.state==="healthy"&&String(health.level||"").startsWith("L2"))detectText="TLS 可达，未验证代理协议";else if(health.state==="unverified")detectText="尚未验证（UDP）";else if(health.state==="unhealthy")detectText="检测失败";detect.append(el("strong",detectText,health.state==="healthy"&&!String(health.level||"").startsWith("L1")?"success":"muted"),el("small","检测等级 "+(health.level||"未知"),"muted small"),el("small",health.lastCheckedAt||health.checkedAt||health.updatedAt||"没有检测时间","muted small"));
+      const publish=el("td");const pub=document.createElement("input");pub.type="checkbox";pub.checked=instance.publish!==false;pub.title="允许发布";pub.setAttribute("aria-label","允许发布："+(instance.name||instance.id));pub.addEventListener("change",async()=>{pub.disabled=true;try{await postAction({action:"instance.publish.update",instanceId:instance.id,publish:pub.checked});await refresh();}catch(e){pub.checked=!pub.checked;pub.disabled=false;setStatus("globalStatus",e.message,"error");}});const pubLabel=el("label","允许发布");pubLabel.prepend(pub);publish.append(pubLabel,el("small","仍须符合每条订阅的筛选与健康策略","muted small"));if(instance.nat&&instance.nat.mappingConflict)publish.append(el("small","NAT 映射冲突，暂不发布","error small"));
       const ops=el("td");
       if(instance.managedBy==="legacy_import") ops.append(el("small","旧版节点只读导入；配置仍由 OneBox 管理。","muted small"));
-      else {const rowButtons=el("div",null,"row-actions"); rowButtons.append(actionButton("查远端状态",()=>instanceAction(instance,"status")));rowButtons.append(actionButton("重配",()=>reconfigureInstance(instance)));if(instance.enabled) rowButtons.append(actionButton("停用",()=>instanceAction(instance,"disable"))); else rowButtons.append(actionButton("启用",()=>instanceAction(instance,"enable"))); rowButtons.append(actionButton("重装",()=>instanceAction(instance,"reinstall"))); rowButtons.append(actionButton("卸载",()=>instanceAction(instance,"uninstall"),"danger")); ops.append(rowButtons);}
-      row.append(id,proto,endpoint,stateCell,ops); body.append(row);
+      else {const rowButtons=el("div",null,"row-actions"); rowButtons.append(actionButton("重命名",()=>renameInstance(instance)));rowButtons.append(actionButton("查远端状态",()=>instanceAction(instance,"status")));rowButtons.append(actionButton("重配",()=>reconfigureInstance(instance)));if(instance.enabled) rowButtons.append(actionButton("停用",()=>instanceAction(instance,"disable"))); else rowButtons.append(actionButton("启用",()=>instanceAction(instance,"enable"))); rowButtons.append(actionButton("重装",()=>instanceAction(instance,"reinstall"))); rowButtons.append(actionButton("卸载",()=>instanceAction(instance,"uninstall"),"danger")); ops.append(rowButtons);}
+      row.append(node,run,detect,publish,ops); body.append(row);
     }
+  }
+
+  function jobNextStep(job){
+    if(job.state==="succeeded")return "任务已通过远端核验。";
+    if(job.state==="dispatched"||job.state==="running"||job.state==="verifying"||job.state==="authorized")return "等待 Komari Agent、回调与远端状态核验；不要重复提交。";
+    if(job.canRetry)return "Komari 明确拒绝了任务；修正认证或权限后可仅重试此目标。";
+    if(job.state==="needs_reconcile"||job.state==="timed_out")return "结果未知或核验不完整。先查机器状态，再决定后续操作；不会自动重试。";
+    return "检查错误码和目标机器状态；只有服务端标记可安全重试时才显示重试操作。";
+  }
+
+  async function retryJob(job){
+    const values=await askOperation({title:"重试单台任务",description:"仅当 Komari 明确拒绝远程请求且没有任务 ID 时允许重试。此操作只重新处理 "+(job.machineName||job.machineUuid)+"，不会重装已成功目标。",fields:[{name:"twoFactorCode",label:"Komari 2FA 验证码（如果此操作要求）",type:"password",inputMode:"numeric",autocomplete:"one-time-code"}],confirmLabel:"重试此目标"});
+    if(!values)return;
+    const requestKey=retryRequestKeys.get(job.id)||idempotencyKey();retryRequestKeys.set(job.id,requestKey);
+    try{const result=await postAction({action:"job.retry",jobId:job.id,confirm:true,twoFactorCode:String(values.twoFactorCode||"").trim(),idempotencyKey:requestKey});retryRequestKeys.delete(job.id);setStatus("globalStatus",result.job&&result.job.state==="failed"?"重试请求被拒绝；请查看任务详情。":"已提交此目标的重试请求，等待远端核验。",result.job&&result.job.state==="failed"?"error":"success");await refresh();}
+    catch(error){if(error.code==="idempotency_conflict"){retryRequestKeys.delete(job.id);await refresh();setStatus("globalStatus","该失败任务已有重试记录；已刷新最新任务状态。","muted");return;}setStatus("globalStatus",error.message,"error");}
+  }
+
+  function showJobDetail(job){
+    const lines=["任务 ID："+job.id,"目标："+(job.machineName||job.machineUuid)+"（"+job.machineUuid+"）","动作："+job.action,"状态："+job.state,"Komari task ID："+(job.taskId||"尚未返回"),"创建："+(job.createdAt||"未知"),"更新："+(job.updatedAt||"未知"),"RPC 错误码："+(job.rpcErrorCode||"无"),"轮询错误码："+(job.pollErrorCode||"无"),"结果："+(job.message||"暂无结果"),"下一步："+jobNextStep(job)];
+    askOperation({title:"任务详情",description:lines.join("\n"),confirmLabel:"关闭"});
   }
 
   function renderJobs(){
     const body=$("jobRows");body.replaceChildren();
-    for(const job of state.jobs){const target=job.action==="machine.discover"?"旧节点扫描":job.legacyTag?job.legacyTag+" 导入":job.instanceId||"—";const row=document.createElement("tr");row.append(el("td",job.createdAt||"—"),el("td",(job.machineName||job.machineUuid)+" · "+target+" · "+job.action),el("td",job.state),el("td",job.message||"—"));body.append(row);}
+    for(const job of state.jobs){const target=job.action==="machine.discover"?"旧节点扫描":job.legacyTag?job.legacyTag+" 导入":job.instanceId||"—";const row=document.createElement("tr");row.append(el("td",(job.createdAt||"—")+" · "+job.id),el("td",(job.machineName||job.machineUuid)+" · "+target+" · "+job.action),el("td",job.state),el("td",job.message||"—"));const actions=el("div",null,"row-actions");actions.append(actionButton("查看详情",()=>showJobDetail(job)));if(job.canRetry)actions.append(actionButton("重试此目标",()=>retryJob(job),"danger"));row.lastChild.append(actions);body.append(row);}
+  }
+
+  function renderDeploymentResults(){
+    const panel=$("deploymentResults");if(!panel)return;panel.hidden=!deploymentBatch.length;const host=$("deploymentResultRows");host.replaceChildren();
+    for(const item of deploymentBatch){const row=el("div",null,"result-item");const machine=state&&state.machines.find((entry)=>entry.uuid===item.machineUuid);row.append(el("strong",(machine&&machine.name||item.machineUuid)+" · "+(item.accepted?"已提交":"未提交"),item.accepted?"success":"error"));
+      if(item.job){row.append(el("p",item.job.message||("任务状态："+item.job.state)),el("small","任务 "+item.job.id+" · "+item.job.state+" · 已受理不代表安装成功","small muted"));const button=actionButton("在任务页查看",()=>{document.querySelector('[data-panel="jobs"]').click();showJobDetail(item.job);});row.append(button);}
+      else row.append(el("p",item.error&&item.error.message||"提交失败；可查看输入与目标状态后重试。","small"));
+      host.append(row);
+    }
+  }
+
+  function refreshDeploymentJobs(snapshot){
+    if(!deploymentBatch.length)return;
+    const jobs=new Map((snapshot.jobs||[]).map((job)=>[job.id,job]));
+    deploymentBatch=deploymentBatch.map((item)=>item.job&&jobs.has(item.job.id)?Object.assign({},item,{job:jobs.get(item.job.id)}):item);
+    renderDeploymentResults();
   }
 
   function profileFilterEditor(profile, prefix) {
@@ -342,7 +694,7 @@
   function renderProfiles(){
     const body=$("profileRows");if(body.querySelector("[data-profile-editor]"))return;body.replaceChildren();
     for(const profile of state.profiles){
-      const card=el("div",null,"card");const title=el("h3",profile.name);
+      const card=el("div",null,"card");card.dataset.profileId=profile.id;const title=el("h3",profile.name);
       const machineNames=new Map((state.machines||[]).map((machine)=>[machine.uuid,machine.name||machine.uuid]));
       const allow=(profile.machineUuids||[]).map((uuid)=>machineNames.get(uuid)||uuid);const deny=(profile.excludeMachineUuids||[]).map((uuid)=>machineNames.get(uuid)||uuid);
       const filters="机器："+(allow.length?allow.join("、"):"全部")+(deny.length?"；排除 "+deny.join("、"):"")+" · 协议："+((profile.protocols||[]).join("、")||"全部")+" · 标签："+((profile.includeTags||[]).join("、")||"全部")+" · 地址："+(profile.addressMode||"auto")+" · 排序："+(profile.sortBy||"name")+" · 健康："+(profile.excludeUnhealthy===false?"包含不健康":"排除不健康");
@@ -353,47 +705,128 @@
         const tokenId=String(token.id||"legacy-token");const shortId=tokenId.slice(-12);const expired=token.expiresAt&&Date.parse(token.expiresAt)<=Date.now();
         const tokenStatus=token.revokedAt?"已撤销":expired?"已过期":token.graceUntil?"轮换宽限至 "+token.graceUntil:"有效";
         card.append(el("p","令牌 "+shortId+" · "+tokenStatus+" · "+(token.accessCount||0)+" 次访问 · 最近 "+(token.lastUsedAt||"从未"),"small muted"));
-        if(!token.revokedAt&&!expired&&!profile.revokedAt)buttons.append(actionButton("撤销令牌 "+shortId,async()=>{if(!confirm("仅撤销此令牌，其他令牌继续有效。继续？"))return;try{await postAction({action:"profile.token.revoke",profileId:profile.id,tokenId});await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}} ,"danger"));
+        if(!token.revokedAt&&!expired&&!profile.revokedAt)buttons.append(actionButton("撤销令牌 "+shortId,async()=>{const answer=await askOperation({title:"撤销单个令牌",description:"只撤销令牌 "+shortId+"；同一档案的其他令牌继续有效。",confirmLabel:"撤销此令牌",danger:true});if(!answer)return;try{await postAction({action:"profile.token.revoke",profileId:profile.id,tokenId});await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}} ,"danger"));
       }
-      buttons.append(actionButton("编辑筛选",()=>{const existing=card.querySelector("[data-profile-editor]");if(existing){existing.remove();return;}const editor=profileFilterEditor(profile,"edit-"+profile.id);editor.dataset.profileEditor="true";const actions=el("div",null,"actions");actions.append(actionButton("保存筛选",async()=>{try{await postAction(Object.assign({action:"profile.update",profileId:profile.id},readProfileFilters("edit-"+profile.id)));editor.remove();await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}}));actions.append(actionButton("取消",()=>editor.remove()));editor.append(actions);card.insertBefore(editor,buttons);refreshProfileMachineOptions(); }));
-      buttons.append(actionButton("新增令牌",async()=>{const expiry=prompt("令牌到期时间（ISO 8601；留空使用档案有效期）","");if(expiry===null)return;try{const result=await postAction({action:"profile.token.create",profileId:profile.id,expiresAt:expiry.trim()||undefined});showSecret(result);await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}}));
-      buttons.append(actionButton("轮换令牌",async()=>{const grace=prompt("旧令牌继续有效的宽限秒数（0–604800）","0");if(grace===null)return;if(!confirm("创建新令牌并在宽限期后停用当前令牌。继续？"))return;try{const result=await postAction({action:"profile.rotate",profileId:profile.id,graceSeconds:Number(grace)});showSecret(result);await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}}));
-      buttons.append(actionButton("撤销",async()=>{if(!confirm("撤销此档案的全部订阅链接？"))return;try{await postAction({action:"profile.revoke",profileId:profile.id});await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}},"danger"));card.append(buttons);body.append(card);
+      buttons.append(actionButton("编辑筛选",()=>{const existing=card.querySelector("[data-profile-editor]");if(existing){existing.remove();return;}const editor=profileFilterEditor(profile,"edit-"+profile.id);editor.dataset.profileEditor="true";const actions=el("div",null,"actions");actions.append(actionButton("保存筛选",async()=>{try{await postAction(Object.assign({action:"profile.update",profileId:profile.id},readProfileFilters("edit-"+profile.id)),"profile:"+profile.id);editor.remove();await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}}));actions.append(actionButton("取消",()=>editor.remove()));editor.append(actions);card.insertBefore(editor,buttons);refreshProfileMachineOptions(); }));
+      buttons.append(actionButton("新增令牌",async()=>{const values=await askOperation({title:"新增订阅令牌",description:"原令牌保持有效。新令牌明文只显示一次。留空则沿用档案有效期。",fields:[{name:"expiresAt",label:"到期时间（可选）",type:"datetime-local"}],confirmLabel:"创建并显示链接"});if(!values)return;try{const expiry=values.expiresAt?new Date(values.expiresAt).toISOString():"";const result=await postAction({action:"profile.token.create",profileId:profile.id,expiresAt:expiry||undefined});showSecret(result);await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}}));
+      buttons.append(actionButton("轮换令牌",async()=>{const values=await askOperation({title:"轮换订阅令牌",description:"创建新令牌；旧令牌在宽限期后失效。修改筛选不会轮换令牌。",fields:[{name:"graceSeconds",label:"旧令牌宽限秒数",type:"number",value:"0",min:0,max:604800,required:true}],confirmLabel:"轮换并显示新链接",danger:true});if(!values)return;try{const result=await postAction({action:"profile.rotate",profileId:profile.id,graceSeconds:Number(values.graceSeconds)});showSecret(result);await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}}));
+      buttons.append(actionButton("撤销档案",async()=>{const answer=await askOperation({title:"撤销订阅档案",description:"此操作会撤销档案中的全部令牌，现有订阅链接将停止访问。",confirmLabel:"撤销全部令牌",danger:true});if(!answer)return;try{await postAction({action:"profile.revoke",profileId:profile.id});await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}} ,"danger"));card.append(buttons);body.append(card);
     }
   }
 
   function renderSettings(){
     const settings=state.settings||{}; $("publicBaseUrl").value=settings.publicBaseUrl||"";$("subconverterUrl").value=settings.converterUrl||"http://23.146.156.234:25500/sub";$("converterTarget").value=settings.converterTarget||"clash";$("privateSite").checked=!!settings.privateSite;
+    const template=settings.defaultNode||{};$("defaultNodePort").value=template.listenPort||443;$("defaultNodeAddress").value=template.listenAddress||"::";$("autoProvisionEnabled").checked=settings.autoProvisionNewProbes===true;
+    $("autoProvisionStatus").textContent=settings.autoProvisionNewProbes===true?"已授权后续新探针运行自动部署；关闭后已派发任务继续。基线探针不自动安装。":"新探针自动部署已关闭。每台机器仍需通过当前部署允许策略。";
     $("installerPin").textContent="OneBox commit: "+(settings.oneboxScriptUrl||"")+" · SHA256: "+(settings.oneboxScriptSha256||"");
     const backups=$("backupSelect");backups.replaceChildren();(state.backups||[]).forEach((name)=>{const option=el("option",name);option.value=name;backups.append(option);});
   }
   function renderAudit(){const body=$("auditRows");body.replaceChildren();for(const event of (state.audit||[]).slice().reverse()){const row=document.createElement("tr");row.append(el("td",event.at),el("td",event.actor),el("td",event.action),el("td",JSON.stringify(event.details||{})));body.append(row);}const retention=state.auditRetention||{};let note="审计日志保留最近 "+(retention.retentionDays||365)+" 天，最多 "+Math.round((retention.maxBytes||16777216)/1048576)+" MiB。";if(retention.prunedRecords)note+=" 已按策略清理 "+retention.prunedRecords+" 条记录（"+(retention.prunedFrom||"未知")+" 至 "+(retention.prunedThrough||"未知")+"）；清理范围作为检查点保留。";if(retention.pending)note+=" 上次清理尚未完成，待恢复。";$("auditRetention").textContent=note;$("auditOlder").hidden=!state.auditHasMore;}
   async function loadOlderAudit(){if(!state.auditCursor)return;try{const page=await request("/admin/logs?limit=200&before="+encodeURIComponent(state.auditCursor));state.audit=(page.audit||[]).slice().reverse().concat(state.audit||[]);state.auditCursor=page.nextCursor||"";state.auditHasMore=page.hasMore===true;renderAudit();}catch(error){setStatus("globalStatus",error.message,"error");}}
-  function render(){if(!state)return;if(!createProfileFiltersReady){$("createProfileFilters").append(profileFilterEditor({machineUuids:[],excludeMachineUuids:[],protocols:[],includeTags:[],addressMode:"auto",sortBy:"name",excludeUnhealthy:true},"createProfileFilter"));createProfileFiltersReady=true;}renderOverview();renderMachines();renderInstances();renderJobs();renderProfiles();renderSettings();renderAudit();refreshProfileMachineOptions();}
+  function applySetupGate(){
+    const ready=!!(state&&state.settings&&state.settings.setupComplete===true);
+    const disabledIds=["selectOnlineScans","clearScanSelection","scanLegacySelected","installBatch","createProfile","saveSettings","saveDefaultNode","restoreBackup","importBackup"];
+    for(const id of disabledIds)if($(id))$(id).disabled=!ready;
+    document.querySelectorAll("#machineRows button,#instanceRows button,#profileRows button,.format-list input,#createProfileFilters input,#createProfileFilters select").forEach((control)=>{control.disabled=!ready;});
+    document.querySelectorAll('#machineRows input:not([data-no-draft]),#machineRows select,#settings input,#settings select,#settings textarea').forEach((control)=>{control.disabled=!ready;});
+    $("reloadMachines").disabled=!ready;
+    $("setupCard").hidden=ready;
+  }
 
-  async function refresh(){setStatus("globalStatus","正在同步 Komari 探针…");try{state=await request("/admin/state");render();setStatus("globalStatus","数据已刷新 · revision "+state.revision,"success");}catch(error){setStatus("globalStatus",error.message,"error");}}
-  function showSecret(result){const links=$("resultLinks");links.replaceChildren();for(const [format,url] of Object.entries(result.subscriptionUrls||{})){links.append(el("p",format+" 订阅：","small"),el("div",url,"secret"));}const converters=result.converterUrls||{};const targets=Object.keys(converters);if(targets.length){links.append(el("p","SubConverter 客户端转换链接：","small"));const select=document.createElement("select");select.setAttribute("aria-label","SubConverter target");targets.forEach((target)=>{const option=document.createElement("option");option.value=target;option.textContent=target;select.append(option);});select.value=converters[result.converterTarget]?result.converterTarget:targets[0];const url=el("div",converters[select.value],"secret");const copy=actionButton("复制转换链接",async()=>{try{await navigator.clipboard.writeText(url.textContent);setStatus("globalStatus","已复制 "+select.value+" 转换链接。","success");}catch(_){setStatus("globalStatus","浏览器未允许剪贴板访问，请手动复制链接。","error");}});select.addEventListener("change",()=>{url.textContent=converters[select.value]||"";});links.append(select,url,copy);}else if(result.converterUrl){links.append(el("p","SubConverter 输出：","small"),el("div",result.converterUrl,"secret"));}lastCreatedNative=result.nativeUrl||result.tokenUrl||"";$("copyNative").disabled=!lastCreatedNative;$("copyNative").textContent=result.nativeFormat?"复制 "+result.nativeFormat:"复制订阅地址";$("newProfileResult").hidden=false;$("newProfileResult").scrollIntoView({behavior:"smooth",block:"nearest"});}
-  async function exportEncryptedBackup(){const passphrase=prompt("设置独立备份口令（至少 12 个字符）。此口令不会保存在 KNS 中。","");if(passphrase===null)return;if(passphrase.length<12){setStatus("globalStatus","备份口令至少需要 12 个字符。","error");return;}const confirmation=prompt("再次输入备份口令以确认。","");if(confirmation===null)return;if(passphrase!==confirmation){setStatus("globalStatus","两次输入的口令不一致。","error");return;}try{const envelope=await postAction({action:"backup.export",passphrase});const blob=new Blob([JSON.stringify(envelope,null,2)],{type:"application/json"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="kns-encrypted-export.json";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setStatus("settingsStatus","加密备份已下载。请把口令保存在独立的密码管理器中。","success");}catch(error){setStatus("globalStatus",error.message,"error");}}
-  async function importEncryptedBackup(){const file=$("importBackupFile").files[0];if(!file){setStatus("settingsStatus","先选择 KNS 加密备份文件。","error");return;}const passphrase=prompt("输入该备份的独立口令。","");if(passphrase===null)return;if(!confirm("导入会替换当前 KNS 状态和密钥，并保留本地恢复副本。继续？"))return;try{const envelope=JSON.parse(await file.text());await request("/admin/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({envelope,passphrase})});$("importBackupFile").value="";await refresh();setStatus("settingsStatus","加密备份已导入。","success");}catch(error){setStatus("settingsStatus",error.message,"error");}}
+  function render(){if(!state)return;if(!createProfileFiltersReady){$("createProfileFilters").append(profileFilterEditor({machineUuids:[],excludeMachineUuids:[],protocols:[],includeTags:[],addressMode:"auto",sortBy:"name",excludeUnhealthy:true},"createProfileFilter"));createProfileFiltersReady=true;}renderOverview();renderMachines();renderInstances();renderJobs();renderProfiles();renderSettings();renderAudit();renderDeploymentResults();refreshProfileMachineOptions();applySetupGate();}
 
-  document.querySelectorAll(".tab").forEach((tab)=>tab.addEventListener("click",()=>{document.querySelectorAll(".tab").forEach((x)=>x.classList.toggle("active",x===tab));document.querySelectorAll("section.panel").forEach((x)=>x.classList.toggle("active",x.id===tab.dataset.panel));}));
-  $("refresh").addEventListener("click",refresh);$("reloadMachines").addEventListener("click",refresh);$("auditOlder").addEventListener("click",loadOlderAudit);$("selectOnlineScans").addEventListener("click",selectOnlineLegacyScanMachines);$("clearScanSelection").addEventListener("click",clearLegacyScanSelection);$("scanLegacySelected").addEventListener("click",discoverLegacyNodesBatch);$("export").addEventListener("click",exportEncryptedBackup);$("exportState").addEventListener("click",exportEncryptedBackup);$("importBackup").addEventListener("click",importEncryptedBackup);
-  $("protocol").addEventListener("change",()=>{$("ssMethodLabel").style.display=$("protocol").value==="shadowsocks"?"block":"none";});$("ssMethodLabel").style.display="none";
+  async function refresh(){
+    setStatus("globalStatus","正在刷新 KNS 状态…");
+    try{
+      const latest=await request("/admin/state");latestServerSnapshot=latest;lastSuccessfulRefreshAt=Date.now();refreshDeploymentJobs(latest);
+      if(draftScopes.size){setStatus("globalStatus","刷新成功（revision "+latest.revision+"），草稿基于 revision "+Math.min(...draftScopes.values())+"，已保留未重绘。保存时会检查冲突。","muted");return;}
+      draftConflict=null;updateDraftControls();state=latest;render();setStatus("globalStatus","刷新成功 · revision "+state.revision,"success");
+    }catch(error){setStatus("globalStatus","刷新失败，保留上次数据（"+(lastSuccessfulRefreshAt?new Date(lastSuccessfulRefreshAt).toLocaleString():"尚无成功刷新")+"）。"+error.message,"error");}
+  }
+
+  function showSecret(result){
+    deliveryState={createdAt:Date.now(),items:[]};const host=$("deliveryLinks");host.replaceChildren();const converterHost=$("converterDeliveryLinks");converterHost.replaceChildren();
+    const addLink=(parent,label,url)=>{if(!url)return;const item=el("div",null,"delivery-row");const field=operationField({name:"delivery-"+deliveryState.items.length,label,value:url,type:"textarea",rows:3});field.readOnly=true;field.className="secret";const copy=actionButton("复制",async()=>{try{await navigator.clipboard.writeText(url);setStatus("globalStatus","已复制 "+label+" 链接。","success");}catch(_){field.focus();field.select();setStatus("globalStatus","浏览器未授予剪贴板权限；链接已选中，可手动复制。","error");}});item.append(field,copy);parent.append(el("strong",label),item);deliveryState.items.push({label,url});};
+    for(const [format,url] of Object.entries(result.subscriptionUrls||{}))addLink(host,format,url);
+    for(const [target,url] of Object.entries(result.converterUrls||{}))addLink(converterHost,"SubConverter · "+target,url);
+    $("converterDeliverySection").hidden=converterHost.childElementCount===0;
+    if(!deliveryState.items.length&&(result.converterUrl||result.nativeUrl||result.tokenUrl))addLink(host,result.nativeFormat||"订阅链接",result.nativeUrl||result.tokenUrl||result.converterUrl);
+    $("closeDelivery").dataset.armed="";$("deliveryDialog").showModal();$("closeDelivery").textContent="关闭并清除链接";
+  }
+
+  function clearDelivery(){deliveryState=null;$("deliveryLinks").replaceChildren();$("converterDeliveryLinks").replaceChildren();$("converterDeliverySection").hidden=true;if($("deliveryDialog").open)$("deliveryDialog").close();}
+  async function exportEncryptedBackup(){
+    const values=await askOperation({title:"导出加密备份",description:"导出文件包含 KNS 状态与主密钥，使用独立口令加密。请把口令保存在密码管理器中；下载成功不代表已经完成离线备份。",fields:[{name:"passphrase",label:"备份口令（至少 12 位）",type:"password",required:true},{name:"confirmation",label:"再次输入备份口令",type:"password",required:true}],confirmLabel:"加密并下载",validate:(form)=>{const pass=String(form.get("passphrase")||"");if(pass.length<12||pass.length>256)return "口令长度必须在 12 至 256 个字符之间。";return pass===String(form.get("confirmation")||"")?"":"两次输入的口令不一致。";}});
+    if(!values)return;
+    try{const envelope=await postAction({action:"backup.export",passphrase:values.passphrase});const blob=new Blob([JSON.stringify(envelope,null,2)],{type:"application/json"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="kns-encrypted-export.json";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setStatus("settingsStatus","加密备份文件已生成并下载；请单独保存口令。","success");await refresh();}
+    catch(error){setStatus("settingsStatus",error.message,"error");}finally{values.passphrase="";values.confirmation="";}
+  }
+
+  async function importEncryptedBackup(){
+    const file=$("importBackupFile").files[0];if(!file){setStatus("settingsStatus","先选择 KNS 加密备份文件。","error");return;}
+    let envelope;try{envelope=JSON.parse(await file.text());}catch(_){setStatus("settingsStatus","文件不是有效 JSON，状态未修改。","error");return;}
+    const secret=await askOperation({title:"检查加密备份",description:"输入独立备份口令。KNS 会先解密并检查文件版本、结构和主密钥兼容性，不会在预检阶段修改状态。",fields:[{name:"passphrase",label:"备份口令",type:"password",required:true}],confirmLabel:"解密并预检"});if(!secret)return;
+    try{
+      const preview=await postAction({action:"backup.inspect",envelope,passphrase:secret.passphrase});const counts=preview.backup.counts||{};
+      const confirmation=await askOperation({title:"确认导入范围",description:"将替换当前 KNS 状态与主密钥。\n备份版本："+(preview.backup.pluginVersion||"未知")+" · 更新时间："+(preview.backup.createdAt||"未知")+"\n探针："+(counts.machines||0)+" · 节点："+(counts.instances||0)+" · 订阅档案："+(counts.profiles||0)+" · 任务："+(counts.jobs||0)+"\n导入会拒绝活动任务；操作前会保留本地恢复副本。请输入“恢复”继续。",fields:[{name:"confirmPhrase",label:"输入“恢复”以确认",required:true}],confirmLabel:"替换 KNS 状态",danger:true,validate:(form)=>form.get("confirmPhrase")==="恢复"?"":"请输入“恢复”。"});
+      if(!confirmation)return;
+      const response=await request("/admin/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({envelope,passphrase:secret.passphrase,confirmPhrase:confirmation.confirmPhrase,expectedRevision:preview.currentRevision})});
+      $("importBackupFile").value="";draftScopes.clear();await refresh();setStatus("settingsStatus","加密备份已导入，修订号 "+response.revision+"。","success");
+    }catch(error){setStatus("settingsStatus",error.message+" 当前状态未被前端清空。","error");}
+    finally{secret.passphrase="";}
+  }
+
+  document.querySelectorAll(".tab").forEach((tab)=>tab.addEventListener("click",async()=>{
+    if(draftScopes.size){const answer=await askOperation({title:"尚有未保存更改",description:"离开当前页面会放弃尚未保存的草稿。已提交任务不会取消。保存后再离开，或明确放弃草稿。",confirmLabel:"放弃草稿并离开",danger:true});if(!answer)return;draftScopes.clear();draftConflict=null;updateDraftControls();if(latestServerSnapshot)state=latestServerSnapshot;render();}
+    document.querySelectorAll(".tab").forEach((item)=>item.classList.toggle("active",item===tab));document.querySelectorAll("section.panel").forEach((panel)=>panel.classList.toggle("active",panel.id===tab.dataset.panel));
+  }));
+  $("refresh").addEventListener("click",refresh);$("reloadMachines").addEventListener("click",async()=>{if(draftScopes.size){setStatus("globalStatus","请先保存或放弃草稿，再同步探针。","error");return;}try{await postAction({action:"machine.sync"});await refresh();}catch(error){setStatus("globalStatus",error.message,"error");}});
+  $("discardDrafts").addEventListener("click",async()=>{const answer=await askOperation({title:"放弃未保存草稿",description:"服务器数据不会变化。表单会重新载入最近一次成功刷新的状态。",confirmLabel:"放弃草稿",danger:true});if(!answer)return;draftScopes.clear();draftConflict=null;updateDraftControls();if(latestServerSnapshot)state=latestServerSnapshot;render();await refresh();});
+  $("compareConflict").addEventListener("click",safeRevisionConflictAction);
+  $("auditOlder").addEventListener("click",loadOlderAudit);$("selectOnlineScans").addEventListener("click",selectOnlineLegacyScanMachines);$("clearScanSelection").addEventListener("click",clearLegacyScanSelection);$("scanLegacySelected").addEventListener("click",discoverLegacyNodesBatch);$("export").addEventListener("click",exportEncryptedBackup);$("exportState").addEventListener("click",exportEncryptedBackup);$("importBackup").addEventListener("click",importEncryptedBackup);
+  $("installMachineSearch").addEventListener("input",renderInstallMachineOptions);$("onlyAllowedMachines").addEventListener("change",renderInstallMachineOptions);
+  $("deployNext").addEventListener("click",()=>{if(deployStep===1){const selected=Array.from($("installMachines").selectedOptions).filter((option)=>state.machines.some((machine)=>machine.uuid===option.value));if(!selected.length){setStatus("installStatus","先选择至少一台探针。","error");return;}const maxBatch=Math.max(1,Math.min(10,Number(state.settings.maxBatch)||10));if(selected.length>maxBatch){setStatus("installStatus","每次最多选择 "+maxBatch+" 台探针。","error");return;}}if(deployStep===2){renderProtocolFields();if(!$("listenPort").reportValidity())return;if($("sni").required&&!$("sni").reportValidity())return;if($("externalPort").value&&!$("externalPort").reportValidity())return;}setStatus("installStatus","","muted");renderDeployStep(deployStep+1);});
+  $("deployBack").addEventListener("click",()=>renderDeployStep(deployStep-1));
+  $("startSetup").addEventListener("click",openSetupWizard);$("setupForm").addEventListener("submit",completeSetup);$("setupCancel").addEventListener("click",()=>{$("setupWizard").hidden=true;$("setupCard").hidden=false;});
+  $("setupNext").addEventListener("click",()=>{if(setupStep===1){const input=$("setupPublicBaseUrl");if(!input.reportValidity())return;try{const parsed=new URL(input.value.trim());if(parsed.protocol!=="https:"||parsed.username||parsed.password||parsed.search||parsed.hash){setStatus("setupStatus","地址必须是无账号、查询和片段的 HTTPS URL。","error");return;}}catch(_){setStatus("setupStatus","请输入有效 HTTPS URL。","error");return;}}if(setupStep===2){if(!$("setupDefaultPort").reportValidity())return;if($("setupAutoProvision").checked&&!$("setupAutoProvisionConfirm").checked){setStatus("setupStatus","开启自动部署前，请明确确认 root 安装影响。","error");return;}}setStatus("setupStatus","","muted");renderSetupStep(setupStep+1);});
+  $("setupBack").addEventListener("click",()=>renderSetupStep(setupStep-1));$("setupAutoProvision").addEventListener("change",()=>{$("setupAutoProvisionConfirmLabel").hidden=!$("setupAutoProvision").checked;if(!$("setupAutoProvision").checked)$("setupAutoProvisionConfirm").checked=false;});
+  $("deliveryDialog").addEventListener("cancel",(event)=>{event.preventDefault();const button=$("closeDelivery");if(!button.dataset.armed){button.dataset.armed="true";button.textContent="再次关闭并清除链接";}else clearDelivery();});
+  $("closeDelivery").addEventListener("click",()=>{const button=$("closeDelivery");if(!button.dataset.armed){button.dataset.armed="true";button.textContent="确认关闭并清除链接";return;}button.dataset.armed="";clearDelivery();});
+  $("saveLinkBundle").addEventListener("click",()=>{if(!deliveryState||!deliveryState.items.length)return;const body=deliveryState.items.map((item)=>item.label+"\n"+item.url).join("\n\n");const blob=new Blob(["KNS 一次性订阅链接\n创建时间："+new Date(deliveryState.createdAt).toISOString()+"\n\n"+body+"\n"],{type:"text/plain;charset=utf-8"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="kns-subscription-links.txt";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);$("closeDelivery").dataset.armed="";$("closeDelivery").textContent="关闭并清除链接";setStatus("globalStatus","链接文件已生成。请安全保存；令牌不会保存在 KNS 浏览器存储中。","success");});
+  window.addEventListener("pagehide",()=>{deliveryState=null;$("deliveryLinks").replaceChildren();$("converterDeliveryLinks").replaceChildren();});
+  $("protocol").addEventListener("change",renderProtocolFields);renderProtocolFields();renderDeployStep(1);
+  let pendingBatchId="";
   $("installBatch").addEventListener("click",async()=>{
-    const machines=Array.from($("installMachines").selectedOptions).map((o)=>o.value);if(!machines.length){setStatus("installStatus","先选择一台或多台已允许部署的探针。","error");return;}const maxBatch=Math.max(1,Math.min(10,Number(state&&state.settings&&state.settings.maxBatch)||10));if(machines.length>maxBatch){setStatus("installStatus","每次最多选择 "+maxBatch+" 台探针。","error");return;}
+    const selected=Array.from($("installMachines").selectedOptions).map((option)=>option.value);if(!selected.length){setStatus("installStatus","先选择一台或多台允许部署且在线的探针。","error");return;}
+    const maxBatch=Math.max(1,Math.min(10,Number(state&&state.settings&&state.settings.maxBatch)||10));if(selected.length>maxBatch){setStatus("installStatus","每次最多选择 "+maxBatch+" 台探针。","error");return;}
+    const chosen=selected.map((uuid)=>state.machines.find((machine)=>machine.uuid===uuid)).filter(Boolean);const executable=chosen.filter((machine)=>machine.online===true&&machine.policy&&machine.policy.deployAllowed===true);const blocked=chosen.filter((machine)=>!executable.includes(machine));
+    if(!executable.length){setStatus("installStatus","所选探针均被阻断；请检查在线状态和逐机部署授权。","error");return;}
     const protocol=$("protocol").value;const options={};if(protocol==="vless")options.security="reality";if(["trojan","vmess","hysteria2","tuic","anytls"].includes(protocol))options.sni=$("sni").value.trim();if(protocol==="shadowsocks")options.method=$("ssMethod").value;
-    const warning="将在 "+machines.length+" 台 root Agent 主机上运行固定 SHA256 的 OneBox 适配脚本，可能修改共享 sing-box 配置和本机防火墙。继续？";if(!confirm(warning))return;
-    const twoFactor=$("twoFactor").value.trim();const tags=$("instanceTags").value.split(",").map((x)=>x.trim()).filter(Boolean);const results=[];
-    for(const machineUuid of machines){try{results.push(await postAction({action:"install",machineUuid,protocol,listenPort:Number($("listenPort").value),listenAddress:$("listenAddress").value,name:$("instanceName").value.trim(),options,endpointHost:$("endpointHost").value.trim(),externalPort:Number($("externalPort").value)||undefined,tags,twoFactorCode:twoFactor,confirm:true,idempotencyKey:idempotencyKey()}));}catch(error){results.push({error:error.message,machineUuid});}}
-    $("twoFactor").value="";const failed=results.filter((x)=>x.error||x.job&&x.job.state==="failed");setStatus("installStatus",(results.length-failed.length)+" 项已提交；"+failed.length+" 项失败。",failed.length?"error":"success");await refresh();
+    const targetSummary=executable.map((machine)=>"• "+machine.name+" — 可提交").concat(blocked.map((machine)=>"• "+machine.name+" — 阻断："+(machine.online!==true?"离线或状态未知":"未授权部署"))).join("\n");
+    const values=await askOperation({title:"核对批量部署",description:"将向 "+executable.length+" 台机器提交任务；"+blocked.length+" 台阻断目标不会提交。\n\n"+targetSummary+"\n\n运行固定 SHA-256 校验的 OneBox 安装器，可能修改代理配置和防火墙。提交受理不代表远端安装成功。",fields:[{name:"twoFactorCode",label:"Komari 2FA 验证码（如果此操作要求）",type:"password",inputMode:"numeric",autocomplete:"one-time-code"}],confirmLabel:"提交 "+executable.length+" 台部署任务",danger:true});
+    if(!values)return;
+    if(!pendingBatchId)pendingBatchId=idempotencyKey();
+    const requestBody={action:"install.batch",machineUuids:executable.map((machine)=>machine.uuid),batchId:pendingBatchId,protocol,listenPort:Number($("listenPort").value),listenAddress:$("listenAddress").value,name:$("instanceName").value.trim(),options,endpointHost:$("endpointHost").value.trim(),externalPort:Number($("externalPort").value)||undefined,tags:$("instanceTags").value.split(",").map((value)=>value.trim()).filter(Boolean),twoFactorCode:String(values.twoFactorCode||"").trim(),confirm:true};
+    const submit=$("installBatch");submit.disabled=true;setStatus("installStatus","正在提交每台机器的任务…", "muted");
+    try{
+      const result=await postAction(requestBody,"deploy");deploymentBatch=blocked.map((machine)=>({machineUuid:machine.uuid,accepted:false,error:{message:machine.online!==true?"离线或状态未知":"未授权部署"}})).concat(result.results||[]);pendingBatchId="";
+      const accepted=deploymentBatch.filter((item)=>item.accepted).length;const failed=deploymentBatch.length-accepted;
+      setStatus("installStatus","已受理 "+accepted+" 台；未提交或提交失败 "+failed+" 台。最终结果仍待任务核验。",failed?"error":"success");renderDeploymentResults();await refresh();
+    }catch(error){
+      setStatus("installStatus",error.message+" 批次标识已保留；不会盲目创建新的批次。","error");
+      if(error.code==="state_revision_conflict"){
+        const latest=latestServerSnapshot||await request("/admin/state");state=latest;draftScopes.set("deploy",latest.revision);updateDraftControls();
+      }
+      try{const latest=await request("/admin/state");latestServerSnapshot=latest;const existing=latest.jobs.filter((job)=>job.batchId===pendingBatchId);if(existing.length){deploymentBatch=existing.map((job)=>({machineUuid:job.machineUuid,accepted:job.state!=="failed",job}));renderDeploymentResults();setStatus("installStatus","已找到同一批次的 "+existing.length+" 条既有任务；请查看逐机结果，不要新建批次。","muted");}}catch(_){}
+    }finally{submit.disabled=false;if(values)values.twoFactorCode="";}
   });
-  $("createProfile").addEventListener("click",async()=>{try{const formats=Array.from(document.querySelectorAll(".format-list input:checked")).map((x)=>x.value);const expiry=$("profileExpiry").value?new Date($("profileExpiry").value).toISOString():"";const result=await postAction(Object.assign({action:"profile.create",name:$("profileName").value.trim(),formats,expiresAt:expiry||undefined},readProfileFilters("createProfileFilter")));showSecret(result);await refresh();}catch(error){setStatus("globalStatus",error.message,"error");}});
-  $("copyNative").addEventListener("click",async()=>{try{await navigator.clipboard.writeText(lastCreatedNative);setStatus("globalStatus","已复制订阅地址。","success");}catch(_){setStatus("globalStatus","浏览器未授予剪贴板权限，请手动复制。","error");}});
-  $("saveSettings").addEventListener("click",async()=>{try{await postAction({action:"settings.update",publicBaseUrl:$("publicBaseUrl").value.trim(),converterUrl:$("subconverterUrl").value.trim(),converterTarget:$("converterTarget").value,privateSite:$("privateSite").checked});setStatus("settingsStatus","设置已保存。","success");await refresh();}catch(error){setStatus("settingsStatus",error.message,"error");}});
-  $("restoreBackup").addEventListener("click",async()=>{const name=$("backupSelect").value;if(!name)return; if(!confirm("恢复 "+name+" 会替换当前状态文件。继续？"))return;try{await postAction({action:"backup.restore",name});setStatus("settingsStatus","备份已恢复。","success");await refresh();}catch(error){setStatus("settingsStatus",error.message,"error");}});
+  $("createProfile").addEventListener("click",async()=>{try{const formats=Array.from(document.querySelectorAll(".format-list input:checked")).map((x)=>x.value);const expiry=$("profileExpiry").value?new Date($("profileExpiry").value).toISOString():"";const result=await postAction(Object.assign({action:"profile.create",name:$("profileName").value.trim(),formats,expiresAt:expiry||undefined},readProfileFilters("createProfileFilter")),"profile:create");showSecret(result);await refresh();}catch(error){setStatus("globalStatus",error.message,"error");}});
+  $("saveSettings").addEventListener("click",async()=>{try{await postAction({action:"settings.update",publicBaseUrl:$("publicBaseUrl").value.trim(),converterUrl:$("subconverterUrl").value.trim(),converterTarget:$("converterTarget").value,privateSite:$("privateSite").checked},"settings:connection");setStatus("settingsStatus","连接与转换设置已保存。","success");await refresh();}catch(error){setStatus("settingsStatus",error.message,"error");}});
+  $("saveDefaultNode").addEventListener("click",async()=>{const enable=$("autoProvisionEnabled").checked;let confirmAutoProvision=false;if(enable&&state.settings.autoProvisionNewProbes!==true){const answer=await askOperation({title:"授权新探针自动部署",description:"之后首次发现的新探针会运行 OneBox 安装任务，可能修改代理配置和防火墙。当前已知探针不会批量安装；已派发任务不会被关闭开关撤回。",confirmLabel:"授权后续新探针",danger:true});if(!answer)return;confirmAutoProvision=true;}try{await postAction({action:"settings.defaults.update",defaultNode:{protocol:"vless",listenPort:Number($("defaultNodePort").value),listenAddress:$("defaultNodeAddress").value},autoProvisionNewProbes:enable,confirmAutoProvision},"settings:defaults");setStatus("autoProvisionStatus",enable?"已授权后续新探针自动部署。":"已关闭新自动部署；已派发任务继续执行。","success");await refresh();}catch(error){setStatus("autoProvisionStatus",error.message,"error");}});
+  $("restoreBackup").addEventListener("click",async()=>{const name=$("backupSelect").value;if(!name)return;try{const preview=await postAction({action:"backup.restore.preview",name});const counts=preview.backup.counts||{};const values=await askOperation({title:"恢复备份范围确认",description:"备份："+name+"\n版本："+(preview.backup.pluginVersion||"未知")+" · 更新时间："+(preview.backup.createdAt||"未知")+"\n将替换：探针 "+(counts.machines||0)+"、节点 "+(counts.instances||0)+"、订阅档案 "+(counts.profiles||0)+"、任务历史 "+(counts.jobs||0)+"。\n恢复会保留本地事务副本；有活动任务时服务端会阻止。请输入“恢复”继续。",fields:[{name:"confirmPhrase",label:"输入“恢复”以确认",required:true}],confirmLabel:"替换 KNS 状态",danger:true,validate:(form)=>form.get("confirmPhrase")==="恢复"?"":"请输入“恢复”。"});if(!values)return;await postAction({action:"backup.restore",name,confirmPhrase:values.confirmPhrase,expectedRevision:preview.currentRevision});setStatus("settingsStatus","备份已恢复；请核对节点和订阅状态。","success");draftScopes.clear();await refresh();}catch(error){setStatus("settingsStatus",error.message,"error");}});
   refresh();setInterval(refresh,15000);
 })();
 </script>
-<footer class="muted small" style="padding:18px 0;text-align:center">Komari KNS v1.1.5 · <a href="https://github.com/liuarui/komari-plugin-kns/tree/v1.1.5" target="_blank" rel="noopener">源码</a> · <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">GNU AGPL v3.0-only</a></footer>
+<footer class="muted small" style="padding:18px 0;text-align:center">Komari KNS v1.2.0 · <a href="https://github.com/liuarui/komari-plugin-kns/tree/v1.2.0" target="_blank" rel="noopener">源码</a> · <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">GNU AGPL v3.0-only</a></footer>
 </body>
 </html>

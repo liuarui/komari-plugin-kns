@@ -37,6 +37,8 @@ let pollBusy = false;
 let syncBusy = false;
 let healthBusy = false;
 let endpointBusy = false;
+let autoProvisionBusy = false;
+let maintenanceLock = false;
 let lastLiveSync = 0;
 let stateCache = null;
 let subscriptionRefreshBusy = false;
@@ -53,6 +55,23 @@ function fail(code, message, status) {
   error.code = code;
   error.status = status || 400;
   throw error;
+}
+
+function assertExpectedRevision(actual, body) {
+  if (body.expectedRevision == null) return;
+  const expected = Number(body.expectedRevision);
+  if (!Number.isSafeInteger(expected) || expected < 0) fail("invalid_revision", "expectedRevision 必须是非负整数。", 400);
+  if (expected !== Number(actual)) {
+    const error = new Error("KNS 数据已被其他操作更新。草稿已保留，请查看最新数据后再保存。");
+    error.code = "state_revision_conflict"; error.status = 409;
+    error.expectedRevision = expected; error.currentRevision = Number(actual);
+    throw error;
+  }
+}
+
+function assertNoActiveJobs(state, operation) {
+  const active = state.jobs.filter((job) => ["authorized", "dispatched", "running", "verifying"].includes(job.state));
+  if (active.length) fail("active_jobs_block_maintenance", operation + "已停止：还有 " + active.length + " 个远程任务未完成。请先核对任务结果。", 409);
 }
 
 function json(res, status, value) {
@@ -474,26 +493,33 @@ function normalizeMachine(raw) {
 }
 
 async function syncMachines() {
-  if (syncBusy) return;
+  if (syncBusy) return false;
   syncBusy = true;
   try {
     const live = nodesFrom(await server.call("admin:listClients")).map(normalizeMachine).filter(Boolean);
     const state = getState();
     const current = new Map(state.machines.map((machine) => [machine.uuid, machine]));
+    const baseline = new Set(state.settings.autoProvisionBaselineUuids || []);
     const incoming = [];
     for (const node of live) {
-      const old = current.get(node.uuid) || { policy: { deployAllowed: false, addressMode: "auto", manualAddress: "", ddnsHostname: "", tags: [] } };
-      const merged = Object.assign({}, old, node);
-      merged.policy = Object.assign({ deployAllowed: false, addressMode: "auto", manualAddress: "", ddnsHostname: "", tags: [] }, old.policy || {});
+      const old = current.get(node.uuid);
+      const previous = old || { policy: { deployAllowed: false, addressMode: "auto", manualAddress: "", ddnsHostname: "", tags: [] } };
+      const merged = Object.assign({}, previous, node);
+      merged.policy = Object.assign({ deployAllowed: false, addressMode: "auto", manualAddress: "", ddnsHostname: "", tags: [] }, previous.policy || {});
+      if (!old && state.settings.setupComplete === true && state.settings.autoProvisionNewProbes === true && !baseline.has(node.uuid)) {
+        merged.policy.deployAllowed = true;
+        merged.autoProvision = { state: "queued", templateVersion: Number(state.settings.defaultNode && state.settings.defaultNode.version) || 1, template: deepClone(state.settings.defaultNode), createdAt: now(), updatedAt: now(), message: "新探针已加入自动部署队列。" };
+        audit(state, null, "auto_provision.queued", { machineUuid: node.uuid, protocol: "vless", listenPort: state.settings.defaultNode.listenPort });
+      }
       const observed = preferredObservedAddress(merged);
-      const prior = old.observedAddress || "";
+      const prior = previous.observedAddress || "";
       if (observed && observed !== prior) {
-        merged.addressCandidate = observed === (old.addressCandidate || "") ? observed : observed;
-        merged.addressCandidateCount = observed === (old.addressCandidate || "") ? Number(old.addressCandidateCount || 0) + 1 : 1;
+        merged.addressCandidate = observed === (previous.addressCandidate || "") ? observed : observed;
+        merged.addressCandidateCount = observed === (previous.addressCandidate || "") ? Number(previous.addressCandidateCount || 0) + 1 : 1;
         if (merged.addressCandidateCount >= 2) merged.observedAddress = observed;
       } else if (observed) {
         merged.addressCandidate = observed;
-        merged.addressCandidateCount = Number(old.addressCandidateCount || 1);
+        merged.addressCandidateCount = Number(previous.addressCandidateCount || 1);
       }
       incoming.push(merged);
     }
@@ -501,7 +527,100 @@ async function syncMachines() {
     state.machines = incoming.concat(state.machines.filter((machine) => !known.has(machine.uuid)).map((machine) => Object.assign({}, machine, { online: false })));
     lastLiveSync = Date.now();
     save(state);
+    if (state.machines.some((machine) => machine.autoProvision && machine.autoProvision.state === "queued")) setTimeout(dispatchAutoProvisionQueue, 0);
+    return true;
   } finally { syncBusy = false; }
+}
+
+function normalizeDefaultNode(body, current) {
+  const source = body || {};
+  const existing = current || { protocol: "vless", listenPort: 443, listenAddress: "::", sniMode: "preferred", version: 1 };
+  const protocol = String(source.protocol || existing.protocol || "vless").toLowerCase();
+  if (protocol !== "vless") fail("invalid_default_protocol", "自动部署默认协议固定为 VLESS + Reality，SNI 由 OneBox 自动优选。", 400);
+  const listenPort = validatePort(source.listenPort == null ? existing.listenPort : source.listenPort);
+  const listenAddress = String(source.listenAddress || existing.listenAddress || "::");
+  if (!["::", "0.0.0.0"].includes(listenAddress)) fail("invalid_default_address", "默认监听地址只支持双栈 :: 或 IPv4 0.0.0.0。", 400);
+  return { protocol, listenPort, listenAddress, sniMode: "preferred", version: Math.max(1, Number(existing.version) || 1), updatedAt: existing.updatedAt || "" };
+}
+
+function automaticInstanceName(machineName, port) {
+  const prefix = "VLESS-";
+  const suffix = "-" + String(port);
+  const middle = safeText(machineName || "Komari探针", Math.max(1, 80 - prefix.length - suffix.length));
+  return prefix + (middle || "Komari探针") + suffix;
+}
+
+async function dispatchAutoProvisionQueue() {
+  if (autoProvisionBusy || maintenanceLock) return;
+  autoProvisionBusy = true;
+  try {
+    const state = getState();
+    if (state.settings.setupComplete !== true || state.settings.autoProvisionNewProbes !== true) return;
+    const batchSize = Math.max(1, Math.min(10, Number(state.settings.maxBatch) || 10));
+    const queued = state.machines.filter((machine) => machine.autoProvision && machine.autoProvision.state === "queued" && machine.online === true).slice(0, batchSize);
+    for (const machine of queued) {
+      try { await startAutoProvision(machine.uuid); }
+      catch (error) {
+        const latest = getState();
+        const current = latest.machines.find((item) => item.uuid === machine.uuid);
+        if (current && current.autoProvision && current.autoProvision.state === "queued") {
+          current.autoProvision = Object.assign({}, current.autoProvision, { state: "failed", updatedAt: now(), message: safeText(error && error.message || "自动部署无法启动。", 240) });
+          audit(latest, null, "auto_provision.failed", { machineUuid: current.uuid, reason: "queue_error" });
+          save(latest);
+        }
+      }
+    }
+  } finally { autoProvisionBusy = false; }
+}
+
+async function startAutoProvision(machineUuid) {
+  let state = getState();
+  let machine = state.machines.find((item) => item.uuid === machineUuid);
+  if (!machine || !machine.autoProvision || machine.autoProvision.state !== "queued") return;
+  if (state.settings.setupComplete !== true || state.settings.autoProvisionNewProbes !== true || machine.online !== true) return;
+  if (!machine.policy || machine.policy.deployAllowed !== true) {
+    machine.autoProvision = Object.assign({}, machine.autoProvision, { state: "cancelled", updatedAt: now(), message: "已关闭此探针的部署权限。" });
+    save(state); return;
+  }
+  if (!state.settings.publicBaseUrl) {
+    machine.autoProvision = Object.assign({}, machine.autoProvision, { state: "failed", updatedAt: now(), message: "缺少 HTTPS 公网地址，无法接收 OneBox 回调。" });
+    save(state); return;
+  }
+
+  const template = normalizeDefaultNode({}, machine.autoProvision.template || state.settings.defaultNode);
+  const instanceId = "autov1-" + machine.uuid.replace(/-/g, "");
+  const existing = state.instances.find((instance) => instance.id === instanceId && instance.machineUuid === machine.uuid && !instance.deletedAt);
+  if (existing) {
+    machine.autoProvision = Object.assign({}, machine.autoProvision, { state: "succeeded", instanceId, updatedAt: now(), message: "默认节点已存在。" });
+    save(state); return;
+  }
+  const conflictingJob = state.jobs.find((job) => job.machineUuid === machine.uuid && job.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(job.state));
+  if (conflictingJob) return;
+
+  const validated = validateProtocolSettings({ protocol: template.protocol, listenPort: template.listenPort, listenAddress: template.listenAddress, options: { security: "reality" } });
+  if (portConflicts(state, machine.uuid, validated.port, validated.transport, instanceId, validated.listenAddress)) {
+    machine.autoProvision = Object.assign({}, machine.autoProvision, { state: "failed", updatedAt: now(), message: "默认端口 " + validated.port + "/TCP 已被该探针上的其他节点占用。" });
+    audit(state, null, "auto_provision.failed", { machineUuid, reason: "port_conflict", listenPort: validated.port });
+    save(state); return;
+  }
+  const name = automaticInstanceName(machine.name, validated.port);
+  const requestHash = crypto.createHash("sha256").update(JSON.stringify({ action: "install", machineUuid, instanceId: "", protocol: validated.protocol, port: validated.port, transport: validated.transport, options: validated.options, listenAddress: validated.listenAddress, endpointHost: "", endpointPort: 0, externalPort: 0 })).digest("hex");
+  const spec = { id: instanceId, protocol: validated.protocol, port: validated.port, listenAddress: validated.listenAddress, transport: validated.transport, options: validated.options, name, tags: [], idempotencyKey: "auto-v" + template.version + "-" + machine.uuid.replace(/-/g, ""), requestHash };
+  const { job, params } = createJob(state, { context: { principal: { username: "auto-provision" } } }, "install", machine, spec, null);
+  job.autoProvision = true;
+  machine.autoProvision = Object.assign({}, machine.autoProvision, { state: "installing", jobId: job.id, instanceId, updatedAt: now(), message: "正在发送自动部署任务；最终结果仍需 Agent、回调和远端状态核验。" });
+  audit(state, null, "auto_provision.authorized", { jobId: job.id, machineUuid, instanceId, protocol: validated.protocol, listenPort: validated.port });
+  save(state);
+
+  const submitted = await finishDispatch(job, params);
+  state = getState();
+  machine = state.machines.find((item) => item.uuid === machineUuid);
+  if (machine && machine.autoProvision && machine.autoProvision.jobId === submitted.id) {
+    machine.autoProvision.state = submitted.state === "failed" ? "failed" : "installing";
+    machine.autoProvision.updatedAt = now();
+    machine.autoProvision.message = submitted.message || "已发送到 Komari Agent，等待部署结果。";
+    save(state);
+  }
 }
 
 function preferredObservedAddress(machine) {
@@ -523,6 +642,7 @@ function safeMachine(machine) {
       managed: node.managed === true, importable: node.importable === true, options: { security: safeText(node.options && node.options.security || "", 32), sni: safeText(node.options && node.options.sni || "", 253), method: safeText(node.options && node.options.method || "", 64) },
       reason: safeText(node.reason || "", 64),
     })) : [],
+    autoProvision: machine.autoProvision ? deepClone(machine.autoProvision) : null,
   };
 }
 
@@ -538,6 +658,8 @@ function safeJob(job) {
   const copy = deepClone(job);
   delete copy.callbackTokenHash;
   delete copy.callbackTokenSalt;
+  delete copy.retrySpec;
+  delete copy.retryIdempotencyKey;
   if (copy.callback) {
     if (copy.callback.instance) {
       delete copy.callback.instance.credential;
@@ -547,8 +669,16 @@ function safeJob(job) {
   return copy;
 }
 
+function jobRetryable(state, job) {
+  return !!job && job.state === "failed" && !job.taskId && !job.callback && ["-32040", "-32041"].includes(String(job.rpcErrorCode || "")) &&
+    ["install", "reconfigure", "reinstall", "enable", "disable"].includes(job.action) && !!job.retrySpec &&
+    !job.retryOfJobId &&
+    !state.jobs.some((candidate) => candidate.retryOfJobId === job.id);
+}
+
 function publicState(state) {
   const auditPage = store.listAudit(200);
+  const jobs = state.jobs.slice(-200).reverse().map((job) => Object.assign(safeJob(job), { canRetry: jobRetryable(state, job) }));
   return {
     schemaVersion: state.schemaVersion,
     revision: state.revision,
@@ -557,7 +687,7 @@ function publicState(state) {
     machines: state.machines.map(safeMachine),
     runtimes: state.runtimes,
     instances: state.instances.map(safeInstance),
-    jobs: state.jobs.slice(-200).reverse().map(safeJob),
+    jobs,
     audit: auditPage.events,
     auditCursor: auditPage.nextCursor,
     auditHasMore: auditPage.hasMore,
@@ -1075,7 +1205,10 @@ async function pollPendingJobs() {
               present: resource.present === true, referenceCount: Math.max(0, Number(resource.referenceCount) || 0), action: safeText(resource.action || "unknown", 40),
             })) : [];
             const preview = status.instance.uninstallPreview || {};
-            instance.remoteStatus = { installed: status.instance.installed === true, enabled: status.instance.enabled === true, serviceState: status.instance.serviceState || "unknown", healthLevel: status.instance.healthLevel || "L0", checkedAt: now(), installState: status.instance.installState || "unknown", resources, uninstallPreview: { complete: preview.complete === true, serviceImpact: safeText(preview.serviceImpact || "unknown", 40) } };
+            const checkedAt = now();
+            const uninstallPreview = { complete: preview.complete === true, serviceImpact: safeText(preview.serviceImpact || "unknown", 40) };
+            uninstallPreview.version = crypto.createHash("sha256").update(JSON.stringify({ machineUuid: job.machineUuid, instanceId: instance.id, checkedAt, resources, uninstallPreview })).digest("hex");
+            instance.remoteStatus = { installed: status.instance.installed === true, enabled: status.instance.enabled === true, serviceState: status.instance.serviceState || "unknown", healthLevel: status.instance.healthLevel || "L0", checkedAt, installState: status.instance.installState || "unknown", resources, uninstallPreview };
             if (status.instance.installed === true) instance.enabled = status.instance.enabled !== false;
           } else {
             const absent = Array.isArray(status.instances) && status.instances.find((item) => item.id === job.instanceId && item.installed === false);
@@ -1106,7 +1239,19 @@ async function pollPendingJobs() {
         job.state = "succeeded"; job.updatedAt = now(); job.message = job.action === "uninstall" ? "已验证实例已卸载。" : "回调和远程实例状态均已验证。"; closeJob(job); changed = true;
         audit(state, null, "job.succeeded", { jobId: job.id, action: job.action, machineUuid: job.machineUuid, instanceId: job.instanceId });
     }
+    for (const job of state.jobs.filter((item) => item.autoProvision === true)) {
+      const machine = state.machines.find((item) => item.uuid === job.machineUuid);
+      if (!machine || !machine.autoProvision || machine.autoProvision.jobId !== job.id) continue;
+      const nextState = job.state === "succeeded" ? "succeeded" : ["failed", "timed_out", "needs_reconcile", "cancelled"].includes(job.state) ? "failed" : "installing";
+      if (machine.autoProvision.state !== nextState || machine.autoProvision.message !== job.message) {
+        machine.autoProvision.state = nextState;
+        machine.autoProvision.updatedAt = job.updatedAt || now();
+        machine.autoProvision.message = job.message || (nextState === "succeeded" ? "默认节点已部署并登记。" : "自动部署需要检查任务结果。");
+        changed = true;
+      }
+    }
     if (changed) save(state);
+    if (state.machines.some((machine) => machine.autoProvision && machine.autoProvision.state === "queued")) setTimeout(dispatchAutoProvisionQueue, 0);
   } finally { pollBusy = false; }
 }
 
@@ -1124,12 +1269,17 @@ function createJob(state, req, action, machine, spec, existingInstance) {
     id: randomId("job"), action, state: "authorized", machineUuid: machine.uuid, machineName: machine.name,
     instanceId: instance.id, protocol: instance.protocol, listenPort: instance.listen.port, listenAddress: instance.listen.address,
     listenTransport: instance.listen.transport,
-    listenTransport: instance.listen.transport,
     runtimeId: instance.runtimeId || "onebox-main", options: instance.options || {}, name: instance.name, tags: instance.tags || [], legacyTag: spec.legacyTag || "",
     endpointOverride: spec.endpointOverride || instance.endpointOverride || null, nat: spec.nat || instance.nat || null,
     idempotencyKey, callbackTokenSalt: tokenRecord.salt, callbackTokenHash: tokenRecord.hash, _callbackToken: token,
     callback: null, taskId: "", createdAt: now(), updatedAt: now(), actor: safeText(((req.context || {}).principal || {}).username || "admin", 80),
     message: "任务已授权，正在发送到探针。",
+  };
+  job.retrySpec = {
+    machineUuid: machine.uuid, instanceId: instance.id, protocol: instance.protocol,
+    listenPort: instance.listen.port, listenAddress: instance.listen.address, listenTransport: instance.listen.transport,
+    options: instance.options || {}, name: instance.name, tags: instance.tags || [], action,
+    endpointOverride: spec.endpointOverride || instance.endpointOverride || null, nat: spec.nat || instance.nat || null,
   };
   job.requestHash = String(spec.requestHash || "");
   state.jobs.push(job);
@@ -1182,6 +1332,204 @@ async function handleAction(req, res) {
   const body = readBody(req);
   const state = getState();
   const action = String(body.action || "");
+  if (maintenanceLock) fail("maintenance_in_progress", "KNS 正在执行互斥设置或数据维护；请稍后重试。", 409);
+  assertExpectedRevision(state.revision, body);
+  if (state.settings.setupComplete !== true && !["setup.complete", "backup.export", "backup.inspect", "backup.restore.preview", "profile.preview"].includes(action)) {
+    fail("setup_required", "请先完成连接设置；未初始化期间管理页面为只读。", 409);
+  }
+  if (action === "setup.complete") {
+    if (state.settings.setupComplete === true) return json(res, 200, { ok: true, alreadyComplete: true });
+    const base = String(body.publicBaseUrl || "").trim().replace(/\/$/, "");
+    let parsed;
+    try { parsed = new URLConstructor(base); } catch (_) { fail("invalid_public_url", "Komari 公网地址必须是 HTTPS URL。", 400); }
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) fail("invalid_public_url", "KNS 回调需要不含账号、查询和片段的 HTTPS 地址。", 400);
+    const defaultNode = normalizeDefaultNode(body.defaultNode, state.settings.defaultNode);
+    if (body.autoProvisionNewProbes === true && body.confirmAutoProvision !== true) fail("auto_provision_confirmation_required", "开启新探针自动部署需要明确确认 root 安装影响。", 400);
+    maintenanceLock = true;
+    try {
+      let synced;
+      try { synced = await syncMachines(); }
+      catch (_) { fail("probe_sync_required", "暂时无法同步 Komari 探针。请稍后重试，避免把已有探针误判为新探针。", 503); }
+      if (!synced) fail("probe_sync_busy", "探针同步正在进行；请稍后重试完成初始化。", 409);
+      const fresh = getState();
+      if (fresh.settings.setupComplete === true) return json(res, 200, { ok: true, alreadyComplete: true });
+      fresh.settings.publicBaseUrl = parsed.origin + parsed.pathname.replace(/\/$/, "");
+      fresh.settings.defaultNode = Object.assign({}, defaultNode, { updatedAt: now() });
+      fresh.settings.autoProvisionNewProbes = body.autoProvisionNewProbes === true;
+      fresh.settings.autoProvisionBaselineUuids = Array.from(new Set(fresh.machines.map((machine) => machine.uuid)));
+      fresh.settings.setupComplete = true;
+      let profile = fresh.profiles.find((item) => item.autoManagedDefault === true && !item.revokedAt);
+      if (!profile) {
+        profile = {
+          id: randomId("profile"), name: "KNS 默认订阅", createdAt: now(), expiresAt: "", revokedAt: "",
+          formats: ["uri", "mihomo-full"], instanceIds: null, machineUuids: null, excludeMachineUuids: [],
+          protocols: null, includeTags: [], excludeUnhealthy: true, addressMode: "auto", sortBy: "name", autoManagedDefault: true, tokens: [],
+        };
+        fresh.profiles.push(profile);
+      }
+      const token = secrets.createToken();
+      const tokenRecord = createProfileToken(profile, token, profile.expiresAt || "");
+      audit(fresh, req, "setup.completed", { profileId: profile.id, tokenId: tokenRecord.id, defaultNode, autoProvisionNewProbes: fresh.settings.autoProvisionNewProbes, baselineMachineCount: fresh.settings.autoProvisionBaselineUuids.length });
+      save(fresh);
+      return json(res, 200, Object.assign({ ok: true, baselineMachineCount: fresh.settings.autoProvisionBaselineUuids.length, profile: { id: profile.id, name: profile.name }, tokenId: tokenRecord.id }, buildProfileTokenLinks(fresh, profile, token)));
+    } finally { maintenanceLock = false; }
+  }
+  if (action === "machine.sync") {
+    const synced = await syncMachines();
+    if (!synced) fail("probe_sync_busy", "探针同步正在进行；请稍后重试。", 409);
+    return json(res, 200, { ok: true, revision: getState().revision });
+  }
+  if (action === "settings.defaults.update") {
+    if (body.autoProvisionNewProbes === true && !state.settings.autoProvisionNewProbes && body.confirmAutoProvision !== true) fail("auto_provision_confirmation_required", "开启新探针自动部署需要明确确认 root 安装影响。", 400);
+    const previous = normalizeDefaultNode({}, state.settings.defaultNode);
+    const next = normalizeDefaultNode(body.defaultNode, previous);
+    if (next.protocol !== previous.protocol || next.listenPort !== previous.listenPort || next.listenAddress !== previous.listenAddress) next.version = previous.version + 1;
+    next.updatedAt = now();
+    state.settings.defaultNode = next;
+    if (typeof body.autoProvisionNewProbes === "boolean") {
+      state.settings.autoProvisionNewProbes = body.autoProvisionNewProbes;
+      if (!body.autoProvisionNewProbes) for (const machine of state.machines) {
+        if (machine.autoProvision && machine.autoProvision.state === "queued") {
+          machine.autoProvision = Object.assign({}, machine.autoProvision, { state: "cancelled", updatedAt: now(), message: "已停止新自动部署队列；已派发任务继续执行。" });
+        }
+      }
+    }
+    audit(state, req, "settings.default_node.updated", { defaultNode: next, autoProvisionNewProbes: state.settings.autoProvisionNewProbes });
+    save(state); return json(res, 200, { ok: true, settings: publicState(state).settings });
+  }
+  if (action === "autoProvision.retry") {
+    if (body.confirm !== true) fail("confirmation_required", "重新尝试自动部署需要显式确认。", 400);
+    if (!state.settings.autoProvisionNewProbes) fail("auto_provision_disabled", "当前已关闭新探针自动部署。", 409);
+    const machine = machineByUuid(state, String(body.machineUuid || "").toLowerCase());
+    if (!machine.autoProvision || machine.autoProvision.state !== "failed") fail("auto_provision_not_retryable", "当前自动部署状态不能直接重试。", 409);
+    const reservedId = "autov1-" + machine.uuid.replace(/-/g, "");
+    if (state.instances.some((instance) => instance.id === reservedId && instance.machineUuid === machine.uuid && !instance.deletedAt)) fail("auto_provision_instance_exists", "默认节点已登记，请从节点页执行状态核查。", 409);
+    if (machine.online !== true) fail("machine_offline", "探针当前不在线，无法重新提交自动部署。", 409);
+    if (state.jobs.some((job) => job.machineUuid === machine.uuid && ["authorized", "dispatched", "running", "verifying"].includes(job.state))) fail("runtime_busy", "该探针仍有远程任务进行中。", 409);
+    machine.policy = Object.assign({}, machine.policy || {}, { deployAllowed: true });
+    machine.autoProvision = Object.assign({}, machine.autoProvision, { state: "queued", updatedAt: now(), message: "管理员请求重新尝试默认部署。" });
+    audit(state, req, "auto_provision.retry", { machineUuid: machine.uuid, templateVersion: state.settings.defaultNode.version || 1 });
+    save(state); setTimeout(dispatchAutoProvisionQueue, 0);
+    return json(res, 200, { ok: true, machine: safeMachine(machine) });
+  }
+  if (action === "job.retry") {
+    if (body.confirm !== true) fail("confirmation_required", "重试远程任务需要明确确认。", 400);
+    const failed = state.jobs.find((job) => job.id === String(body.jobId || ""));
+    if (!failed) fail("job_not_found", "找不到要重试的任务。", 404);
+    const retryKey = safeText(body.idempotencyKey || "", 256);
+    if (!retryKey) fail("idempotency_key_required", "重试请求需要唯一幂等键。", 400);
+    const retry = state.jobs.find((job) => job.retryOfJobId === failed.id);
+    if (retry) {
+      if (retry.retryIdempotencyKey !== retryKey) fail("idempotency_conflict", "此失败任务已使用其他幂等键重试；请检查已创建的重试任务。", 409);
+      return json(res, 200, { ok: retry.state !== "failed", reused: true, job: Object.assign(safeJob(retry), { canRetry: jobRetryable(state, retry) }) });
+    }
+    if (!jobRetryable(state, failed)) fail("job_not_retryable", "该任务可能已到达探针，不能安全自动重试；请先核对机器状态。", 409);
+    const machine = machineByUuid(state, failed.machineUuid);
+    if (machine.online !== true) fail("machine_offline", "探针当前不在线，无法重试。", 409);
+    requirePolicy(machine);
+    if (state.jobs.some((job) => job.machineUuid === machine.uuid && job.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(job.state))) fail("runtime_busy", "该探针的共享 OneBox Runtime 仍有未完成任务。", 409);
+    const priorSpec = failed.retrySpec;
+    const existingInstance = state.instances.find((instance) => instance.id === failed.instanceId && instance.machineUuid === machine.uuid && !instance.deletedAt);
+    if (failed.action !== "install" && !existingInstance) fail("instance_not_found", "目标实例已不存在，不能重试原任务。", 409);
+    if (failed.action === "install" && existingInstance) fail("instance_exists", "该节点已登记，请先核查远端状态，不会重复安装。", 409);
+    const validated = validateProtocolSettings({ protocol: priorSpec.protocol, listenPort: priorSpec.listenPort, listenAddress: priorSpec.listenAddress, options: priorSpec.options });
+    if (portConflicts(state, machine.uuid, validated.port, validated.transport, failed.instanceId, validated.listenAddress)) fail("port_conflict", "原任务端口现已被其他节点占用；请核对机器状态后重新配置。", 409);
+    let retryNat = priorSpec.nat ? deepClone(priorSpec.nat) : null;
+    if (retryNat) {
+      retryNat.externalPort = validatePort(retryNat.externalPort);
+      const endpoint = candidateAddress(machine, state, {
+        listen: { port: validated.port, address: validated.listenAddress, transport: validated.transport },
+        endpointOverride: priorSpec.endpointOverride || null,
+        nat: retryNat,
+      });
+      if (!endpoint) fail("nat_endpoint_missing", "NAT 地址已不可用；请重新配置公网 Endpoint 后再尝试。", 409);
+      if (natMappingConflicts(state, retryNat.externalPort, validated.transport, endpointPublicHosts(endpoint), failed.instanceId)) fail("nat_mapping_conflict", "原 NAT 映射现已与其他节点冲突；请核对公网地址后重新配置。", 409);
+      retryNat.publicHost = endpoint.host;
+      retryNat.publicHosts = endpointPublicHosts(endpoint);
+    }
+    const spec = {
+      id: failed.instanceId, protocol: validated.protocol, port: validated.port, listenAddress: validated.listenAddress,
+      transport: validated.transport, options: validated.options, name: priorSpec.name, tags: priorSpec.tags,
+      endpointOverride: priorSpec.endpointOverride, nat: retryNat, idempotencyKey: retryKey,
+      requestHash: failed.requestHash, twoFactorCode: body.twoFactorCode,
+    };
+    const retryInstance = existingInstance ? Object.assign({}, existingInstance, {
+      protocol: validated.protocol,
+      listen: { port: validated.port, address: validated.listenAddress, transport: validated.transport },
+      options: validated.options, name: priorSpec.name, tags: priorSpec.tags || [],
+      endpointOverride: priorSpec.endpointOverride || null, nat: retryNat,
+    }) : null;
+    const { job, params } = createJob(state, req, failed.action, machine, spec, retryInstance);
+    job.retryOfJobId = failed.id;
+    job.retryCount = Number(failed.retryCount || 0) + 1;
+    job.retryIdempotencyKey = retryKey;
+    audit(state, req, "job.retry.authorized", { jobId: job.id, retryOfJobId: failed.id, machineUuid: machine.uuid, action: job.action });
+    save(state);
+    const submitted = await finishDispatch(job, params);
+    return json(res, 202, { ok: submitted.state !== "failed", job: Object.assign(safeJob(submitted), { canRetry: jobRetryable(getState(), submitted) }) });
+  }
+  if (action === "install.batch") {
+    if (body.confirm !== true) fail("confirmation_required", "批量部署需要明确确认。", 400);
+    if (!state.settings.publicBaseUrl) fail("public_url_required", "请先完成 Komari HTTPS 公网地址设置。", 409);
+    const uuids = Array.from(new Set((Array.isArray(body.machineUuids) ? body.machineUuids : []).map((uuid) => String(uuid || "").toLowerCase()).filter(Boolean)));
+    const maxBatch = Math.max(1, Math.min(10, Number(state.settings.maxBatch) || 10));
+    if (!uuids.length || uuids.length > maxBatch) fail("invalid_batch_size", "批量部署机器数量必须在 1 至 " + maxBatch + " 台之间。", 400);
+    const batchId = safeText(body.batchId || "", 128);
+    if (!/^[A-Za-z0-9_-]{8,128}$/.test(batchId)) fail("invalid_batch_id", "批量部署请求标识无效。", 400);
+    if (typeof body.twoFactorCode === "string" && body.twoFactorCode.length > 32) fail("invalid_two_factor", "2FA 验证码格式无效。", 400);
+    const validated = validateProtocolSettings(body);
+    const tags = Array.isArray(body.tags) ? Array.from(new Set(body.tags.map((tag) => safeText(tag, 32)).filter(Boolean))).slice(0, 30) : [];
+    const endpointOverride = makeEndpointOverride(body.endpointHost, body.endpointPort, !!state.settings.privateSite);
+    const externalPort = body.externalPort ? validatePort(body.externalPort) : 0;
+    const requestSpecs = [];
+    const results = [];
+    for (const machineUuid of uuids) {
+      const key = batchId + ":" + machineUuid;
+      const machine = state.machines.find((item) => item.uuid === machineUuid);
+      try {
+        if (!machine) fail("machine_not_found", "Komari 中不存在这台探针。", 404);
+        if (machine.online !== true) fail("machine_offline", "探针当前离线或状态未知。", 409);
+        requirePolicy(machine);
+        const requestHash = crypto.createHash("sha256").update(JSON.stringify({ action: "install", machineUuid, instanceId: "", protocol: validated.protocol, port: validated.port, transport: validated.transport, options: validated.options, listenAddress: validated.listenAddress, endpointHost: body.endpointHost || "", endpointPort: body.endpointPort || 0, externalPort })).digest("hex");
+        const prior = state.jobs.find((job) => job.action === "install" && job.machineUuid === machineUuid && job.idempotencyKey === key);
+        if (prior) {
+          if (prior.requestHash !== requestHash) fail("idempotency_conflict", "同一批量请求标识已用于不同的部署参数。", 409);
+          results.push({ machineUuid, reused: true, accepted: prior.state !== "failed", job: safeJob(prior) });
+          continue;
+        }
+        if (state.jobs.some((job) => job.machineUuid === machineUuid && job.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(job.state))) fail("runtime_busy", "该探针的共享 OneBox Runtime 仍有未完成任务。", 409);
+        const instanceId = randomId("kns");
+        if (portConflicts(state, machineUuid, validated.port, validated.transport, instanceId, validated.listenAddress)) fail("port_conflict", "该机器已有节点占用相同监听地址、端口和传输类型。", 409);
+        const nat = externalPort ? { externalPort } : null;
+        const instance = { id: instanceId, machineUuid, runtimeId: "onebox-main", name: safeText(body.name || machine.name + " " + validated.protocol, 80), tags, protocol: validated.protocol, listen: { port: validated.port, transport: validated.transport, address: validated.listenAddress }, options: validated.options, endpointOverride, nat };
+        if (nat) {
+          const publicEndpoint = candidateAddress(machine, state, instance);
+          if (!publicEndpoint) fail("nat_endpoint_missing", "配置 NAT 外部端口时，必须提供公网 Endpoint 地址或先同步机器地址。", 409);
+          nat.publicHost = publicEndpoint.host; nat.publicHosts = endpointPublicHosts(publicEndpoint);
+          if (natMappingConflicts(state, nat.externalPort, validated.transport, endpointPublicHosts(publicEndpoint), instanceId)) fail("nat_mapping_conflict", "公网 IP、外部端口和 TCP/UDP 组合已被另一个 KNS 实例占用。", 409);
+        }
+        const spec = { id: instanceId, protocol: validated.protocol, port: validated.port, listenAddress: validated.listenAddress, transport: validated.transport, options: validated.options, name: instance.name, tags, endpointOverride, nat, idempotencyKey: key, requestHash, twoFactorCode: body.twoFactorCode };
+        const created = createJob(state, req, "install", machine, spec, instance);
+        created.job.batchId = batchId;
+        audit(state, req, "job.authorized", { jobId: created.job.id, action: "install", machineUuid, instanceId, batchId });
+        requestSpecs.push({ machineUuid, job: created.job, params: created.params });
+      } catch (error) {
+        results.push({ machineUuid, accepted: false, error: { code: error.code || "request_failed", message: safeText(error.message || error, 240) } });
+      }
+    }
+    if (!requestSpecs.length && !results.some((item) => item.reused)) return json(res, 200, { ok: false, batchId, results });
+    if (requestSpecs.length) save(state);
+    for (const item of requestSpecs) {
+      try {
+        const submitted = await finishDispatch(item.job, item.params);
+        results.push({ machineUuid: item.machineUuid, accepted: submitted.state !== "failed", job: safeJob(submitted) });
+      } catch (error) {
+        results.push({ machineUuid: item.machineUuid, accepted: false, error: { code: error.code || "dispatch_failed", message: safeText(error.message || error, 240) } });
+      }
+    }
+    const acceptedCount = results.filter((item) => item.accepted).length;
+    return json(res, 202, { ok: acceptedCount > 0, batchId, acceptedCount, results });
+  }
   if (action === "machine.policy.update") {
     const machine = machineByUuid(state, String(body.machineUuid || "").toLowerCase());
     const policy = body.policy || {};
@@ -1293,6 +1641,22 @@ async function handleAction(req, res) {
     res.end(JSON.stringify(envelope));
     return;
   }
+  if (action === "backup.restore.preview") {
+    assertNoActiveJobs(state, "恢复备份");
+    let preview;
+    try { preview = store.inspectBackup(String(body.name || "")); }
+    catch (error) { fail("backup_preview_failed", safeText(error && error.message || error, 240), 400); }
+    if (preview.requiresMasterKey && !preview.keyAvailable) fail("backup_key_missing", "该备份缺少可用的配对主密钥；恢复已阻止。", 409);
+    return json(res, 200, { ok: true, currentRevision: state.revision, backup: preview });
+  }
+  if (action === "backup.inspect") {
+    const imported = decryptBackupEnvelope(body.envelope, body.passphrase);
+    const configured = typeof process !== "undefined" && process.env ? process.env.KNS_MASTER_KEY : "";
+    const keyCompatible = !configured || (/^[a-f0-9]{64}$/i.test(configured) && crypto.timingSafeEqual(Buffer.from(configured, "hex"), imported.key));
+    if (!keyCompatible) fail("master_key_conflict", "导入备份的密钥与当前 KNS_MASTER_KEY 不匹配；尚未修改数据。", 409);
+    const backup = imported.state;
+    return json(res, 200, { ok: true, currentRevision: state.revision, keyCompatible: true, backup: { schemaVersion: backup.schemaVersion, pluginVersion: backup.pluginVersion || "", createdAt: backup.updatedAt || backup.createdAt || "", counts: { machines: backup.machines.length, instances: backup.instances.filter((item) => !item.deletedAt).length, profiles: backup.profiles.length, jobs: backup.jobs.length } } });
+  }
   if (action === "profile.create" || action === "profile.rotate" || action === "profile.token.create") {
     if (!state.settings.publicBaseUrl) fail("public_url_required", "请先设置 Komari HTTPS 公网地址。", 409);
     if (action === "profile.create") {
@@ -1402,9 +1766,18 @@ async function handleAction(req, res) {
     instance.updatedAt = now(); audit(state, req, "instance.metadata.updated", { instanceId: instance.id }); save(state); return json(res, 200, { ok: true });
   }
   if (action === "backup.restore") {
-    const restored = store.restoreBackup(String(body.name || ""));
-    masterKey = secrets.getMasterKey(__storageDir__);
-    audit(restored, req, "backup.restored", { name: safeText(body.name, 80) }); save(restored); return json(res, 200, { ok: true, revision: restored.revision });
+    if (body.confirmPhrase !== "恢复") fail("confirmation_required", "请输入“恢复”以确认替换 KNS 数据。", 400);
+    assertNoActiveJobs(state, "恢复备份");
+    maintenanceLock = true;
+    try {
+      const restored = store.restoreBackup(String(body.name || ""), { expectedRevision: state.revision });
+      masterKey = secrets.getMasterKey(__storageDir__);
+      pendingTokenUsage.clear();
+      store.pruneSubscriptionSnapshots([]);
+      audit(restored, req, "backup.restored", { name: safeText(body.name, 80) });
+      save(restored);
+      return json(res, 200, { ok: true, revision: restored.revision });
+    } finally { maintenanceLock = false; }
   }
   if (action === "instance.status") {
     const machine = machineByUuid(state, String(body.machineUuid || "").toLowerCase());
@@ -1463,16 +1836,27 @@ async function handleAction(req, res) {
     instance = state.instances.find((item) => item.id === String(body.instanceId || "") && item.machineUuid === machineUuid && !item.deletedAt);
     if (!instance) fail("instance_not_found", "目标实例不存在或不属于该探针。", 404);
     if (instance.managedBy === "legacy_import") fail("legacy_instance_readonly", "导入的旧版节点仅支持订阅发布设置；如需修改节点配置，请在 OneBox 中操作。", 409);
+    if (actionName === "uninstall") {
+      const remote = instance.remoteStatus || {};
+      const preview = remote.uninstallPreview || {};
+      const checkedAt = Date.parse(remote.checkedAt || "");
+      const validResources = Array.isArray(remote.resources) && remote.resources.length > 0 && remote.resources.every((resource) => resource && resource.type && resource.id && resource.action && typeof resource.owned === "boolean" && typeof resource.shared === "boolean" && typeof resource.present === "boolean");
+      if (remote.installed !== true || preview.complete !== true || !validResources || !/^[a-f0-9]{64}$/i.test(String(preview.version || ""))) fail("uninstall_preview_incomplete", "卸载未提交：请先取得完整的远端资源影响预览。", 409);
+      if (!Number.isFinite(checkedAt) || checkedAt > Date.now() || Date.now() - checkedAt > 5 * 60 * 1000) fail("uninstall_preview_stale", "卸载预览已过期；请重新检查机器上的实际配置。", 409);
+      if (String(body.previewVersion || "") !== preview.version) fail("uninstall_preview_changed", "卸载预览版本已变化；请重新检查并确认最新资源影响。", 409);
+    }
     spec.id = instance.id; spec.protocol = instance.protocol; spec.port = instance.listen.port; spec.listenAddress = instance.listen.address; spec.transport = instance.listen.transport; spec.options = instance.options; spec.name = instance.name; spec.tags = instance.tags;
   }
   if (["enable", "disable"].includes(actionName)) {
     // These operations are translated into the OneBox adapter contract below.
     spec.protocol = instance.protocol; spec.id = instance.id; spec.port = instance.listen.port; spec.listenAddress = instance.listen.address; spec.transport = instance.listen.transport; spec.options = instance.options; spec.name = instance.name; spec.tags = instance.tags;
   }
-  const requestHash = crypto.createHash("sha256").update(JSON.stringify({
+  const requestHashData = {
     action: actionName, machineUuid, instanceId: body.instanceId || "", protocol: spec.protocol || "", port: spec.port || 0,
     transport: spec.transport || "", options: spec.options || {}, listenAddress: spec.listenAddress || "", endpointHost: body.endpointHost || "", endpointPort: body.endpointPort || 0, externalPort: body.externalPort || 0,
-  })).digest("hex");
+  };
+  if (actionName === "uninstall") requestHashData.previewVersion = String(body.previewVersion || "");
+  const requestHash = crypto.createHash("sha256").update(JSON.stringify(requestHashData)).digest("hex");
   const prior = state.jobs.find((item) => item.machineUuid === machineUuid && item.action === actionName && item.idempotencyKey === suppliedIdempotencyKey);
   if (prior) {
     if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于不同的远程动作。", 409);
@@ -1483,7 +1867,7 @@ async function handleAction(req, res) {
   const conflictingJob = state.jobs.find((item) => item.machineUuid === machineUuid && item.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
   if (conflictingJob) fail("runtime_busy", "该机器的共享 OneBox Runtime 仍有未完成配置任务。", 409);
   const { job, instance: jobInstance, params } = createJob(state, req, actionName, machine, spec, instance);
-  audit(state, req, "job.authorized", { jobId: job.id, action: actionName, machineUuid, instanceId: job.instanceId });
+  audit(state, req, "job.authorized", { jobId: job.id, action: actionName, machineUuid, instanceId: job.instanceId, uninstallPreviewVersion: actionName === "uninstall" ? String(body.previewVersion || "") : undefined });
   // Persist the authorization record before dispatch so callbacks cannot precede it.
   save(state);
   const submitted = await finishDispatch(job, params);
@@ -1824,7 +2208,12 @@ function registerAdmin(method, suffix, handler) {
   server.route(method, API + suffix, async (req, res) => {
     if (!requireAdmin(req, res)) return;
     try { await handler(req, res); }
-    catch (error) { json(res, error.status || 400, { error: { code: error.code || "request_failed", message: safeText(error.message || error, 300) } }); }
+    catch (error) {
+      const detail = { code: error.code || "request_failed", message: safeText(error.message || error, 300) };
+      if (error.expectedRevision != null) detail.expectedRevision = error.expectedRevision;
+      if (error.currentRevision != null) detail.currentRevision = error.currentRevision;
+      json(res, error.status || 400, { error: detail });
+    }
   });
 }
 
@@ -1841,16 +2230,24 @@ function registerRoutes() {
   registerAdmin("POST", "/admin/import", (req, res) => {
     checkOrigin(req);
     const body = readBody(req, 16 * 1024 * 1024);
-    const imported = decryptBackupEnvelope(body.envelope, body.passphrase);
-    const configured = typeof process !== "undefined" && process.env ? process.env.KNS_MASTER_KEY : "";
-    if (configured && (!/^[a-f0-9]{64}$/i.test(configured) || !crypto.timingSafeEqual(Buffer.from(configured, "hex"), imported.key))) fail("master_key_conflict", "导入备份的密钥与当前 KNS_MASTER_KEY 不匹配；请先协调宿主密钥配置。", 409);
-    const restored = store.importBackup(imported.state, imported.key);
-    masterKey = imported.key;
-    pendingTokenUsage.clear();
-    store.pruneSubscriptionSnapshots([]);
-    audit(restored, req, "backup.imported", { format: "KNS-ENCRYPTED-EXPORT", schemaVersion: 1 });
-    save(restored);
-    json(res, 200, { ok: true, revision: restored.revision });
+    if (maintenanceLock) fail("maintenance_in_progress", "KNS 正在执行数据维护；请稍后重试。", 409);
+    if (body.confirmPhrase !== "恢复") fail("confirmation_required", "请输入“恢复”以确认替换 KNS 数据。", 400);
+    const current = getState();
+    assertExpectedRevision(current.revision, body);
+    assertNoActiveJobs(current, "导入备份");
+    maintenanceLock = true;
+    try {
+      const imported = decryptBackupEnvelope(body.envelope, body.passphrase);
+      const configured = typeof process !== "undefined" && process.env ? process.env.KNS_MASTER_KEY : "";
+      if (configured && (!/^[a-f0-9]{64}$/i.test(configured) || !crypto.timingSafeEqual(Buffer.from(configured, "hex"), imported.key))) fail("master_key_conflict", "导入备份的密钥与当前 KNS_MASTER_KEY 不匹配；请先协调宿主密钥配置。", 409);
+      const restored = store.importBackup(imported.state, imported.key, { expectedRevision: current.revision });
+      masterKey = imported.key;
+      pendingTokenUsage.clear();
+      store.pruneSubscriptionSnapshots([]);
+      audit(restored, req, "backup.imported", { format: "KNS-ENCRYPTED-EXPORT", schemaVersion: 1 });
+      save(restored);
+      json(res, 200, { ok: true, revision: restored.revision });
+    } finally { maintenanceLock = false; }
   });
   server.route("POST", API + "/report", handleReport);
   server.route("GET", API + "/sub", (req, res) => serveSubscription(req, res, false));

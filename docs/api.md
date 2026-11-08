@@ -20,18 +20,25 @@ KNS 原生订阅格式为 `uri`、`mihomo-full`、`mihomo-provider`、`singbox-f
 
 ## `POST /admin/action` 动作
 
-请求头：`Content-Type: application/json`；正文上限 1 MiB。
+请求头：`Content-Type: application/json`；正文上限 1 MiB。管理写动作可附 `expectedRevision`（从状态快照读取）；版本不匹配时服务端返回 `409 state_revision_conflict` 与当前/期望 revision，调用方应保留草稿并重新核对。插件管理页对写动作自动附带此字段。
 
 | `action` | 常用字段 | 返回 |
 | --- | --- | --- |
 | `machine.policy.update` | `machineUuid`, `policy.deployAllowed`, `policy.addressMode`, `policy.manualAddress`, `policy.ddnsHostname`, `policy.tags` | 更新并返回机器策略 |
+| `setup.complete` | `publicBaseUrl`, `defaultNode`（VLESS + Reality 模板）, `autoProvisionNewProbes`, 开启时必须 `confirmAutoProvision:true` | 同步探针、记录既有 UUID 基线、完成初始化并创建默认订阅；返回基线数量及一次性格式 URL；重复调用不会创建第二个默认令牌 |
+| `machine.sync` | 无 | 同步探针快照；已配置自动部署策略时，新发现的探针才会入队 |
+| `settings.defaults.update` | `defaultNode`, `autoProvisionNewProbes`, 开启时必须 `confirmAutoProvision:true` | 只影响后续新探针；关闭时取消未派发队列，不撤回已派发任务 |
+| `autoProvision.retry` | `machineUuid`, `confirm:true` | 仅重试失败且无已登记默认节点、在线、已授权且无活动任务的目标 |
+| `install.batch` | `machineUuids[]`, `batchId`, 协议配置, `confirm:true`, 可选 `twoFactorCode` | `202` 逐目标返回已受理/阻断/错误与 Job；相同批次 ID 和参数复用原任务，最多 10 台 |
 | `machine.discover` | `machineUuid`, `idempotencyKey`, 可选 `twoFactorCode` | `202` 单机只读扫描任务；后台页可批量选择最多 100 台在线探针并逐台提交，结果各自成为 job；只返回安全元数据，不含节点凭据 |
 | `machine.import` | `machineUuid`, `legacyTag`, `confirm:true`, `idempotencyKey`, 可选 `endpointHost`, `externalPort`, `twoFactorCode` | `202` 一次性导入任务；HTTPS 回调后加密登记为外部只读节点 |
 | `settings.update` | `publicBaseUrl`（HTTPS），可选 `converterUrl`, `converterTarget`（见支持列表）, `privateSite` | 更新回调、订阅转换和私有地址设置 |
 | `install` | `machineUuid`, `protocol`, `listenPort`, `listenAddress`, `options`, 可选 `name`, `tags`, `endpointHost`, `externalPort`, `idempotencyKey`, `confirm:true`, `twoFactorCode` | `202` job |
 | `reconfigure`, `reinstall` | 同上并带已有 `instanceId` | `202` job |
-| `enable`, `disable`, `uninstall` | `machineUuid`, `instanceId`, `idempotencyKey`, `confirm:true`, 可选 `twoFactorCode` | `202` job |
-| `instance.status` | `machineUuid`, `instanceId`, `idempotencyKey` | `202` 只读状态 job；OneBox 返回资源归属、引用计数和卸载影响预览 |
+| `enable`, `disable` | `machineUuid`, `instanceId`, `idempotencyKey`, `confirm:true`, 可选 `twoFactorCode` | `202` job |
+| `uninstall` | `machineUuid`, `instanceId`, `previewVersion`, `idempotencyKey`, `confirm:true`, 可选 `twoFactorCode` | `202` job；服务端要求绑定最近 5 分钟内的完整状态核查版本，并重新检查登记状态与资源清单 |
+| `instance.status` | `machineUuid`, `instanceId`, `idempotencyKey` | `202` 只读状态 job；OneBox 返回资源归属、引用计数和卸载影响预览，KNS 为预览生成版本摘要 |
+| `job.retry` | `jobId`, `idempotencyKey`, `confirm:true`, 可选 `twoFactorCode` | 仅对 Komari 明确拒绝且未返回 task ID 的原始失败操作安全重试；相同幂等键复用已创建的重试任务，不同键返回 `409 idempotency_conflict`；重试任务本身不能再次链式重试 |
 | `instance.publish.update` | `instanceId`, `publish:boolean` | 仅控制是否出现在订阅中 |
 | `instance.metadata.update` | `instanceId`, 可选 `name`, `tags`, `endpointHost`, `endpointPort`, `externalPort` | 更新实例展示或端点信息 |
 | `instance.deduplicate` | `keepInstanceId`, `confirm:true` | 隐藏完全匹配的重复实例，不卸载远端实例 |
@@ -42,11 +49,13 @@ KNS 原生订阅格式为 `uri`、`mihomo-full`、`mihomo-provider`、`singbox-f
 | `profile.rotate` | `profileId`, 可选 `graceSeconds`（0–604800） | `200`，创建新令牌；旧令牌在宽限期结束后失效，默认宽限为 0 秒 |
 | `profile.revoke` | `profileId` | 撤销档案下全部令牌 |
 | `backup.export` | `passphrase`（12–256 个字符） | 返回 PBKDF2-SHA256 + AES-256-GCM 加密的完整状态与恢复密钥包；口令不保存 |
-| `backup.restore` | `name` | 恢复指定日的状态备份 |
+| `backup.inspect` | `envelope`, `passphrase` | 解密并预检导入范围、Schema 与主密钥兼容性，不修改状态 |
+| `backup.restore.preview` | `name` | 校验日备份/配对密钥、返回替换范围和当前 revision；有活动任务时拒绝 |
+| `backup.restore` | `name`, `confirmPhrase:"恢复"`, `expectedRevision` | 恢复指定日备份；后端再次检查 revision 与活动任务并保留事务副本 |
 
 令牌访问统计记录通过身份验证的订阅请求（包括因快照尚未就绪而返回 `503` 的请求），约每分钟持久化一次；异常进程退出最多可能丢失一个刷盘周期的计数。令牌自身的到期时间会被档案到期时间限制。轮换已撤销档案会恢复档案状态并创建一个新令牌，旧令牌仍保持撤销。
 
-加密导出使用独立口令派生密钥，导出正文内含状态与 `masterKey`，外层只暴露 KDF 参数和 AES-GCM 密文。通过管理页可导入此文件；若宿主设置了 `KNS_MASTER_KEY`，导入包中的密钥必须与之匹配。保存口令与导出文件时应分开保管。不要把解密后的状态或密钥放入普通工单/聊天。
+加密导出使用独立口令派生密钥，导出正文内含状态与 `masterKey`，外层只暴露 KDF 参数和 AES-GCM 密文。通过管理页导入时先调用 `backup.inspect` 解密并预检，再通过 `/admin/import` 携带 `confirmPhrase:"恢复"`、预检时的 `expectedRevision`、文件和口令执行。若宿主设置了 `KNS_MASTER_KEY`，导入包中的密钥必须与之匹配。任何活动远程任务都会阻止导入/恢复；恢复持有进程内维护锁并在替换前保留事务副本。保存口令与导出文件时应分开保管。不要把解密后的状态或密钥放入普通工单/聊天。
 
 `machineUuids`、`protocols` 的空数组代表不限制；包含机器与排除机器同时配置时先做包含筛选，再排除命中的机器。标签按实例标签做“任一匹配”。地址族筛选作用于 Endpoint 中的字面 IPv4/IPv6 地址；域名会保留，由订阅客户端按自身 DNS 能力连接。排序支持 `name`、`protocol`、`endpoint`、`machine`。
 
@@ -65,6 +74,7 @@ KNS 原生订阅格式为 `uri`、`mihomo-full`、`mihomo-provider`、`singbox-f
 | `admin_required`, `csrf_origin` | 缺管理员角色或跨站管理请求 |
 | `deployment_not_allowed`, `confirmation_required` | 部署策略未开启或缺少显式确认 |
 | `runtime_busy`, `idempotency_conflict` | 共享 runtime 有待处理任务或幂等键复用于不同配置 |
+| `uninstall_preview_incomplete`, `uninstall_preview_stale`, `uninstall_preview_changed` | 卸载缺少完整资源预览、预览超过五分钟或请求版本不匹配 |
 | `endpoint_missing`, `private_endpoint`, `nat_endpoint_missing`, `nat_mapping_conflict` | 地址缺失、DDNS 未稳定、公网地址策略拒绝或公网 NAT 映射冲突 |
 | `port_conflict`, `invalid_port` | 监听组合不合法或占用 |
 | `invalid_callback`, `callback_mismatch` | OneBox 回调 schema、版本或目标不匹配 |

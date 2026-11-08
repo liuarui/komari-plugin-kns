@@ -9,7 +9,7 @@
     "en": "Manage OneBox nodes, batch-scan legacy nodes, sync endpoints, and publish token-protected Mihomo, sing-box, and multi-client converted subscriptions."
   },
   "author": "ajax",
-  "version": "1.1.5",
+  "version": "1.2.0",
   "komari": ">=1.4.3",
   "entry": "script.js",
   "permissions": {

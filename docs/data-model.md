@@ -1,17 +1,17 @@
 # 数据模型与状态 Schema
 
-插件状态保存于 Komari 提供的 `__storageDir__` 下的 `kns/state.json`。目录、状态、备份、快照和密钥文件权限设为 `0700/0600`（宿主文件系统支持时）。状态与订阅快照写入会在原子 rename 前调用 `fsync` 同步临时文件。Komari 1.6.1 兼容文件系统上，对可选状态/密钥文件先用 `existsSync` 判断，避免对缺失路径的 `readFileSync` 触发 `lstat` 错误。未知字段会保留，当前 schema 版本为 `1`。
+插件状态保存于 Komari 提供的 `__storageDir__` 下的 `kns/state.json`。目录、状态、备份、快照和密钥文件权限设为 `0700/0600`（宿主文件系统支持时）。状态与订阅快照写入会在原子 rename 前调用 `fsync` 同步临时文件。Komari 1.6.1 兼容文件系统上，对可选状态/密钥文件先用 `existsSync` 判断，避免对缺失路径的 `readFileSync` 触发 `lstat` 错误。未知字段会保留，当前 schema 版本为 `2`。
 
 ## 顶层对象
 
 | 字段 | 说明 |
 | --- | --- |
 | `schemaVersion`, `pluginVersion`, `revision`, `createdAt`, `updatedAt` | 数据结构版本、最后成功加载此状态的插件版本及递增修订信息 |
-| `settings` | HTTPS 回调基地址、SubConverter、固定 OneBox installer SHA、健康/同步间隔、私有站点开关、批量上限 |
+| `settings` | 首次设置状态、明确授权的新探针自动部署与历史基线、版本化默认节点模板、HTTPS 回调基地址、SubConverter、固定 OneBox installer SHA、健康/同步间隔、私有站点开关、批量上限 |
 | `machines[]` | Komari Agent 探针快照及管理员部署/地址策略 |
 | `runtimes[]` | 每台机器上的共享 OneBox `sing-box/onebox-main` 服务引用计数 |
-| `instances[]` | 由 KNS 管理的远端实例，保存监听、端点、协议元数据、发布/健康状态和加密凭据 |
-| `jobs[]` | 授权、远程任务编号、回调摘要、结果核验与审计关联；不存远程 stdout/stderr |
+| `instances[]` | 由 KNS 管理的远端实例，保存监听、端点、协议元数据、发布/健康状态、最近一次远端状态/卸载资源预览和加密凭据 |
+| `jobs[]` | 授权、远程任务编号、回调摘要、结果核验、批次/幂等标识和受限安全重试参数；不存远程 stdout/stderr |
 | `profiles[]` | 订阅格式、过滤条件、档案过期时间及 `tokens[]` 生命周期记录 |
 | `audit[]` | 最近 1000 条管理动作缓存；完整受保留策略管理的追加式 JSONL 日志另存于 `kns/audit/`，不记录订阅 token 或节点凭据 |
 | `legacyNodes[]` | 从原 onebox-bridge 数据迁移的加密 URI |
@@ -23,9 +23,13 @@
 
 订阅档案的筛选字段包括 `instanceIds`、`machineUuids`、`excludeMachineUuids`、`protocols`、`includeTags`、`addressMode`、`sortBy` 和 `excludeUnhealthy`。机器/协议空列表按不限制处理；标签按任一实例标签命中。地址模式支持 `auto`、`ipv4`、`ipv6`、`dual`；IPv4/IPv6 只筛选 Endpoint 中的字面 IP，域名留给订阅客户端解析。排序支持节点名称、协议、Endpoint 和机器名称。
 
-## Schema 1 约束
+## Schema 2 约束
 
-运行时执行的结构检查在 [store.js](../kns/store.js) 中：顶层必须是对象，`schemaVersion` 必须是受支持的正整数，机器、runtime、instance、job、profile、audit、legacyNodes 必须是数组；缺失设置会由默认值补齐。下面的 JSON Schema 用于文档与审查，不会取代运行时检查。
+运行时执行的结构检查在 [store.js](../kns/store.js) 中：顶层必须是对象，`schemaVersion` 必须是受支持的正整数，机器、runtime、instance、job、profile、audit、legacyNodes 必须是数组；缺失设置会由默认值补齐。Schema 1 会在内存中逐版本迁移到 Schema 2；首次成功写入时才持久化新结构。下面的 JSON Schema 用于文档与审查，不会取代运行时检查。
+
+Schema 2 的 `setupComplete` 控制首次配置写操作门禁。首次配置同步探针后记录 `autoProvisionBaselineUuids`，基线机器不会被误认为新探针。`autoProvisionNewProbes` 对新安装默认关闭；Schema 1 缺少该字段时迁移为关闭。`defaultNode` 保存仅用于后续新探针的 VLESS + Reality 默认端口/监听地址及模板版本。任务记录可选的 `batchId`、`retryOfJobId`、私有 `retryIdempotencyKey` 和不含凭据的 `retrySpec`，用于受限安全重试与批次恢复；公开状态不会返回这些内部重试参数。
+
+实例的 `remoteStatus.checkedAt`、`resources` 和 `uninstallPreview` 来自最近一次真实 OneBox 状态核查。`uninstallPreview.version` 是 KNS 对目标实例、资源清单和核查时刻生成的 SHA-256 摘要；卸载必须回传匹配摘要，且摘要不得超过五分钟。缺少、过期或不匹配的预览会被服务端拒绝。
 
 凭据不以内嵌明文字段保存。实例保存 `credentialCiphertext`（AES-256-GCM envelope）；密钥来自环境变量 `KNS_MASTER_KEY`（64 位十六进制）或 `kns/master.key`。每个订阅档案含 `tokens[]`；每条令牌记录有 `id`、创建/到期/撤销/轮换宽限时间、访问计数、最近使用时间及随机 `salt` 和 `hash`，不存原始 token。旧版档案的顶层 `salt`/`hash` 会在首次写入时迁移到 `tokens[]`。回调 token 的 hash/salt 仅在任务等待回调期间暂存，第一次有效回调后删除。
 
@@ -34,11 +38,11 @@
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Komari KNS state v1",
+  "title": "Komari KNS state v2",
   "type": "object",
   "required": ["schemaVersion", "revision", "settings", "machines", "runtimes", "instances", "jobs", "profiles", "audit", "legacyNodes"],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "pluginVersion": { "type": "string" },
     "revision": { "type": "integer", "minimum": 0 },
     "settings": { "type": "object" },

@@ -4,7 +4,7 @@ Komari KNS 是运行在 Komari 插件宿主中的原生插件。它通过 Komari
 
 ## 功能
 
-- 从 Komari 同步探针机器；新机器的部署策略默认关闭。
+- 首次配置可先只读浏览；初始化时同步既有探针并建立基线，新探针自动部署默认关闭且需明确授权。
 - 可批量只读扫描最多 100 台在线探针上的历史 OneBox 入站；管理员逐个确认后，通过一次性 HTTPS 回调加密导入支持的旧节点。导入不会改 OneBox 配置，导入实例保持外部只读归属。
 - 管理 VLESS Reality、Hysteria2、TUIC、AnyTLS、Shadowsocks、Trojan、VMess 实例，支持安装、重配置、重装、启用、停用、卸载和只读状态核查。
 - 通过 OneBox 一次性回调和 Agent 远程状态双重核验，避免只凭命令退出码登记节点。
@@ -28,20 +28,19 @@ Komari KNS 是运行在 Komari 插件宿主中的原生插件。它通过 Komari
 
 ```sh
 python3 scripts/package.py
-sha256sum -c dist/onebox-bridge.zip.sha256
+(cd dist && sha256sum -c onebox-bridge.zip.sha256)
 ```
 
 在 Komari 插件管理器上传 `dist/onebox-bridge.zip`。核准插件声明的 `node`、`allowRoutes`、`allowSystemRPC` 权限后启用。ZIP 中包含 `komari-plugin.json`、入口脚本、管理页、本地 KNS 模块和 GNU AGPL v3.0-only 许可证文本。
 
 ## 首次配置
 
-1. 打开 Komari 管理菜单中的 **OneBox 节点**。
-2. 在设置中填写 Komari 的公网 HTTPS 基地址，例如 `https://status.example.com`。OneBox 回调使用此地址。
-3. 检查 SubConverter 地址与目标格式。当前配置默认使用 `http://23.146.156.234:25500/sub`、`clash`。
-4. 在机器策略中明确允许要管理的探针，并选择 `auto`、`ipv4`、`ipv6` 或 `dual` 地址模式。部署策略默认关闭。
-5. 在机器列表勾选多台在线探针，点“批量扫描所选旧版节点”识别历史 OneBox 入站；也可只扫描单台。扫描是只读的，导入仍需逐个确认。导入前为机器设置可用公网地址或 DDNS；NAT 可在确认时填写公网端口。
-6. 对需要新建的节点，设置机器地址并安装 OneBox 实例。
-7. 创建订阅档案并保存一次性显示的订阅 URL。可直接使用 KNS 原生 URL，也可使用生成的 SubConverter URL。
+1. 打开 Komari 管理菜单中的 **OneBox 节点**。尚未初始化时可以浏览只读状态，选择“稍后配置”不会开放写操作。
+2. 运行分步引导，填写探针可访问的 Komari HTTPS 地址并检查 VLESS + Reality 默认模板。启用新探针自动部署需单独勾选授权；首次同步到的既有探针只建立基线，不会批量安装。
+3. 保存时 KNS 会同步探针、建立基线、创建默认订阅并显示一次性格式链接；同步失败会留在引导页且保留输入。链接关闭后原令牌明文无法找回，可新增或轮换令牌。
+4. 在探针策略中逐台明确允许部署。地址模式支持 `auto`、`ipv4`、`ipv6` 或 `dual`；手动地址、DDNS 与 NAT 端口按机器/节点实际范围设置。
+5. 部署批次会逐机显示受理、阻断与任务状态。受理不代表 Agent 已完成安装；最终结果在任务页查看。
+6. 创建额外订阅档案并保存一次性显示的订阅 URL。可直接使用 KNS 原生 URL，也可使用 SubConverter URL。
 
 插件不会配置反向代理、证书、端口转发、云安全组、NAT 或 DNS 记录。订阅里使用的域名必须由你自己的 DNS 与网络路由正确指向探针。
 
@@ -67,6 +66,8 @@ python3 scripts/package.py
 - [运维手册](docs/operations.md)
 - [安全评估](docs/security-report.md)
 - [兼容性矩阵](docs/compatibility-matrix.md)
+- [KNS 交互整改说明](docs/interaction-remediation.md)
+- [UX 1.0 四十项验收记录](docs/ux-acceptance-t40.md)
 - [验收测试报告](docs/acceptance-report.md)
 - [回滚演练步骤](docs/rollback-drill.md)
 - [依赖与许可证盘点](docs/license-report.md)
@@ -76,4 +77,4 @@ python3 scripts/package.py
 
 ## 版本
 
-插件作者为 `ajax`，插件包版本为 `1.1.5`，项目许可证为 `AGPL-3.0-only`。manifest 声明最低 Komari Server `1.4.3`（源码核验下限，尚未在该版实机测试）。当前目标服务器为 `1.6.1`。OneBox KNS 适配器固定到已审查的源码提交和 SHA-256，见 [兼容性矩阵](docs/compatibility-matrix.md)。可直接上传 Komari 的 [v1.1.5 ZIP](https://raw.githubusercontent.com/liuarui/komari-plugin-kns/v1.1.5/dist/onebox-bridge.zip)，仓库内路径为 `dist/onebox-bridge.zip`。源码仓库为 [liuarui/komari-plugin-kns](https://github.com/liuarui/komari-plugin-kns)，分支 `main`。
+插件作者为 `ajax`，插件包版本为 `1.2.0`，项目许可证为 `AGPL-3.0-only`。manifest 声明最低 Komari Server `1.4.3`（源码核验下限，尚未在该版实机测试）。当前目标服务器为 `1.6.1`。OneBox KNS 适配器固定到已审查的源码提交和 SHA-256，见 [兼容性矩阵](docs/compatibility-matrix.md)。可直接上传 Komari 的 [v1.2.0 ZIP](https://raw.githubusercontent.com/liuarui/komari-plugin-kns/v1.2.0/dist/onebox-bridge.zip)，仓库内路径为 `dist/onebox-bridge.zip`。源码仓库为 [liuarui/komari-plugin-kns](https://github.com/liuarui/komari-plugin-kns)。

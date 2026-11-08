@@ -158,6 +158,57 @@ test("URL constructors fall back to node:url when the host does not expose globa
   }
 });
 
+test("schema 1 state migrates without losing settings and keeps auto deployment off", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-schema-migration-"));
+  try {
+    const store = createStore(root);
+    const legacy = store.initialState();
+    legacy.schemaVersion = 1;
+    legacy.pluginVersion = "";
+    legacy.settings = { publicBaseUrl: "https://monitor.example", converterTarget: "loon", privateSite: true };
+    legacy.machines = [{ uuid: "123e4567-e89b-42d3-a456-426614174000", policy: { deployAllowed: true, manualAddress: "edge.example" } }];
+    fs.mkdirSync(store.root, { recursive: true });
+    fs.writeFileSync(store.stateFile, JSON.stringify(legacy), { mode: 0o600 });
+
+    const migrated = store.read();
+    assert.equal(migrated.schemaVersion, 2);
+    assert.equal(migrated.settings.setupComplete, true);
+    assert.equal(migrated.settings.autoProvisionNewProbes, false);
+    assert.deepEqual(migrated.settings.autoProvisionBaselineUuids, []);
+    assert.equal(migrated.settings.publicBaseUrl, "https://monitor.example");
+    assert.equal(migrated.settings.converterTarget, "loon");
+    assert.equal(migrated.settings.privateSite, true);
+    assert.equal(migrated.machines[0].policy.manualAddress, "edge.example");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("store rejects a stale revision and previews matching daily backup metadata", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-revision-preview-"));
+  const priorEnvKey = process.env.KNS_MASTER_KEY;
+  delete process.env.KNS_MASTER_KEY;
+  try {
+    const store = createStore(root);
+    store.write(store.initialState());
+    const keyPath = path.join(store.root, "master.key");
+    fs.writeFileSync(keyPath, Buffer.alloc(32, 11), { mode: 0o600 });
+    const stale = store.read();
+    const winner = store.read();
+    winner.settings.privateSite = true;
+    store.write(winner);
+
+    assert.throws(() => store.write(stale), (error) => error.code === "state_revision_conflict" && error.currentRevision === stale.revision + 1);
+    assert.equal(store.read().settings.privateSite, true);
+    const preview = store.inspectBackup(store.listBackups()[0]);
+    assert.equal(preview.keyAvailable, true);
+    assert.equal(preview.requiresMasterKey, false);
+    assert.deepEqual(preview.counts, { machines: 0, instances: 0, profiles: 0, jobs: 0 });
+  } finally {
+    if (priorEnvKey === undefined) delete process.env.KNS_MASTER_KEY;
+    else process.env.KNS_MASTER_KEY = priorEnvKey;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("migration snapshots the complete plugin storage directory privately", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-migration-store-"));
   try {
