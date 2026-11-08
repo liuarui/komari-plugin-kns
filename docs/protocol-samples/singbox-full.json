@@ -1,0 +1,146 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "local",
+        "tag": "local"
+      }
+    ],
+    "final": "local"
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": 2080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "sample-vless",
+      "server": "node.example.com",
+      "server_port": 443,
+      "uuid": "123e4567-e89b-42d3-a456-426614174000",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.example.com",
+        "reality": {
+          "enabled": true,
+          "public_key": "sample-public-key",
+          "short_id": "01234567"
+        }
+      },
+      "transport": {
+        "type": "tcp"
+      }
+    },
+    {
+      "type": "trojan",
+      "tag": "sample-trojan",
+      "server": "node.example.com",
+      "server_port": 444,
+      "password": "demo-password-only",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.example.com",
+        "alpn": [
+          "h2",
+          "http/1.1"
+        ]
+      }
+    },
+    {
+      "type": "vmess",
+      "tag": "sample-vmess",
+      "server": "node.example.com",
+      "server_port": 445,
+      "uuid": "123e4567-e89b-42d3-a456-426614174000",
+      "method": "auto",
+      "alter_id": 0,
+      "tls": {
+        "enabled": true,
+        "server_name": "www.example.com",
+        "alpn": [
+          "h2",
+          "http/1.1"
+        ]
+      },
+      "transport": {
+        "type": "tcp"
+      }
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "sample-shadowsocks",
+      "server": "node.example.com",
+      "server_port": 446,
+      "password": "demo-password-only",
+      "method": "aes-128-gcm"
+    },
+    {
+      "type": "hysteria2",
+      "tag": "sample-hysteria2",
+      "server": "node.example.com",
+      "server_port": 447,
+      "password": "demo-password-only",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.example.com",
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "sample-tuic",
+      "server": "node.example.com",
+      "server_port": 448,
+      "uuid": "123e4567-e89b-42d3-a456-426614174000",
+      "password": "demo-password-only",
+      "congestion_control": "bbr",
+      "udp_relay_mode": "native",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.example.com",
+        "alpn": [
+          "h3"
+        ]
+      }
+    },
+    {
+      "type": "anytls",
+      "tag": "sample-anytls",
+      "server": "node.example.com",
+      "server_port": 449,
+      "password": "demo-password-only",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.example.com",
+        "alpn": [
+          "h2",
+          "http/1.1"
+        ]
+      }
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "final": "sample-vless"
+  }
+}

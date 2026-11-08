@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "jobId": "job-sample-001",
+  "machineUuid": "123e4567-e89b-42d3-a456-426614174000",
+  "status": "succeeded",
+  "runtime": {
+    "id": "onebox-main",
+    "engine": "sing-box"
+  },
+  "artifactVersion": "1.2.0",
+  "instances": [
+    {
+      "id": "sample-vless",
+      "protocol": "vless",
+      "listen": {
+        "port": 443,
+        "transport": "tcp"
+      },
+      "tls": {
+        "security": "reality",
+        "sni": "www.example.com",
+        "publicKey": "sample-public-key",
+        "shortId": "01234567"
+      },
+      "credential": {
+        "type": "uuid",
+        "value": "123e4567-e89b-42d3-a456-426614174000",
+        "flow": "xtls-rprx-vision"
+      },
+      "resources": [
+        {
+          "type": "configFragment",
+          "id": "kns-sample-vless",
+          "owned": true,
+          "shared": false
+        }
+      ]
+    }
+  ]
+}

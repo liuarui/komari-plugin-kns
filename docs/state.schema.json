@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:komari-kns:state-v1",
+  "title": "Komari KNS state v1",
+  "type": "object",
+  "required": ["schemaVersion", "revision", "settings", "machines", "runtimes", "instances", "jobs", "profiles", "audit", "legacyNodes"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "revision": { "type": "integer", "minimum": 0 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "settings": { "type": "object" },
+    "machines": { "type": "array", "items": { "type": "object", "required": ["uuid", "policy"] } },
+    "runtimes": { "type": "array", "items": { "type": "object", "required": ["machineUuid", "id", "engine", "references"] } },
+    "instances": { "type": "array", "items": { "type": "object", "required": ["id", "machineUuid", "protocol", "listen", "enabled", "publish"] } },
+    "jobs": { "type": "array", "items": { "type": "object", "required": ["id", "action", "state", "machineUuid", "idempotencyKey"] } },
+    "profiles": { "type": "array", "items": { "type": "object", "required": ["id", "formats"], "anyOf": [{ "required": ["tokens"] }, { "required": ["salt", "hash"] }], "properties": { "tokens": { "type": "array", "items": { "type": "object", "required": ["id", "salt", "hash", "createdAt", "accessCount"], "properties": { "expiresAt": { "type": "string" }, "revokedAt": { "type": "string" }, "graceUntil": { "type": "string" }, "accessCount": { "type": "integer", "minimum": 0 }, "lastUsedAt": { "type": "string" } } } }, "machineUuids": { "type": ["array", "null"], "items": { "type": "string", "format": "uuid" } }, "excludeMachineUuids": { "type": "array", "items": { "type": "string", "format": "uuid" } }, "protocols": { "type": ["array", "null"], "items": { "enum": ["vless", "trojan", "vmess", "shadowsocks", "hysteria2", "tuic", "anytls"] } }, "includeTags": { "type": "array", "items": { "type": "string", "maxLength": 32 } }, "addressMode": { "enum": ["auto", "ipv4", "ipv6", "dual"] }, "sortBy": { "enum": ["name", "protocol", "endpoint", "machine"] }, "excludeUnhealthy": { "type": "boolean" } } } },
+    "audit": { "type": "array" },
+    "legacyNodes": { "type": "array" },
+    "lastSnapshotAt": { "type": "string" },
+    "snapshotPending": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

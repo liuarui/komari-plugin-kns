@@ -1,0 +1,30 @@
+{
+  "name": {
+    "zh_CN": "Komari KNS 节点与订阅",
+    "en": "Komari KNS Nodes and Subscriptions"
+  },
+  "short": "onebox-bridge",
+  "description": {
+    "zh_CN": "通过 Komari Agent 管理 OneBox 节点实例、机器策略、健康状态及多格式订阅。",
+    "en": "Manage OneBox node instances, machine policies, health, and multi-format subscriptions through Komari Agents."
+  },
+  "author": "Workspace",
+  "version": "1.0.0",
+  "entry": "script.js",
+  "permissions": {
+    "node": true,
+    "allowRoutes": true,
+    "allowSystemRPC": true,
+    "timeout": 120
+  },
+  "pages": [
+    {
+      "file": "pages/admin.html",
+      "title": {
+        "zh_CN": "OneBox 节点",
+        "en": "OneBox Nodes"
+      },
+      "visibility": "admin"
+    }
+  ]
+}

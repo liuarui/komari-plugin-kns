@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Komari KNS</title>
+  <style>
+    :root { color-scheme: light dark; font: 14px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    body { margin: 0; padding: 22px; color: inherit; background: transparent; }
+    main { max-width: 1240px; margin: auto; }
+    h1 { margin: 0; font-size: 1.6rem; } h2 { font-size: 1.12rem; margin: 0 0 14px; }
+    p { margin: 7px 0; } .muted { opacity: .7; } .small { font-size: .86rem; }
+    .tabs,.toolbar,.actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .tabs { margin: 18px 0 12px; border-bottom:1px solid color-mix(in srgb,currentColor 18%,transparent); }
+    .tab { color:inherit; background:transparent; border-radius:8px 8px 0 0; border-bottom:2px solid transparent; }
+    .tab.active { border-bottom-color:#3b82f6; color:#3b82f6; }
+    section.panel { display:none; } section.panel.active { display:block; }
+    .card { border:1px solid color-mix(in srgb,currentColor 16%,transparent); border-radius:12px; padding:16px; margin:12px 0; }
+    .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+    .metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+    .metric { border-radius:10px; padding:14px; background:color-mix(in srgb,currentColor 7%,transparent); }
+    .metric strong { display:block; font-size:1.45rem; }
+    label { display:block; font-weight:600; min-width:0; }
+    input,select,textarea { box-sizing:border-box; width:100%; margin-top:5px; padding:9px 10px; border:1px solid color-mix(in srgb,currentColor 24%,transparent); border-radius:8px; background:transparent; color:inherit; font:inherit; }
+    input[type=checkbox] { width:auto; margin-right:6px; }
+    button { border:0; border-radius:8px; padding:8px 12px; font:inherit; font-weight:600; color:#fff; background:#2563eb; cursor:pointer; }
+    button.secondary { background:color-mix(in srgb,currentColor 13%,transparent); color:inherit; }
+    button.danger { background:#b91c1c; } button:disabled { opacity:.55; cursor:wait; }
+    .table-wrap { overflow:auto; } table { border-collapse:collapse; width:100%; min-width:780px; }
+    th,td { text-align:left; vertical-align:top; padding:9px 8px; border-bottom:1px solid color-mix(in srgb,currentColor 12%,transparent); }
+    th { font-size:.84rem; opacity:.72; } td code { overflow-wrap:anywhere; }
+    .status { min-height:1.5em; margin:8px 0; } .error { color:#dc2626; } .success { color:#15803d; }
+    .notice { border-left:4px solid #d59b1a; padding:9px 12px; background:color-mix(in srgb,#e3aa22 11%,transparent); }
+    .secret { overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; padding:10px; border-radius:8px; background:color-mix(in srgb,currentColor 8%,transparent); }
+    .format-list { display:flex; flex-wrap:wrap; gap:12px; margin:8px 0; } .format-list label { font-weight:400; }
+    .profile-filters { margin:14px 0; } .profile-filters select[multiple] { min-height:100px; } .profile-filters small { display:block; margin-top:4px; }
+    .row-actions { display:flex; flex-wrap:wrap; gap:5px; }
+    @media(max-width:850px) { .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media(max-width:560px) { body { padding:12px; } .grid,.metrics { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Komari 节点系统（KNS）</h1>
+    <p class="muted">通过 Komari Agent 在探针机器上管理 OneBox 实例，并发布受订阅令牌保护的节点订阅。</p>
+    <p id="globalStatus" class="status muted" role="status"></p>
+  </header>
+  <nav class="tabs" aria-label="KNS 管理区">
+    <button class="tab active" data-panel="overview">总览</button><button class="tab" data-panel="machines">机器</button>
+    <button class="tab" data-panel="instances">实例</button><button class="tab" data-panel="jobs">任务</button>
+    <button class="tab" data-panel="subscriptions">订阅</button><button class="tab" data-panel="settings">设置与日志</button>
+  </nav>
+
+  <section id="overview" class="panel active">
+    <div class="metrics" id="metrics"></div>
+    <div class="card">
+      <h2>当前运行状态</h2>
+      <p id="overviewSummary" class="muted">读取中…</p>
+      <div class="actions"><button id="refresh" class="secondary">刷新数据</button><button id="export" class="secondary">导出加密备份</button></div>
+    </div>
+    <div class="card"><h2>安全边界</h2><p class="notice">每台探针默认禁止自动部署。先为机器启用部署策略，再逐次确认具体任务；Komari Agent 必须以 root 运行。KNS 不创建 DNS 记录、不修改云安全组。</p><p class="small muted">UDP / QUIC 协议的外部握手在当前插件约束下标记为 unverified；状态不会伪装成代理协议握手结果。</p></div>
+  </section>
+
+  <section id="machines" class="panel">
+    <div class="card"><div class="toolbar"><h2 style="margin-right:auto">Komari 探针与部署策略</h2><button id="reloadMachines" class="secondary">同步探针</button></div><p class="muted">机器 UUID 是稳定关联键。策略默认关闭；地址来源顺序为手动地址、DDNS 域名、Komari 上报地址。</p>
+      <div class="table-wrap"><table><thead><tr><th>探针</th><th>状态 / 地址</th><th>部署策略</th><th>Endpoint / 标签</th><th>操作</th></tr></thead><tbody id="machineRows"></tbody></table></div>
+    </div>
+  </section>
+
+  <section id="instances" class="panel">
+    <div class="card">
+      <h2>新建 OneBox 实例</h2>
+      <p class="muted">同一探针上的多个实例共用 OneBox sing-box Runtime。端口冲突按 TCP/UDP 传输检查。</p>
+      <div class="grid">
+        <label>目标探针（可多选）<select id="installMachines" multiple size="4"></select></label>
+        <label>协议<select id="protocol"><option value="vless">VLESS + Reality</option><option value="trojan">Trojan</option><option value="vmess">VMess</option><option value="shadowsocks">Shadowsocks</option><option value="hysteria2">Hysteria2</option><option value="tuic">TUIC</option><option value="anytls">AnyTLS</option></select></label>
+        <label>实例名称<input id="instanceName" maxlength="80" placeholder="例如：新加坡入口"></label>
+        <label>监听端口<input id="listenPort" type="number" min="1" max="65535" value="443"></label>
+        <label>监听地址<select id="listenAddress"><option value="::">双栈/IPv6 通配 ::</option><option value="0.0.0.0">IPv4 通配 0.0.0.0</option></select></label>
+        <label>TLS SNI<input id="sni" placeholder="node.example.com"></label>
+        <label id="ssMethodLabel">Shadowsocks 加密方法<select id="ssMethod"><option value="aes-128-gcm">aes-128-gcm</option><option value="aes-256-gcm">aes-256-gcm</option><option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option></select></label>
+        <label>Endpoint 覆盖（可选）<input id="endpointHost" placeholder="域名或公网 IP"></label>
+        <label>NAT 外部端口（可选）<input id="externalPort" type="number" min="1" max="65535" placeholder="留空时使用监听端口"></label>
+        <label>实例标签<input id="instanceTags" placeholder="例如：prod,sg"></label>
+        <label>2FA 验证码（如启用）<input id="twoFactor" type="password" inputmode="numeric" autocomplete="one-time-code"></label>
+      </div>
+      <div class="actions"><button id="installBatch">安装到所选机器</button><span id="installStatus" class="status muted"></span></div>
+    </div>
+    <div class="card"><h2>实例列表</h2><div class="table-wrap"><table><thead><tr><th>实例</th><th>协议 / Runtime</th><th>监听 → Endpoint</th><th>健康 / 发布</th><th>操作</th></tr></thead><tbody id="instanceRows"></tbody></table></div></div>
+  </section>
+
+  <section id="jobs" class="panel">
+    <div class="card"><h2>任务与结果</h2><p class="muted">任务完成需同时验证 Komari Agent 退出码、OneBox 结构化回调和远程 status。失败任务不会记录原始 stdout。</p><div class="table-wrap"><table><thead><tr><th>时间 / Job ID</th><th>目标 / 动作</th><th>状态</th><th>结果</th></tr></thead><tbody id="jobRows"></tbody></table></div></div>
+  </section>
+
+  <section id="subscriptions" class="panel">
+    <div class="card">
+      <h2>新建订阅档案</h2>
+      <div class="grid"><label>档案名称<input id="profileName" maxlength="80" value="默认订阅"></label><label>过期时间（可选）<input id="profileExpiry" type="datetime-local"></label></div>
+      <div id="createProfileFilters" class="profile-filters"></div>
+      <div class="format-list">
+        <label><input type="checkbox" value="uri" checked>URI 原始链接</label><label><input type="checkbox" value="mihomo-full" checked>Mihomo 完整配置</label><label><input type="checkbox" value="mihomo-provider" checked>Mihomo Provider</label><label><input type="checkbox" value="singbox-full" checked>sing-box 完整配置</label><label><input type="checkbox" value="singbox-outbounds" checked>sing-box Outbounds</label>
+      </div>
+      <p class="notice">令牌只在创建或轮换时显示一次；服务器状态中只保存带盐哈希。每个档案支持多个独立令牌。订阅 URL 含令牌，分享时请当作密码。</p>
+      <div class="actions"><button id="createProfile">生成订阅令牌</button></div>
+      <div id="newProfileResult" hidden><p class="small">URI 源（可接入 SubConverter）：</p><div id="sourceUrl" class="secret"></div><p class="small">Mihomo 原生订阅：</p><div id="nativeUrl" class="secret"></div><p class="small">SubConverter 输出：</p><div id="converterUrl" class="secret"></div><button id="copyNative" class="secondary">复制 Mihomo 链接</button></div>
+    </div>
+    <div class="card"><h2>订阅档案</h2><p class="muted">每个档案可管理多条独立令牌、格式白名单与节点筛选；轮换可设置 0–7 天宽限。</p><div id="profileRows"></div></div>
+  </section>
+
+  <section id="settings" class="panel">
+    <div class="card"><h2>服务与转换设置</h2><div class="grid"><label>Komari HTTPS 公网地址<input id="publicBaseUrl" type="url" placeholder="https://monitor.example.com"></label><label>SubConverter 接口<input id="subconverterUrl" type="url" value="http://23.146.156.234:25500/sub"></label><label>转换 target<select id="converterTarget"><option value="clash">clash</option><option value="singbox">singbox</option></select></label><label><input id="privateSite" type="checkbox">允许发布私有 Endpoint（仅内网订阅）</label></div><p class="notice">KNS 回调要求 HTTPS 公网地址。现有 SubConverter 默认 HTTP，HTTP 会暴露订阅令牌和节点凭据，建议为转换服务配置 HTTPS。</p><div class="actions"><button id="saveSettings">保存设置</button><span id="settingsStatus" class="status muted"></span></div><p class="small muted">OneBox 安装脚本固定到已审查的 Git commit 和 SHA256，不从可变 main 分支执行。</p><p id="installerPin" class="small"></p></div>
+    <div class="card"><h2>数据恢复</h2><p class="muted">每日保留 7 份状态和密钥备份。加密导入会替换当前 KNS 状态与密钥；操作前会保留本地恢复副本。</p><div class="toolbar"><select id="backupSelect"></select><button id="restoreBackup" class="danger">恢复所选备份</button><button id="exportState" class="secondary">导出加密备份</button><input id="importBackupFile" type="file" accept="application/json,.json"><button id="importBackup" class="danger">导入加密备份</button></div></div>
+    <div class="card"><h2>审计日志</h2><div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>详情</th></tr></thead><tbody id="auditRows"></tbody></table></div></div>
+    <div class="card"><h2>兼容性与运行限制</h2><p id="compatibility" class="muted">该插件依赖 Komari MoeJS 插件路由、定时任务、admin:listClients、admin:exec 和 admin:getSpecificTaskResult。最终需在目标 Komari Server/Agent 版本实测。</p></div>
+  </section>
+</main>
+<script>
+(() => {
+  "use strict";
+  const api = "/api/kns";
+  const $ = (id) => document.getElementById(id);
+  let state = null;
+  let lastCreatedNative = "";
+  let createProfileFiltersReady = false;
+
+  async function request(path, options = {}) {
+    const response = await fetch(api + path, Object.assign({ credentials: "same-origin", cache: "no-store" }, options));
+    const type = response.headers.get("content-type") || "";
+    const body = type.includes("application/json") ? await response.json() : { error: { message: await response.text() } };
+    if (!response.ok) throw new Error(body.error && body.error.message || body.message || ("HTTP " + response.status));
+    return body;
+  }
+  function setStatus(id, message, kind = "muted") { const element = $(id); if (!element) return; element.textContent = message || ""; element.className = "status " + kind; }
+  function el(tag, text, cls) { const node = document.createElement(tag); if (text != null) node.textContent = String(text); if (cls) node.className = cls; return node; }
+  function actionButton(text, action, css = "secondary") { const button = el("button", text, css); button.type = "button"; button.addEventListener("click", action); return button; }
+  async function postAction(body) { return request("/admin/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
+  function idempotencyKey() { return (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)); }
+
+  function renderOverview() {
+    const online = state.machines.filter((m) => m.online === true).length;
+    const active = state.instances.filter((i) => i.enabled && !i.deletedAt).length;
+    const pending = state.jobs.filter((j) => ["authorized", "dispatched", "running", "verifying"].includes(j.state)).length;
+    const profiles = state.profiles.filter((p) => !p.revokedAt).length;
+    const items = [["探针", state.machines.length, online + " 在线"], ["实例", active, state.instances.length + " 登记"], ["进行中任务", pending, "需回调与远程状态双重验证"], ["订阅档案", profiles, "独立令牌"]];
+    const host = $("metrics"); host.replaceChildren(...items.map(([label, value, note]) => { const box=el("div",null,"metric"); box.append(el("span",label,"muted"),el("strong",value),el("span",note,"small muted")); return box; }));
+    $("overviewSummary").textContent = "数据 revision " + state.revision + " · 最近更新 " + (state.updatedAt || "—") + " · 共享 Runtime: sing-box / onebox-main。";
+  }
+
+  async function updatePolicy(uuid, row) {
+    const machine = state.machines.find((item) => item.uuid === uuid);
+    const deployAllowed = row.querySelector("[data-policy=deploy]").checked;
+    const addressMode = row.querySelector("[data-policy=mode]").value;
+    const manualAddress = row.querySelector("[data-policy=manual]").value.trim();
+    const ddnsHostname = row.querySelector("[data-policy=ddns]").value.trim();
+    const tags = row.querySelector("[data-policy=tags]").value.split(",").map((x) => x.trim()).filter(Boolean);
+    try {
+      await postAction({ action:"machine.policy.update", machineUuid:uuid, policy:{ deployAllowed,addressMode,manualAddress,ddnsHostname,tags } });
+      setStatus("globalStatus", "已保存 " + machine.name + " 的机器策略。", "success"); await refresh();
+    } catch (error) { setStatus("globalStatus", error.message, "error"); }
+  }
+
+  function renderMachines() {
+    const body=$("machineRows"); body.replaceChildren();
+    for (const machine of state.machines) {
+      const row=document.createElement("tr");
+      const identity=el("td"); identity.append(el("strong",machine.name),el("small",machine.uuid,"muted small"),el("small",[machine.os,machine.arch,machine.region].filter(Boolean).join(" · "),"muted small"));
+      const observed=el("td"); observed.append(el("span",machine.online===true?"在线":machine.online===false?"离线":"未知",machine.online===true?"success":"muted"),el("small","IPv4: "+(machine.ipv4||"—"),"muted small"),el("small","IPv6: "+(machine.ipv6||"—"),"muted small"),el("small","来源 IP: "+(machine.sourceIp||"—"),"muted small"));
+      const policy=el("td"); const deploy=document.createElement("input"); deploy.type="checkbox"; deploy.checked=!!(machine.policy&&machine.policy.deployAllowed); deploy.dataset.policy="deploy"; const deployLabel=el("label","允许部署"); deployLabel.prepend(deploy); policy.append(deployLabel); const mode=document.createElement("select"); mode.dataset.policy="mode"; [["auto","自动"],["ipv4","IPv4"],["ipv6","IPv6"],["dual","双栈"]].forEach(([v,t])=>{const o=document.createElement("option");o.value=v;o.textContent=t;mode.append(o);}); mode.value=machine.policy&&machine.policy.addressMode||"auto"; policy.append(mode);
+      const endpoint=el("td"); const manual=document.createElement("input"); manual.placeholder="手动公网 IP / 域名"; manual.value=machine.policy&&machine.policy.manualAddress||""; manual.dataset.policy="manual"; const ddns=document.createElement("input"); ddns.placeholder="DDNS 域名"; ddns.value=machine.policy&&machine.policy.ddnsHostname||""; ddns.dataset.policy="ddns"; const tags=document.createElement("input"); tags.placeholder="标签，逗号分隔"; tags.value=(machine.policy&&machine.policy.tags||[]).join(","); tags.dataset.policy="tags"; endpoint.append(manual,ddns,tags);
+      const ops=el("td"); ops.append(actionButton("保存",()=>updatePolicy(machine.uuid,row))); row.append(identity,observed,policy,endpoint,ops); body.append(row);
+    }
+    const select=$("installMachines"); const selected=Array.from(select.selectedOptions).map((o)=>o.value); select.replaceChildren();
+    state.machines.forEach((machine)=>{const option=el("option",machine.name+" · "+machine.uuid.slice(0,8)); option.value=machine.uuid; option.disabled=!(machine.policy&&machine.policy.deployAllowed); option.selected=selected.includes(option.value); select.append(option);});
+  }
+
+  async function instanceAction(instance, action) {
+    const prompts={enable:"启用此 OneBox 实例并重新加入共享服务？",disable:"停用此实例会从共享 sing-box Runtime 中移除它的 inbound。",uninstall:"卸载将删除此 KNS 实例和它拥有的资源，不会卸载共享 OneBox Runtime。",reinstall:"按当前登记配置重装此实例？"};
+    if (action === "uninstall") {
+      const remote=instance.remoteStatus||{};const checked=Date.parse(remote.checkedAt||"");
+      if(remote.installed!==true||!remote.uninstallPreview||remote.uninstallPreview.complete!==true||!Array.isArray(remote.resources)||!remote.resources.length||!Number.isFinite(checked)||Date.now()-checked>5*60*1000){setStatus("globalStatus","卸载前需要确认实例仍已登记，并取得最新的 OneBox 资源预览。先点“查远端状态”，等待任务成功后刷新页面。","error");return;}
+      const resources=remote.resources.map((item)=>"• "+item.type+" / "+item.id+" — "+item.action+(item.shared?"（共享，引用 "+item.referenceCount+"）":"")).join("\n");
+      const serviceImpact=remote.uninstallPreview.serviceImpact==="reload"?"OneBox 共享服务会重载，其他节点可能短暂重连。":"服务影响未能确认。";
+      const preview="卸载影响预览（核查于 "+new Date(checked).toLocaleString()+"）\n"+serviceImpact+"\n\n"+resources+"\n\n继续卸载？";
+      if(!confirm(preview))return;
+    } else if (action !== "status" && !confirm(prompts[action]||"确认继续？")) return;
+    const twoFactor=action === "status" ? "" : (prompt("如果 Komari 启用了 2FA，请输入验证码；否则留空。","")||"");
+    try { await postAction({ action:action === "status" ? "instance.status" : action,machineUuid:instance.machineUuid,instanceId:instance.id,confirm:true,twoFactorCode:twoFactor,idempotencyKey:idempotencyKey() }); setStatus("globalStatus", action === "status" ? "已提交远端状态核查。" : "已发送 " + action + " 任务。", "success"); await refresh(); }
+    catch(error){setStatus("globalStatus",error.message,"error");}
+  }
+
+  async function reconfigureInstance(instance) {
+    const port=Number(prompt("新的监听端口：",String(instance.listen.port)));if(!port)return;
+    const options=Object.assign({},instance.options||{});
+    if(instance.protocol==="vless")options.security="reality";
+    if(["trojan","vmess","hysteria2","tuic","anytls"].includes(instance.protocol))options.sni=prompt("TLS SNI：",options.sni||instance.tls&&instance.tls.sni||"")||"";
+    if(instance.protocol==="shadowsocks")options.method=prompt("Shadowsocks method：",options.method||"aes-128-gcm")||"";
+    const twoFactor=prompt("如果 Komari 启用了 2FA，请输入验证码；否则留空。","")||"";
+    try{await postAction({action:"reconfigure",machineUuid:instance.machineUuid,instanceId:instance.id,protocol:instance.protocol,listenPort:port,listenAddress:instance.listen.address||"::",options,confirm:true,twoFactorCode:twoFactor,idempotencyKey:idempotencyKey()});setStatus("globalStatus","已提交重配置任务。","success");await refresh();}catch(error){setStatus("globalStatus",error.message,"error");}
+  }
+
+  function renderInstances() {
+    const body=$("instanceRows"); body.replaceChildren();
+    for(const instance of state.instances.filter((i)=>!i.deletedAt).slice().reverse()){
+      const machine=state.machines.find((m)=>m.uuid===instance.machineUuid)||{}; const row=document.createElement("tr");
+      const id=el("td"); id.append(el("strong",instance.name||instance.id),el("small",instance.id,"muted small"),el("small",machine.name||instance.machineUuid,"muted small"));
+      const proto=el("td"); proto.append(el("span",instance.protocol),el("small",(instance.runtimeEngine||"sing-box")+" / "+(instance.runtimeId||"onebox-main"),"muted small"));
+      const endpoint=el("td"); endpoint.append(el("code",(instance.listen&&instance.listen.address||"::")+":"+(instance.listen&&instance.listen.port||"?")),el("small","→ "+(instance.endpoint&&instance.endpoint.host||"未配置")+":"+(instance.endpoint&&instance.endpoint.port||"?"),"muted small"),el("small","来源："+(instance.endpoint&&instance.endpoint.source||"—"),"muted small"));
+      const stateCell=el("td"); stateCell.append(el("span",instance.health&&instance.health.state||"unknown",instance.health&&instance.health.state==="healthy"?"success":"muted")); const pub=document.createElement("input");pub.type="checkbox";pub.checked=instance.publish!==false;pub.title="加入订阅";pub.addEventListener("change",async()=>{try{await postAction({action:"instance.publish.update",instanceId:instance.id,publish:pub.checked});await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}});const pubLabel=el("label","加入订阅");pubLabel.prepend(pub);stateCell.append(pubLabel,el("small","探测级别："+(instance.health&&instance.health.level||"L0"),"muted small"));if(instance.remoteStatus&&instance.remoteStatus.checkedAt)stateCell.append(el("small","远端资源核查："+instance.remoteStatus.checkedAt,"muted small"));
+      const ops=el("td"); const rowButtons=el("div",null,"row-actions"); rowButtons.append(actionButton("查远端状态",()=>instanceAction(instance,"status")));rowButtons.append(actionButton("重配",()=>reconfigureInstance(instance)));if(instance.enabled) rowButtons.append(actionButton("停用",()=>instanceAction(instance,"disable"))); else rowButtons.append(actionButton("启用",()=>instanceAction(instance,"enable"))); rowButtons.append(actionButton("重装",()=>instanceAction(instance,"reinstall"))); rowButtons.append(actionButton("卸载",()=>instanceAction(instance,"uninstall"),"danger")); ops.append(rowButtons); row.append(id,proto,endpoint,stateCell,ops); body.append(row);
+    }
+  }
+
+  function renderJobs(){
+    const body=$("jobRows");body.replaceChildren();
+    for(const job of state.jobs){const row=document.createElement("tr");row.append(el("td",job.createdAt||"—"),el("td",(job.machineName||job.machineUuid)+" · "+job.instanceId+" · "+job.action),el("td",job.state),el("td",job.message||"—"));body.append(row);}
+  }
+
+  function profileFilterEditor(profile, prefix) {
+    const editor=el("div",null,"profile-filters"); const grid=el("div",null,"grid");
+    const addMulti=(title,suffix,options,selected,hint)=>{const label=el("label",title);const select=document.createElement("select");select.id=prefix+suffix;select.multiple=true;select.size=4;const chosen=new Set(selected||[]);for(const [value,text] of options){const option=el("option",text);option.value=value;option.selected=chosen.has(value);select.append(option);}if(suffix==="-machines"||suffix==="-exclude-machines")select.dataset.profileMachines="true";label.append(select,el("small",hint,"small muted"));grid.append(label);};
+    const addSelect=(title,suffix,options,value)=>{const label=el("label",title);const select=document.createElement("select");select.id=prefix+suffix;for(const [optionValue,text] of options){const option=el("option",text);option.value=optionValue;option.selected=optionValue===value;select.append(option);}label.append(select);grid.append(label);};
+    const addText=(title,suffix,value,hint)=>{const label=el("label",title);const input=document.createElement("input");input.id=prefix+suffix;input.value=value||"";input.placeholder="逗号分隔";label.append(input,el("small",hint,"small muted"));grid.append(label);};
+    const machineOptions=((state&&state.machines)||[]).map((machine)=>[machine.uuid,(machine.name||machine.uuid)+" · "+machine.uuid.slice(0,8)]);
+    const protocolOptions=[["vless","VLESS"],["trojan","Trojan"],["vmess","VMess"],["shadowsocks","Shadowsocks"],["hysteria2","Hysteria2"],["tuic","TUIC"],["anytls","AnyTLS"]];
+    addMulti("包含机器（留空表示全部）","-machines",machineOptions,profile.machineUuids,"只发布所选机器的节点。");
+    addMulti("排除机器","-exclude-machines",machineOptions,profile.excludeMachineUuids,"该规则优先于包含机器。");
+    addMulti("协议（留空表示全部）","-protocols",protocolOptions,profile.protocols,"可选择一种或多种协议。");
+    addText("包含标签（任一匹配）","-tags",(profile.includeTags||[]).join(","),"与实例标签匹配。");
+    addSelect("地址族","-address",[["auto","自动 / 保留全部"],["ipv4","IPv4 地址"],["ipv6","IPv6 地址"],["dual","双栈 / 保留全部"]],profile.addressMode||"auto");
+    addSelect("排序方式","-sort",[["name","节点名称"],["protocol","协议"],["endpoint","Endpoint"],["machine","机器名称"]],profile.sortBy||"name");
+    const healthLabel=el("label","健康状态");const health=document.createElement("select");health.id=prefix+"-health";[["exclude","排除不健康节点"],["include","包含所有已发布节点"]].forEach(([value,text])=>{const option=el("option",text);option.value=value;option.selected=(profile.excludeUnhealthy!==false)===(value==="exclude");health.append(option);});healthLabel.append(health);grid.append(healthLabel);
+    editor.append(grid);return editor;
+  }
+
+  function readProfileFilters(prefix) {
+    const selected=(suffix)=>Array.from($(prefix+suffix).selectedOptions).map((option)=>option.value);
+    return {machineUuids:selected("-machines"),excludeMachineUuids:selected("-exclude-machines"),protocols:selected("-protocols"),includeTags:$(prefix+"-tags").value.split(",").map((tag)=>tag.trim()).filter(Boolean),addressMode:$(prefix+"-address").value,sortBy:$(prefix+"-sort").value,excludeUnhealthy:$(prefix+"-health").value==="exclude"};
+  }
+
+  function refreshProfileMachineOptions() {
+    const machines=((state&&state.machines)||[]).map((machine)=>[machine.uuid,(machine.name||machine.uuid)+" · "+machine.uuid.slice(0,8)]);
+    document.querySelectorAll("select[data-profile-machines]").forEach((select)=>{
+      const selected=new Set(Array.from(select.selectedOptions).map((option)=>option.value));const options=machines.slice();
+      selected.forEach((uuid)=>{if(!options.some(([value])=>value===uuid))options.push([uuid,uuid+" · 离线/未知"]);});
+      select.replaceChildren();for(const [value,text] of options){const option=el("option",text);option.value=value;option.selected=selected.has(value);select.append(option);}
+    });
+  }
+
+  function renderProfiles(){
+    const body=$("profileRows");if(body.querySelector("[data-profile-editor]"))return;body.replaceChildren();
+    for(const profile of state.profiles){
+      const card=el("div",null,"card");const title=el("h3",profile.name);
+      const machineNames=new Map((state.machines||[]).map((machine)=>[machine.uuid,machine.name||machine.uuid]));
+      const allow=(profile.machineUuids||[]).map((uuid)=>machineNames.get(uuid)||uuid);const deny=(profile.excludeMachineUuids||[]).map((uuid)=>machineNames.get(uuid)||uuid);
+      const filters="机器："+(allow.length?allow.join("、"):"全部")+(deny.length?"；排除 "+deny.join("、"):"")+" · 协议："+((profile.protocols||[]).join("、")||"全部")+" · 标签："+((profile.includeTags||[]).join("、")||"全部")+" · 地址："+(profile.addressMode||"auto")+" · 排序："+(profile.sortBy||"name")+" · 健康："+(profile.excludeUnhealthy===false?"包含不健康":"排除不健康");
+      card.append(title,el("p","ID："+profile.id,"small muted"),el("p","格式："+(profile.formats||[]).join("、")+" · 过期："+(profile.expiresAt||"永不过期"),"small muted"),el("p",filters,"small muted"));
+      if(profile.revokedAt)card.append(el("p","已撤销："+profile.revokedAt,"error"));
+      const buttons=el("div",null,"actions");
+      for(const token of profile.tokens||[]){
+        const tokenId=String(token.id||"legacy-token");const shortId=tokenId.slice(-12);const expired=token.expiresAt&&Date.parse(token.expiresAt)<=Date.now();
+        const tokenStatus=token.revokedAt?"已撤销":expired?"已过期":token.graceUntil?"轮换宽限至 "+token.graceUntil:"有效";
+        card.append(el("p","令牌 "+shortId+" · "+tokenStatus+" · "+(token.accessCount||0)+" 次访问 · 最近 "+(token.lastUsedAt||"从未"),"small muted"));
+        if(!token.revokedAt&&!expired&&!profile.revokedAt)buttons.append(actionButton("撤销令牌 "+shortId,async()=>{if(!confirm("仅撤销此令牌，其他令牌继续有效。继续？"))return;try{await postAction({action:"profile.token.revoke",profileId:profile.id,tokenId});await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}} ,"danger"));
+      }
+      buttons.append(actionButton("编辑筛选",()=>{const existing=card.querySelector("[data-profile-editor]");if(existing){existing.remove();return;}const editor=profileFilterEditor(profile,"edit-"+profile.id);editor.dataset.profileEditor="true";const actions=el("div",null,"actions");actions.append(actionButton("保存筛选",async()=>{try{await postAction(Object.assign({action:"profile.update",profileId:profile.id},readProfileFilters("edit-"+profile.id)));editor.remove();await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}}));actions.append(actionButton("取消",()=>editor.remove()));editor.append(actions);card.insertBefore(editor,buttons);refreshProfileMachineOptions(); }));
+      buttons.append(actionButton("新增令牌",async()=>{const expiry=prompt("令牌到期时间（ISO 8601；留空使用档案有效期）","");if(expiry===null)return;try{const result=await postAction({action:"profile.token.create",profileId:profile.id,expiresAt:expiry.trim()||undefined});showSecret(result);await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}}));
+      buttons.append(actionButton("轮换令牌",async()=>{const grace=prompt("旧令牌继续有效的宽限秒数（0–604800）","0");if(grace===null)return;if(!confirm("创建新令牌并在宽限期后停用当前令牌。继续？"))return;try{const result=await postAction({action:"profile.rotate",profileId:profile.id,graceSeconds:Number(grace)});showSecret(result);await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}}));
+      buttons.append(actionButton("撤销",async()=>{if(!confirm("撤销此档案的全部订阅链接？"))return;try{await postAction({action:"profile.revoke",profileId:profile.id});await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}},"danger"));card.append(buttons);body.append(card);
+    }
+  }
+
+  function renderSettings(){
+    const settings=state.settings||{}; $("publicBaseUrl").value=settings.publicBaseUrl||"";$("subconverterUrl").value=settings.converterUrl||"http://23.146.156.234:25500/sub";$("converterTarget").value=settings.converterTarget||"clash";$("privateSite").checked=!!settings.privateSite;
+    $("installerPin").textContent="OneBox commit: "+(settings.oneboxScriptUrl||"")+" · SHA256: "+(settings.oneboxScriptSha256||"");
+    const backups=$("backupSelect");backups.replaceChildren();(state.backups||[]).forEach((name)=>{const option=el("option",name);option.value=name;backups.append(option);});
+  }
+  function renderAudit(){const body=$("auditRows");body.replaceChildren();for(const event of (state.audit||[]).slice().reverse().slice(0,200)){const row=document.createElement("tr");row.append(el("td",event.at),el("td",event.actor),el("td",event.action),el("td",JSON.stringify(event.details||{})));body.append(row);}}
+  function render(){if(!state)return;if(!createProfileFiltersReady){$("createProfileFilters").append(profileFilterEditor({machineUuids:[],excludeMachineUuids:[],protocols:[],includeTags:[],addressMode:"auto",sortBy:"name",excludeUnhealthy:true},"createProfileFilter"));createProfileFiltersReady=true;}renderOverview();renderMachines();renderInstances();renderJobs();renderProfiles();renderSettings();renderAudit();refreshProfileMachineOptions();}
+
+  async function refresh(){setStatus("globalStatus","正在同步 Komari 探针…");try{state=await request("/admin/state");render();setStatus("globalStatus","数据已刷新 · revision "+state.revision,"success");}catch(error){setStatus("globalStatus",error.message,"error");}}
+  function showSecret(result){$("newProfileResult").hidden=false;$("sourceUrl").textContent=result.tokenUrl||"";$("nativeUrl").textContent=result.nativeUrl||"";$("converterUrl").textContent=result.converterUrl||"";lastCreatedNative=result.nativeUrl||"";$("newProfileResult").scrollIntoView({behavior:"smooth",block:"nearest"});}
+  async function exportEncryptedBackup(){const passphrase=prompt("设置独立备份口令（至少 12 个字符）。此口令不会保存在 KNS 中。","");if(passphrase===null)return;if(passphrase.length<12){setStatus("globalStatus","备份口令至少需要 12 个字符。","error");return;}const confirmation=prompt("再次输入备份口令以确认。","");if(confirmation===null)return;if(passphrase!==confirmation){setStatus("globalStatus","两次输入的口令不一致。","error");return;}try{const envelope=await postAction({action:"backup.export",passphrase});const blob=new Blob([JSON.stringify(envelope,null,2)],{type:"application/json"});const url=URL.createObjectURL(blob);const link=document.createElement("a");link.href=url;link.download="kns-encrypted-export.json";link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setStatus("settingsStatus","加密备份已下载。请把口令保存在独立的密码管理器中。","success");}catch(error){setStatus("globalStatus",error.message,"error");}}
+  async function importEncryptedBackup(){const file=$("importBackupFile").files[0];if(!file){setStatus("settingsStatus","先选择 KNS 加密备份文件。","error");return;}const passphrase=prompt("输入该备份的独立口令。","");if(passphrase===null)return;if(!confirm("导入会替换当前 KNS 状态和密钥，并保留本地恢复副本。继续？"))return;try{const envelope=JSON.parse(await file.text());await request("/admin/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({envelope,passphrase})});$("importBackupFile").value="";await refresh();setStatus("settingsStatus","加密备份已导入。","success");}catch(error){setStatus("settingsStatus",error.message,"error");}}
+
+  document.querySelectorAll(".tab").forEach((tab)=>tab.addEventListener("click",()=>{document.querySelectorAll(".tab").forEach((x)=>x.classList.toggle("active",x===tab));document.querySelectorAll("section.panel").forEach((x)=>x.classList.toggle("active",x.id===tab.dataset.panel));}));
+  $("refresh").addEventListener("click",refresh);$("reloadMachines").addEventListener("click",refresh);$("export").addEventListener("click",exportEncryptedBackup);$("exportState").addEventListener("click",exportEncryptedBackup);$("importBackup").addEventListener("click",importEncryptedBackup);
+  $("protocol").addEventListener("change",()=>{$("ssMethodLabel").style.display=$("protocol").value==="shadowsocks"?"block":"none";});$("ssMethodLabel").style.display="none";
+  $("installBatch").addEventListener("click",async()=>{
+    const machines=Array.from($("installMachines").selectedOptions).map((o)=>o.value);if(!machines.length){setStatus("installStatus","先选择一台或多台已允许部署的探针。","error");return;}
+    const protocol=$("protocol").value;const options={};if(protocol==="vless")options.security="reality";if(["trojan","vmess","hysteria2","tuic","anytls"].includes(protocol))options.sni=$("sni").value.trim();if(protocol==="shadowsocks")options.method=$("ssMethod").value;
+    const warning="将在 "+machines.length+" 台 root Agent 主机上运行固定 SHA256 的 OneBox 适配脚本，可能修改共享 sing-box 配置和本机防火墙。继续？";if(!confirm(warning))return;
+    const twoFactor=$("twoFactor").value.trim();const tags=$("instanceTags").value.split(",").map((x)=>x.trim()).filter(Boolean);const results=[];
+    for(const machineUuid of machines){try{results.push(await postAction({action:"install",machineUuid,protocol,listenPort:Number($("listenPort").value),listenAddress:$("listenAddress").value,name:$("instanceName").value.trim(),options,endpointHost:$("endpointHost").value.trim(),externalPort:Number($("externalPort").value)||undefined,tags,twoFactorCode:twoFactor,confirm:true,idempotencyKey:idempotencyKey()}));}catch(error){results.push({error:error.message,machineUuid});}}
+    $("twoFactor").value="";const failed=results.filter((x)=>x.error||x.job&&x.job.state==="failed");setStatus("installStatus",(results.length-failed.length)+" 项已提交；"+failed.length+" 项失败。",failed.length?"error":"success");await refresh();
+  });
+  $("createProfile").addEventListener("click",async()=>{try{const formats=Array.from(document.querySelectorAll(".format-list input:checked")).map((x)=>x.value);const expiry=$("profileExpiry").value?new Date($("profileExpiry").value).toISOString():"";const result=await postAction(Object.assign({action:"profile.create",name:$("profileName").value.trim(),formats,expiresAt:expiry||undefined},readProfileFilters("createProfileFilter")));showSecret(result);await refresh();}catch(error){setStatus("globalStatus",error.message,"error");}});
+  $("copyNative").addEventListener("click",async()=>{try{await navigator.clipboard.writeText(lastCreatedNative);setStatus("globalStatus","已复制订阅地址。","success");}catch(_){setStatus("globalStatus","浏览器未授予剪贴板权限，请手动复制。","error");}});
+  $("saveSettings").addEventListener("click",async()=>{try{await postAction({action:"settings.update",publicBaseUrl:$("publicBaseUrl").value.trim(),converterUrl:$("subconverterUrl").value.trim(),converterTarget:$("converterTarget").value,privateSite:$("privateSite").checked});setStatus("settingsStatus","设置已保存。","success");await refresh();}catch(error){setStatus("settingsStatus",error.message,"error");}});
+  $("restoreBackup").addEventListener("click",async()=>{const name=$("backupSelect").value;if(!name)return; if(!confirm("恢复 "+name+" 会替换当前状态文件。继续？"))return;try{await postAction({action:"backup.restore",name});setStatus("settingsStatus","备份已恢复。","success");await refresh();}catch(error){setStatus("settingsStatus",error.message,"error");}});
+  refresh();setInterval(refresh,15000);
+})();
+</script>
+</body>
+</html>

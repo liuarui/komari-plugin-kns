@@ -1,0 +1,7 @@
+vless://123e4567-e89b-42d3-a456-426614174000@node.example.com:443?encryption=none&flow=xtls-rprx-vision&fp=chrome&pbk=sample-public-key&security=reality&sid=01234567&sni=www.example.com&type=tcp#sample-vless
+trojan://demo-password-only@node.example.com:444?alpn=h2%2Chttp%2F1.1&security=tls&sni=www.example.com&type=tcp#sample-trojan
+vmess://eyJ2IjoiMiIsInBzIjoic2FtcGxlLXZtZXNzIiwiYWRkIjoibm9kZS5leGFtcGxlLmNvbSIsInBvcnQiOiI0NDUiLCJpZCI6IjEyM2U0NTY3LWU4OWItNDJkMy1hNDU2LTQyNjYxNDE3NDAwMCIsImFpZCI6IjAiLCJzY3kiOiJhdXRvIiwibmV0IjoidGNwIiwidHlwZSI6Im5vbmUiLCJob3N0Ijoid3d3LmV4YW1wbGUuY29tIiwidGxzIjoidGxzIiwiYWxwbiI6ImgyLGh0dHAvMS4xIiwiaW5zZWN1cmUiOiIifQ==
+ss://YWVzLTEyOC1nY206ZGVtby1wYXNzd29yZC1vbmx5@node.example.com:446#sample-shadowsocks
+hysteria2://demo-password-only@node.example.com:447?alpn=h3&insecure=0&sni=www.example.com#sample-hysteria2
+tuic://123e4567-e89b-42d3-a456-426614174000:demo-password-only@node.example.com:448?alpn=h3&sni=www.example.com#sample-tuic
+anytls://demo-password-only@node.example.com:449?alpn=h2%2Chttp%2F1.1&security=tls&sni=www.example.com&type=tcp#sample-anytls

@@ -1,0 +1,75 @@
+proxies:
+-
+  name: "sample-vless"
+  type: "vless"
+  server: "node.example.com"
+  port: 443
+  uuid: "123e4567-e89b-42d3-a456-426614174000"
+  flow: "xtls-rprx-vision"
+  network: "tcp"
+  udp: true
+  tls: true
+  servername: "www.example.com"
+  client-fingerprint: "chrome"
+  reality-opts:
+    "public-key": "sample-public-key"
+    "short-id": "01234567"
+-
+  name: "sample-trojan"
+  type: "trojan"
+  server: "node.example.com"
+  port: 444
+  password: "demo-password-only"
+  sni: "www.example.com"
+  udp: true
+  alpn: ["h2", "http/1.1"]
+  tls: true
+-
+  name: "sample-vmess"
+  type: "vmess"
+  server: "node.example.com"
+  port: 445
+  uuid: "123e4567-e89b-42d3-a456-426614174000"
+  alterId: 0
+  cipher: "auto"
+  network: "tcp"
+  tls: true
+  servername: "www.example.com"
+  alpn: ["h2", "http/1.1"]
+-
+  name: "sample-shadowsocks"
+  type: "shadowsocks"
+  server: "node.example.com"
+  port: 446
+  cipher: "aes-128-gcm"
+  password: "demo-password-only"
+  udp: true
+-
+  name: "sample-hysteria2"
+  type: "hysteria2"
+  server: "node.example.com"
+  port: 447
+  password: "demo-password-only"
+  sni: "www.example.com"
+  alpn: ["h3"]
+-
+  name: "sample-tuic"
+  type: "tuic"
+  server: "node.example.com"
+  port: 448
+  uuid: "123e4567-e89b-42d3-a456-426614174000"
+  password: "demo-password-only"
+  sni: "www.example.com"
+  congestion-controller: "bbr"
+  udp-relay-mode: "native"
+  alpn: ["h3"]
+-
+  name: "sample-anytls"
+  type: "anytls"
+  server: "node.example.com"
+  port: 449
+  password: "demo-password-only"
+  sni: "www.example.com"
+  udp: true
+  alpn: ["h2", "http/1.1"]
+  tls: true

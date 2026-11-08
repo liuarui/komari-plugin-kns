@@ -1,0 +1,28 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "Komari KNS",
+      "version": "1.0.0"
+    }
+  },
+  "components": [],
+  "dependencies": [],
+  "properties": [
+    {
+      "name": "runtime.dependencies",
+      "value": "[]"
+    },
+    {
+      "name": "dependency-lock.sha256",
+      "value": "686a543d76d31e2c66e7894ea18bf3833519265f6a28b2769286f9b304810c46"
+    },
+    {
+      "name": "packaging.dependencies",
+      "value": "[]"
+    }
+  ]
+}
