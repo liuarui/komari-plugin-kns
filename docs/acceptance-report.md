@@ -2,6 +2,12 @@
 
 日期：2026-11-08（工作区日期）。本报告区分本地模拟/静态检查与目标环境实测。交互整改 UX 1.0 的 40 条记录按其 §17 逐项列于 `docs/ux-acceptance-t40.md`；下方 AT-01 至 AT-32 是 v1.1.5 既有 OneBox/Komari 目标环境验收记录，不与本轮 UI 模拟混为一谈。
 
+## v1.2.2 在线状态与反代兼容回归
+
+本地 `node --test tests/*.test.js`：26 项通过，0 失败。新增覆盖 Komari `common:getNodesLatestStatus` 在线状态合并、反代改写上游 Host 时的 `Sec-Fetch-Site: same-origin` 写入，以及跨站/缺少 Origin/HTTP 来源仍被拒绝。运行时 JavaScript 语法检查、ZIP CRC 和 SHA-256 均通过；`dist/onebox-bridge.zip` SHA-256 为 `ebc777d47b373b1aa3a0ae27c115ae2da5bf4c4df0ccf27410f9be3ee7fb4d64`。
+
+目标后台在本轮只读查看到 Komari Server `1.6.1 (96cf0f7)`、插件管理页的 KNS `1.2.1`。Komari 仪表板当时显示 `0/31` 在线；KNS 1.2.1 仍将目标“free 月抛三网”显示为“未知”，因此定位出在线 RPC 调用缺少 `common:` 命名空间。1.2.2 已修正并打包，但因 Mac 锁屏，尚未上传 1.2.2、保存 KNS HTTPS 公网地址或发起目标只读扫描。未派发 OneBox 远程任务，也未更改探针。
+
 ## v1.2.0 交互整改回归
 
 本轮执行 `node --test tests/*.test.js`：26 项测试通过，0 失败。覆盖首次初始化门禁、Schema 1 迁移、revision 冲突、订阅与状态逻辑、批次幂等、有限任务重试的同键复用/异键拒绝/禁止链式重试、服务端卸载预览版本不匹配拒绝，以及 state/key 备份恢复。脚本语法、管理页内嵌 JavaScript、manifest/schema/依赖锁 JSON 检查通过；管理页未发现原生 `prompt()` 或 `confirm()` 调用。

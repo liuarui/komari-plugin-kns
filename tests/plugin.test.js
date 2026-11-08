@@ -24,11 +24,13 @@ test("admin policy, task callback, remote status, and protected URI subscription
   let execCalls = 0;
   let nextExecError = null;
   let failListClients = false;
+  let onlineStatus = true;
   const mockServer = {
     route(method, url, handler) { routes.set(method + " " + url, handler); },
     cron(expression, handler) { crons.push({ expression, handler }); },
     async call(method, params) {
-      if (method === "admin:listClients") { if (failListClients) throw new Error("simulated probe sync failure"); return [{ uuid: machineUuid, name: "test-node", ipv4: "1.2.3.4", online: true, os: "linux", arch: "amd64" }]; }
+      if (method === "admin:listClients") { if (failListClients) throw new Error("simulated probe sync failure"); return [{ uuid: machineUuid, name: "test-node", ipv4: "1.2.3.4", os: "linux", arch: "amd64" }]; }
+      if (method === "common:getNodesLatestStatus") return { [machineUuid]: { online: onlineStatus } };
       if (method === "admin:exec") { execParams = params; execCalls += 1; if (nextExecError) { const error = nextExecError; nextExecError = null; throw error; } return { task_id: "task-1" }; }
       if (method === "admin:getSpecificTaskResult") return taskResult;
       throw new Error("unexpected RPC " + method);
@@ -52,6 +54,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const initial = JSON.parse(stateRes.body);
     assert.equal(initial.machines.length, 1);
     assert.equal(initial.machines[0].policy.deployAllowed, false);
+    assert.equal(initial.machines[0].online, true, "live status should come from Komari presence RPC, not admin:listClients");
     assert.equal(initial.settings.setupComplete, false);
 
     const setupGateRes = response();
@@ -154,12 +157,19 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const reverseProxyPolicyRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "komari.internal:25774", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { addressMode: "dual" } }) }, reverseProxyPolicyRes);
     assert.equal(reverseProxyPolicyRes.statusCode, 200, reverseProxyPolicyRes.body);
+    const fetchMetadataProxyPolicyRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "komari.internal:25774", origin: "https://panel.5970000.xyz", "sec-fetch-site": "same-origin", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { addressMode: "ipv4" } }) }, fetchMetadataProxyPolicyRes);
+    assert.equal(fetchMetadataProxyPolicyRes.statusCode, 200, fetchMetadataProxyPolicyRes.body);
     const crossSitePolicyRes = response();
-    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "komari.internal:25774", origin: "https://attacker.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { addressMode: "ipv4" } }) }, crossSitePolicyRes);
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "komari.internal:25774", origin: "https://attacker.example", "sec-fetch-site": "cross-site", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { addressMode: "ipv4" } }) }, crossSitePolicyRes);
     assert.equal(crossSitePolicyRes.statusCode, 403);
     assert.equal(JSON.parse(crossSitePolicyRes.body).error.code, "csrf_origin");
+    const missingOriginRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "komari.internal:25774", "sec-fetch-site": "same-origin", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { addressMode: "ipv4" } }) }, missingOriginRes);
+    assert.equal(missingOriginRes.statusCode, 403);
+    assert.equal(JSON.parse(missingOriginRes.body).error.code, "csrf_origin");
     const insecureSameHostPolicyRes = response();
-    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "http://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { addressMode: "ipv4" } }) }, insecureSameHostPolicyRes);
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "http://monitor.example", "sec-fetch-site": "same-origin", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { addressMode: "ipv4" } }) }, insecureSameHostPolicyRes);
     assert.equal(insecureSameHostPolicyRes.statusCode, 403);
     assert.equal(JSON.parse(insecureSameHostPolicyRes.body).error.code, "csrf_origin");
 
@@ -397,7 +407,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.match(subRes.body, new RegExp(legacyCredentialUuid));
     assert.equal(subRes.headers["x-kns-snapshot-success"], "2");
     assert.ok(subRes.headers["x-kns-snapshot-generated-at"]);
-    assert.equal(subRes.headers.link, '<https://github.com/liuarui/komari-plugin-kns/tree/v1.2.0>; rel="source"');
+    assert.equal(subRes.headers.link, '<https://github.com/liuarui/komari-plugin-kns/tree/v1.2.2>; rel="source"');
     assert.equal(subRes.headers["x-kns-license"], "AGPL-3.0-only");
     const singboxOnlyProfileRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.create", name: "singbox-only", formats: ["singbox-full"] }) }, singboxOnlyProfileRes);

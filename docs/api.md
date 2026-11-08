@@ -1,6 +1,6 @@
 # 管理 API 与错误码
 
-基础路径 `/api/kns`。插件通过 Komari 插件 route API 在现有服务器注册路由；管理 API 每次验证 `req.context.principal` 的 admin 角色。写请求还要求浏览器 Origin 与请求 Host 相同，或与管理员配置的 Komari HTTPS 公网 Origin 相同（用于反代上游 Host 被改写的部署）；不会信任任意 `X-Forwarded-*`。缺少 Origin 时只接受受信 Bearer 身份或 `Sec-Fetch-Site: same-origin`。所有 JSON 响应带 `Cache-Control: no-store`。详情见 [Komari 插件开发文档](https://komari-document.pages.dev/en/dev/plugin/)。
+基础路径 `/api/kns`。插件通过 Komari 插件 route API 在现有服务器注册路由；管理 API 每次验证 `req.context.principal` 的 admin 角色。写请求还要求浏览器 Origin 与请求 Host 相同、与管理员配置的 Komari HTTPS 公网 Origin 相同，或 HTTPS 请求带浏览器提供的 `Sec-Fetch-Site: same-origin`（用于反代上游 Host 被改写的部署）；不会信任任意 `X-Forwarded-*`。缺少 Origin 时只接受 Bearer API 身份。所有 JSON 响应带 `Cache-Control: no-store`。详情见 [Komari 插件开发文档](https://komari-document.pages.dev/en/dev/plugin/)。
 
 ## 路由
 

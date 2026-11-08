@@ -149,7 +149,7 @@
     <div class="card"><h2>默认部署与新探针授权</h2><p class="muted">默认模板只应用于首次发现的新探针。自动部署默认关闭；已派发任务不受开关变化影响。</p><div class="grid"><label>默认监听端口<input id="defaultNodePort" type="number" min="1" max="65535"></label><label>默认服务监听地址<select id="defaultNodeAddress"><option value="::">双栈通配 ::</option><option value="0.0.0.0">IPv4 通配 0.0.0.0</option></select></label><label><input id="autoProvisionEnabled" type="checkbox">授权新探针自动部署</label></div><p id="autoProvisionStatus" class="small muted"></p><div class="actions"><button id="saveDefaultNode">保存默认部署设置</button></div></div>
     <div class="card"><h2>数据恢复</h2><p class="muted">每日保留 7 份状态和密钥备份。恢复前会校验状态与配对密钥；有未完成远程任务时会阻止维护。</p><div class="toolbar"><select id="backupSelect"></select><button id="restoreBackup" class="danger">预览并恢复所选备份</button><button id="exportState" class="secondary">导出加密备份</button><input id="importBackupFile" type="file" accept="application/json,.json"><button id="importBackup" class="danger">预检并导入加密备份</button></div></div>
     <div class="card"><h2>审计日志</h2><p id="auditRetention" class="muted small"></p><div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>详情</th></tr></thead><tbody id="auditRows"></tbody></table></div><button id="auditOlder" type="button" hidden>加载更早记录</button></div>
-    <div class="card"><h2>兼容性与运行限制</h2><p id="compatibility" class="muted">该插件依赖 Komari MoeJS 插件路由、定时任务、admin:listClients、admin:exec 和 admin:getSpecificTaskResult。最终需在目标 Komari Server/Agent 版本实测。</p></div>
+    <div class="card"><h2>兼容性与运行限制</h2><p id="compatibility" class="muted">该插件依赖 Komari MoeJS 插件路由、定时任务、admin:listClients、common:getNodesLatestStatus、admin:exec 和 admin:getSpecificTaskResult。最终需在目标 Komari Server/Agent 版本实测。</p></div>
   </section>
 </main>
 <dialog id="operationDialog" aria-labelledby="operationTitle"><form id="operationForm"><h2 id="operationTitle"></h2><p id="operationDescription" class="operation-copy muted"></p><div id="operationFields"></div><p id="operationStatus" class="status muted" role="status"></p><div class="actions"><button id="operationCancel" type="button" class="secondary">取消</button><button id="operationConfirm" type="submit">继续</button></div></form></dialog>
@@ -827,6 +827,6 @@
   refresh();setInterval(refresh,15000);
 })();
 </script>
-<footer class="muted small" style="padding:18px 0;text-align:center">Komari KNS v1.2.0 · <a href="https://github.com/liuarui/komari-plugin-kns/tree/v1.2.0" target="_blank" rel="noopener">源码</a> · <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">GNU AGPL v3.0-only</a></footer>
+<footer class="muted small" style="padding:18px 0;text-align:center">Komari KNS v1.2.2 · <a href="https://github.com/liuarui/komari-plugin-kns/tree/v1.2.2" target="_blank" rel="noopener">源码</a> · <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">GNU AGPL v3.0-only</a></footer>
 </body>
 </html>

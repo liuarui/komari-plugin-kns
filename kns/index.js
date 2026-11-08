@@ -137,7 +137,7 @@ function checkOrigin(req) {
   const headers = req.headers || {};
   const origin = String(headers.origin || "");
   if (!origin) {
-    if (String(headers.authorization || "").startsWith("Bearer ") || String(headers["sec-fetch-site"] || "") === "same-origin") return;
+    if (String(headers.authorization || "").startsWith("Bearer ")) return;
     fail("csrf_origin", "管理写入请求必须带同源 Origin 或 Bearer API 身份。", 403);
   }
   let parsedOrigin;
@@ -158,6 +158,10 @@ function checkOrigin(req) {
   // Origin includes scheme as well as host. The Host fallback is for a
   // same-host HTTPS request; it must not treat HTTP and HTTPS as same-origin.
   if (parsedOrigin.protocol === "https:" && requestHost && originHost === requestHost) return;
+  // Browsers set Fetch Metadata headers themselves, so a same-origin page can
+  // remain usable when a trusted reverse proxy rewrites the upstream Host.
+  // Cross-origin pages cannot make the browser send this value.
+  if (parsedOrigin.protocol === "https:" && String(headers["sec-fetch-site"] || "").toLowerCase() === "same-origin") return;
   fail("csrf_origin", "跨站管理请求已拒绝。请确认浏览器访问域名与 KNS 公网地址设置一致。", 403);
 }
 
@@ -492,11 +496,35 @@ function normalizeMachine(raw) {
   };
 }
 
+function onlineStatusMap(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const statuses = new Map();
+  for (const [rawUuid, status] of Object.entries(value)) {
+    const uuid = String(rawUuid).toLowerCase();
+    if (UUID_RE.test(uuid) && status && typeof status.online === "boolean") statuses.set(uuid, status.online);
+  }
+  return statuses;
+}
+
 async function syncMachines() {
   if (syncBusy) return false;
   syncBusy = true;
   try {
     const live = nodesFrom(await server.call("admin:listClients")).map(normalizeMachine).filter(Boolean);
+    if (live.length) {
+      try {
+        // admin:listClients returns registered-client records, not live
+        // connection state. Komari 1.6.1 exposes current presence in this
+        // common RPC; ask only for UUIDs and retain no metric payload.
+        const statuses = onlineStatusMap(await server.call("common:getNodesLatestStatus", { uuids: live.map((machine) => machine.uuid) }));
+        if (statuses) {
+          for (const machine of live) machine.online = statuses.get(machine.uuid) === true;
+        }
+      } catch (_) {
+        // Older Komari runtimes may lack this RPC; preserve any status field
+        // supplied by admin:listClients and otherwise leave it unknown.
+      }
+    }
     const state = getState();
     const current = new Map(state.machines.map((machine) => [machine.uuid, machine]));
     const baseline = new Set(state.settings.autoProvisionBaselineUuids || []);

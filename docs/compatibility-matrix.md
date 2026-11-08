@@ -4,7 +4,7 @@
 
 | 组件 | 本次识别/实现 | 验收状态 |
 | --- | --- | --- |
-| Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | v1.1.2–v1.1.5 历史修复见交付记录；v1.2.0 增加管理页引导、revision 冲突防护与 Schema 2 迁移。目标面板/Agent 仍待本轮上传验收 |
+| Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | v1.2.2 从 `common:getNodesLatestStatus` 合并运行时在线状态，并为反代改写 Host 的浏览器同源写入提供 Fetch Metadata 兼容路径；目标面板上传与目标 Agent 扫描仍待本轮验收 |
 | Komari Agent | 目标 Agent 版本未提供；使用 `admin:exec` 与 `admin:getSpecificTaskResult` | 未在目标探针运行 |
 | OneBox | adapter schema 1，版本 `1.4.0`；[提交 `a36b55c`](https://github.com/liuarui/onebox/commit/a36b55cd455053f66cdf18fe3045e306d06d3934)，分支 `codex/kns-adapter` | 安装脚本固定 SHA-256 `507801b3ce9b1226657420bd17a0601e7ac2fe4508ebf2dd440c5e0514b0477f`；Linux/LXC 真机未执行；低 PID/内存预检阈值见 OneBox README |
 | sing-box | OneBox 共享 `onebox-main` Runtime；实际 target 版本由 OneBox 安装过程决定，未锁定 | 结构通过本地生成/JSON 解析，未对目标二进制 `check` |
