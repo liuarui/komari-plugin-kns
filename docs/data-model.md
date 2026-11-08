@@ -17,6 +17,8 @@
 | `legacyNodes[]` | 从原 onebox-bridge 数据迁移的加密 URI |
 | `lastSnapshotAt`, `snapshotPending` | 周期/事件快照标记 |
 
+机器快照可包含最近一次管理员触发的 `discoveredAt` 与 `discoveredNodes[]`。该数组仅允许保存安全发现字段（tag、协议、监听地址/端口/传输、托管标记、可导入性、非敏感协议选项和原因）；不得保存凭据或原始 inbound。经明确导入的实例使用 `managedBy:"legacy_import"`、`ownership:"external"`、`readOnly:true` 和 `legacyTag` 标记；凭据仍使用 KNS AES-256-GCM 密文。外部只读实例可发布或隐藏，但不能通过 KNS 修改、停用或卸载 OneBox 配置。
+
 订阅正文缓存与 state 备份快照分开保存于 `kns/subscriptions/<sha256(profileId,format)>.json`。文件只包含 AES-256-GCM 密文 envelope；明文正文仅在构建/服务期间驻留内存。完整密文写入权限为 `0600` 的临时文件后原子替换，缓存记录包含内容 SHA-256、生成时间、规则版本、成功数、跳过数和来源哈希。成功数按输出条目计数（URI 行或配置节点），跳过数按未输出的已发布实例计数。档案/实例状态变化会触发事件刷新，每 5 分钟兜底；订阅 GET 不调用生成器，并会校验本地来源哈希。状态已变化而快照尚未更新时返回 `503 Retry-After: 2`，避免继续发布旧节点；档案撤销、过期或移除格式后缓存会清理。缓存丢失时可从 state 与匹配密钥重建；缓存或凭据因密钥不匹配无法解密时维持 `503`，需要恢复配对的 state/key 备份。state/密钥备份不备份派生订阅缓存。
 
 订阅档案的筛选字段包括 `instanceIds`、`machineUuids`、`excludeMachineUuids`、`protocols`、`includeTags`、`addressMode`、`sortBy` 和 `excludeUnhealthy`。机器/协议空列表按不限制处理；标签按任一实例标签命中。地址模式支持 `auto`、`ipv4`、`ipv6`、`dual`；IPv4/IPv6 只筛选 Endpoint 中的字面 IP，域名留给订阅客户端解析。排序支持节点名称、协议、Endpoint 和机器名称。

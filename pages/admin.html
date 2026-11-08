@@ -63,7 +63,7 @@
   </section>
 
   <section id="machines" class="panel">
-    <div class="card"><div class="toolbar"><h2 style="margin-right:auto">Komari 探针与部署策略</h2><button id="reloadMachines" class="secondary">同步探针</button></div><p class="muted">机器 UUID 是稳定关联键。策略默认关闭；地址来源顺序为手动地址、DDNS 域名、Komari 上报地址。</p>
+    <div class="card"><div class="toolbar"><h2 style="margin-right:auto">Komari 探针与部署策略</h2><button id="reloadMachines" class="secondary">同步探针</button></div><p class="muted">机器 UUID 是稳定关联键。部署策略默认关闭；“扫描旧版节点”只读检查 OneBox 配置，导入操作需逐个确认。地址来源顺序为实例地址、机器手动地址、DDNS 域名、Komari 上报地址。</p>
       <div class="table-wrap"><table><thead><tr><th>探针</th><th>状态 / 地址</th><th>部署策略</th><th>Endpoint / 标签</th><th>操作</th></tr></thead><tbody id="machineRows"></tbody></table></div>
     </div>
   </section>
@@ -161,15 +161,50 @@
     } catch (error) { setStatus("globalStatus", error.message, "error"); }
   }
 
+  async function discoverLegacyNodes(machine) {
+    try {
+      await postAction({ action:"machine.discover", machineUuid:machine.uuid, idempotencyKey:idempotencyKey() });
+      setStatus("globalStatus", "已提交 " + machine.name + " 的只读 OneBox 扫描。", "success"); await refresh();
+    } catch (error) { setStatus("globalStatus", error.message, "error"); }
+  }
+
+  async function importLegacyNode(machine, node) {
+    const accepted = confirm("导入旧节点「" + node.tag + "」？\n\nKNS 会通过 HTTPS 一次性回调读取协议凭据并加密保存，随后允许将此节点加入订阅。OneBox 配置和服务不会被修改。导入后节点生命周期仍由 OneBox 管理。");
+    if (!accepted) return;
+    const endpointHost = prompt("订阅连接地址（留空使用机器策略中的地址）", machine.policy&&machine.policy.manualAddress||"");
+    if (endpointHost === null) return;
+    const externalPort = prompt("NAT 公网端口（留空使用监听端口 " + node.listen.port + "）", "");
+    if (externalPort === null) return;
+    const tags = prompt("实例标签（逗号分隔，可用于订阅筛选）", (machine.policy&&machine.policy.tags||[]).join(","));
+    if (tags === null) return;
+    try {
+      await postAction({ action:"machine.import", machineUuid:machine.uuid, legacyTag:node.tag, name:node.tag, tags:tags.split(",").map((tag)=>tag.trim()).filter(Boolean), endpointHost:endpointHost.trim(), externalPort:externalPort.trim(), confirm:true, idempotencyKey:idempotencyKey() });
+      setStatus("globalStatus", "已提交「" + node.tag + "」的安全导入任务。", "success"); await refresh();
+    } catch (error) { setStatus("globalStatus", error.message, "error"); }
+  }
+
   function renderMachines() {
     const body=$("machineRows"); body.replaceChildren();
     for (const machine of state.machines) {
       const row=document.createElement("tr");
       const identity=el("td"); identity.append(el("strong",machine.name),el("small",machine.uuid,"muted small"),el("small",[machine.os,machine.arch,machine.region].filter(Boolean).join(" · "),"muted small"));
+      const discovered=Array.isArray(machine.discoveredNodes)?machine.discoveredNodes:[];
+      if(machine.discoveredAt) identity.append(el("small","旧节点扫描："+new Date(machine.discoveredAt).toLocaleString()+" · "+discovered.length+" 个","muted small"));
+      for(const node of discovered){
+        const imported=state.instances.some((instance)=>instance.machineUuid===machine.uuid&&instance.managedBy==="legacy_import"&&instance.legacyTag===node.tag&&!instance.deletedAt);
+        const detail=el("small",node.tag+" · "+node.protocol+" · "+(node.listen.port||"端口未知")+" · "+(node.managed?"OneBox 已托管":imported?"已导入":node.importable?"可导入":"暂不支持"),node.importable&&!imported&&!node.managed?"success small":"muted small");
+        identity.append(detail);
+      }
       const observed=el("td"); observed.append(el("span",machine.online===true?"在线":machine.online===false?"离线":"未知",machine.online===true?"success":"muted"),el("small","IPv4: "+(machine.ipv4||"—"),"muted small"),el("small","IPv6: "+(machine.ipv6||"—"),"muted small"),el("small","来源 IP: "+(machine.sourceIp||"—"),"muted small"));
       const policy=el("td"); const deploy=document.createElement("input"); deploy.type="checkbox"; deploy.checked=!!(machine.policy&&machine.policy.deployAllowed); deploy.dataset.policy="deploy"; const deployLabel=el("label","允许部署"); deployLabel.prepend(deploy); policy.append(deployLabel); const mode=document.createElement("select"); mode.dataset.policy="mode"; [["auto","自动"],["ipv4","IPv4"],["ipv6","IPv6"],["dual","双栈"]].forEach(([v,t])=>{const o=document.createElement("option");o.value=v;o.textContent=t;mode.append(o);}); mode.value=machine.policy&&machine.policy.addressMode||"auto"; policy.append(mode);
       const endpoint=el("td"); const manual=document.createElement("input"); manual.placeholder="手动公网 IP / 域名"; manual.value=machine.policy&&machine.policy.manualAddress||""; manual.dataset.policy="manual"; const ddns=document.createElement("input"); ddns.placeholder="DDNS 域名"; ddns.value=machine.policy&&machine.policy.ddnsHostname||""; ddns.dataset.policy="ddns"; const tags=document.createElement("input"); tags.placeholder="标签，逗号分隔"; tags.value=(machine.policy&&machine.policy.tags||[]).join(","); tags.dataset.policy="tags"; endpoint.append(manual,ddns,tags);
-      const ops=el("td"); ops.append(actionButton("保存",()=>updatePolicy(machine.uuid,row))); row.append(identity,observed,policy,endpoint,ops); body.append(row);
+      const ops=el("td"); ops.append(actionButton("保存",()=>updatePolicy(machine.uuid,row)),actionButton("扫描旧版节点",()=>discoverLegacyNodes(machine)));
+      for(const node of discovered){
+        const imported=state.instances.some((instance)=>instance.machineUuid===machine.uuid&&instance.managedBy==="legacy_import"&&instance.legacyTag===node.tag&&!instance.deletedAt);
+        if(node.importable&&!node.managed&&!imported) ops.append(actionButton("导入 "+node.tag,()=>importLegacyNode(machine,node)));
+        else if(!node.importable&&!node.managed) ops.append(el("small",node.reason==="multiple_users"?"多用户节点需拆分后导入":"不支持导入："+node.reason,"muted small"));
+      }
+      row.append(identity,observed,policy,endpoint,ops); body.append(row);
     }
     const select=$("installMachines"); const selected=Array.from(select.selectedOptions).map((o)=>o.value); select.replaceChildren();
     state.machines.forEach((machine)=>{const option=el("option",machine.name+" · "+machine.uuid.slice(0,8)); option.value=machine.uuid; option.disabled=!(machine.policy&&machine.policy.deployAllowed); option.selected=selected.includes(option.value); select.append(option);});
@@ -208,13 +243,16 @@
       const proto=el("td"); proto.append(el("span",instance.protocol),el("small",(instance.runtimeEngine||"sing-box")+" / "+(instance.runtimeId||"onebox-main"),"muted small"));
       const endpoint=el("td"); endpoint.append(el("code",(instance.listen&&instance.listen.address||"::")+":"+(instance.listen&&instance.listen.port||"?")),el("small","→ "+(instance.endpoint&&instance.endpoint.host||"未配置")+":"+(instance.endpoint&&instance.endpoint.port||"?"),"muted small"),el("small","来源："+(instance.endpoint&&instance.endpoint.source||"—"),"muted small"));
       const stateCell=el("td"); stateCell.append(el("span",instance.health&&instance.health.state||"unknown",instance.health&&instance.health.state==="healthy"?"success":"muted")); const pub=document.createElement("input");pub.type="checkbox";pub.checked=instance.publish!==false;pub.title="加入订阅";pub.addEventListener("change",async()=>{try{await postAction({action:"instance.publish.update",instanceId:instance.id,publish:pub.checked});await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}});const pubLabel=el("label","加入订阅");pubLabel.prepend(pub);stateCell.append(pubLabel,el("small","探测级别："+(instance.health&&instance.health.level||"L0"),"muted small"));if(instance.nat&&instance.nat.mappingConflict)stateCell.append(el("small","NAT 映射冲突，已暂停订阅发布","error small"));if(instance.remoteStatus&&instance.remoteStatus.checkedAt)stateCell.append(el("small","远端资源核查："+instance.remoteStatus.checkedAt,"muted small"));
-      const ops=el("td"); const rowButtons=el("div",null,"row-actions"); rowButtons.append(actionButton("查远端状态",()=>instanceAction(instance,"status")));rowButtons.append(actionButton("重配",()=>reconfigureInstance(instance)));if(instance.enabled) rowButtons.append(actionButton("停用",()=>instanceAction(instance,"disable"))); else rowButtons.append(actionButton("启用",()=>instanceAction(instance,"enable"))); rowButtons.append(actionButton("重装",()=>instanceAction(instance,"reinstall"))); rowButtons.append(actionButton("卸载",()=>instanceAction(instance,"uninstall"),"danger")); ops.append(rowButtons); row.append(id,proto,endpoint,stateCell,ops); body.append(row);
+      const ops=el("td");
+      if(instance.managedBy==="legacy_import") ops.append(el("small","旧版节点只读导入；配置仍由 OneBox 管理。","muted small"));
+      else {const rowButtons=el("div",null,"row-actions"); rowButtons.append(actionButton("查远端状态",()=>instanceAction(instance,"status")));rowButtons.append(actionButton("重配",()=>reconfigureInstance(instance)));if(instance.enabled) rowButtons.append(actionButton("停用",()=>instanceAction(instance,"disable"))); else rowButtons.append(actionButton("启用",()=>instanceAction(instance,"enable"))); rowButtons.append(actionButton("重装",()=>instanceAction(instance,"reinstall"))); rowButtons.append(actionButton("卸载",()=>instanceAction(instance,"uninstall"),"danger")); ops.append(rowButtons);}
+      row.append(id,proto,endpoint,stateCell,ops); body.append(row);
     }
   }
 
   function renderJobs(){
     const body=$("jobRows");body.replaceChildren();
-    for(const job of state.jobs){const row=document.createElement("tr");row.append(el("td",job.createdAt||"—"),el("td",(job.machineName||job.machineUuid)+" · "+job.instanceId+" · "+job.action),el("td",job.state),el("td",job.message||"—"));body.append(row);}
+    for(const job of state.jobs){const target=job.action==="machine.discover"?"旧节点扫描":job.legacyTag?job.legacyTag+" 导入":job.instanceId||"—";const row=document.createElement("tr");row.append(el("td",job.createdAt||"—"),el("td",(job.machineName||job.machineUuid)+" · "+target+" · "+job.action),el("td",job.state),el("td",job.message||"—"));body.append(row);}
   }
 
   function profileFilterEditor(profile, prefix) {

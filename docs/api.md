@@ -25,6 +25,8 @@
 | `action` | 常用字段 | 返回 |
 | --- | --- | --- |
 | `machine.policy.update` | `machineUuid`, `policy.deployAllowed`, `policy.addressMode`, `policy.manualAddress`, `policy.ddnsHostname`, `policy.tags` | 更新并返回机器策略 |
+| `machine.discover` | `machineUuid`, `idempotencyKey`, 可选 `twoFactorCode` | `202` 只读扫描任务；只返回安全元数据，不含节点凭据 |
+| `machine.import` | `machineUuid`, `legacyTag`, `confirm:true`, `idempotencyKey`, 可选 `endpointHost`, `externalPort`, `twoFactorCode` | `202` 一次性导入任务；HTTPS 回调后加密登记为外部只读节点 |
 | `settings.update` | `publicBaseUrl`（HTTPS），可选 `converterUrl`, `converterTarget`, `privateSite` | 更新回调、订阅转换和私有地址设置 |
 | `install` | `machineUuid`, `protocol`, `listenPort`, `listenAddress`, `options`, 可选 `name`, `tags`, `endpointHost`, `externalPort`, `idempotencyKey`, `confirm:true`, `twoFactorCode` | `202` job |
 | `reconfigure`, `reinstall` | 同上并带已有 `instanceId` | `202` job |
@@ -54,7 +56,7 @@
 
 适配器从受保护请求文件读取 schema 1 请求；一次性 token 通过 `Authorization: Bearer …` 提交 `/api/kns/report`。回调绑定 `jobId`、`machineUuid`、`runtime.id=onebox-main` 和适配器版本。令牌第一次成功验证后失效；相同 body digest 重试仍返回 204。插件随后查询 `admin:getSpecificTaskResult`，要求 exit code 0 并核对 OneBox `status`。
 
-远端 Agent 操作只经 Komari `admin:exec` 执行；结果只取任务编号、退出码和匹配 `KNS_STATUS=` 的状态 JSON，不把完整 stdout/stderr 写入状态或审计日志。离线 Agent、远程控制关闭或权限错误要在任务区查看 `rpcErrorCode` 与错误提示。
+远端 Agent 操作只经 Komari `admin:exec` 执行；结果只取任务编号、退出码和匹配 `KNS_STATUS=` / `KNS_DISCOVERY=` 的脱敏 JSON，不把完整 stdout/stderr 写入状态或审计日志。历史导入先核对最新只读扫描结果，再接收绑定到机器和 job 的一次性 HTTPS 回调；导入资源声明 `owned:false, shared:true`，后端会拒绝其生命周期变更。离线 Agent、远程控制关闭或权限错误要在任务区查看 `rpcErrorCode` 与错误提示。
 
 ## 主要错误码
 
@@ -66,6 +68,7 @@
 | `endpoint_missing`, `private_endpoint`, `nat_endpoint_missing`, `nat_mapping_conflict` | 地址缺失、DDNS 未稳定、公网地址策略拒绝或公网 NAT 映射冲突 |
 | `port_conflict`, `invalid_port` | 监听组合不合法或占用 |
 | `invalid_callback`, `callback_mismatch` | OneBox 回调 schema、版本或目标不匹配 |
+| `legacy_node_not_importable`, `legacy_node_already_imported`, `discovery_stale`, `legacy_instance_readonly` | 历史节点不受支持、扫描结果过期、节点已导入或该导入节点不允许远端生命周期操作 |
 | `public_url_required`, `invalid_public_url` | 未设置公网 HTTPS 回调基地址 |
 | `master_key_missing`, `secret_decrypt_failed` | 加密密钥缺失/不匹配或凭据损坏 |
 | `legacy_state_corrupt` | 原型状态文件不能安全迁移 |

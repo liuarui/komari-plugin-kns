@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | Komari Server | 目标主机版本/SHA 未提供；实现依赖 MoeJS `server.route`, `server.cron`, `server.call` | 未在目标服务加载 |
 | Komari Agent | 目标 Agent 版本未提供；使用 `admin:exec` 与 `admin:getSpecificTaskResult` | 未在目标探针运行 |
-| OneBox | adapter schema 1，版本 `1.2.0`；[提交 `7c70c71`](https://github.com/liuarui/onebox/commit/7c70c71957f6f96a3deca983745f7414fe1e490e)，分支 `codex/kns-adapter` | 安装脚本固定 SHA-256 `9c803f549eb6c579fed8a9e385e43d9a872235ab804e99da01e44eb361b458fa`；Linux 真机未执行 |
+| OneBox | adapter schema 1，版本 `1.3.0`；[提交 `d9b98f0`](https://github.com/liuarui/onebox/commit/d9b98f0fd00fe3c9687697baff5c99e398a020b2)，分支 `codex/kns-adapter` | 安装脚本固定 SHA-256 `f5b4a1fde9b773f7963f558411a11003a71183ddb8201fce55801461f5faa65e`；Linux/LXC 真机未执行；低 PID/内存预检阈值见 OneBox README |
 | sing-box | OneBox 共享 `onebox-main` Runtime；实际 target 版本由 OneBox 安装过程决定，未锁定 | 结构通过本地生成/JSON 解析，未对目标二进制 `check` |
 | Mihomo | 输出 Mihomo full/provider YAML | 已检查生成文本片段；未用冻结客户端导入 |
 | SubConverter | `23.146.156.234:25500` 响应 `/sub` 缺少参数请求（HTTP 400）；服务器首页标识为 SubConverter-Extended，页面声明 GPL-3.0；具体二进制版本未知 | 服务存在；未执行带真实 KNS 订阅的转换 |

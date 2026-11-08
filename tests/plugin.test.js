@@ -80,7 +80,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const report = {
       schema: 1, jobId: request.jobId, machineUuid, status: "succeeded", runtime: { id: "onebox-main", engine: "sing-box" },
       instances: [{ id: request.instance.id, protocol: "vless", listen: { port: 443, transport: "tcp" }, tls: { security: "reality", sni: "www.example.com", publicKey: "public-key", shortId: "01" }, credential: { type: "uuid", value: credentialUuid, flow: "xtls-rprx-vision" }, resources: [{ type: "configFragment", id: "kns-test", owned: true, shared: false }] }],
-      artifactVersion: "1.2.0",
+      artifactVersion: "1.3.0",
     };
     const reportRes = response();
     await routes.get("POST /api/kns/report")({ headers: { authorization: "Bearer " + request.report.oneTimeToken, "content-type": "application/json" }, body: JSON.stringify(report) }, reportRes);
@@ -115,9 +115,82 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.equal(remoteStatusState.instances[0].remoteStatus.uninstallPreview.complete, true);
     assert.equal(remoteStatusState.instances[0].remoteStatus.resources[0].referenceCount, 2);
 
+    const legacyDiscoveryRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.discover", machineUuid, idempotencyKey: "legacy-discovery-1" }) }, legacyDiscoveryRes);
+    assert.equal(legacyDiscoveryRes.statusCode, 202);
+    assert.match(execParams.command, /kns discover/);
+    const legacyDiscovery = { schema: 1, adapterVersion: "1.3.0", runtime: { engine: "sing-box", id: "onebox-main" }, instances: [{ tag: "old-vless", protocol: "vless", listen: { port: 8443, address: "::", transport: "tcp" }, managed: false, importable: true, options: { security: "reality", sni: "www.example.com", method: "" }, reason: "" }] };
+    taskResult = { exit_code: 0, stdout: "KNS_DISCOVERY=" + JSON.stringify(legacyDiscovery) };
+    await crons.find((item) => item.expression === "@every 15s").handler();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const discoveredStateRes = response();
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, discoveredStateRes);
+    const discoveredState = JSON.parse(discoveredStateRes.body);
+    assert.equal(discoveredState.machines[0].discoveredNodes[0].tag, "old-vless");
+    assert.equal(JSON.stringify(discoveredState).includes("credential"), false);
+
+    const invalidTwoFactorScanRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.discover", machineUuid, twoFactorCode: "invalid", idempotencyKey: "legacy-discovery-invalid-2fa" }) }, invalidTwoFactorScanRes);
+    assert.equal(invalidTwoFactorScanRes.statusCode, 400);
+    assert.equal(JSON.parse(invalidTwoFactorScanRes.body).error.code, "invalid_2fa");
+
+    const lowResourceDiscoveryRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.discover", machineUuid, idempotencyKey: "legacy-discovery-low-resource" }) }, lowResourceDiscoveryRes);
+    assert.equal(lowResourceDiscoveryRes.statusCode, 202);
+    assert.match(execParams.command, /KNS_RESOURCE=low_pid_headroom/);
+    const lowResourceJobId = JSON.parse(lowResourceDiscoveryRes.body).job.id;
+    taskResult = { exit_code: 1, stdout: "KNS_RESOURCE=low_pid_headroom" };
+    await crons.find((item) => item.expression === "@every 15s").handler();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const lowResourceStateRes = response();
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, lowResourceStateRes);
+    const lowResourceJob = JSON.parse(lowResourceStateRes.body).jobs.find((job) => job.id === lowResourceJobId);
+    assert.equal(lowResourceJob.state, "failed");
+    assert.match(lowResourceJob.message, /进程额度不足/);
+
+    const invalidTwoFactorImportRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.import", machineUuid, legacyTag: "old-vless", name: "old-vless", tags: ["prod"], endpointHost: "2.3.4.5", externalPort: 30443, confirm: true, twoFactorCode: "invalid", idempotencyKey: "legacy-import-invalid-2fa" }) }, invalidTwoFactorImportRes);
+    assert.equal(invalidTwoFactorImportRes.statusCode, 400);
+    assert.equal(JSON.parse(invalidTwoFactorImportRes.body).error.code, "invalid_2fa");
+
+    const legacyImportRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.import", machineUuid, legacyTag: "old-vless", name: "old-vless", tags: ["prod"], endpointHost: "2.3.4.5", externalPort: 30443, confirm: true, idempotencyKey: "legacy-import-1" }) }, legacyImportRes);
+    assert.equal(legacyImportRes.statusCode, 202, legacyImportRes.body);
+    assert.match(execParams.command, /kns 'import'/);
+    const legacyEncoded = execParams.command.match(/printf %s '([A-Za-z0-9+/=]+)' \| base64 -d/)[1];
+    const legacyRequest = JSON.parse(Buffer.from(legacyEncoded, "base64").toString("utf8"));
+    assert.equal(legacyRequest.instance.legacyTag, "old-vless");
+    const legacyCredentialUuid = "4aaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const legacyReport = {
+      schema: 1, jobId: legacyRequest.jobId, machineUuid, status: "succeeded", runtime: { id: "onebox-main", engine: "sing-box" },
+      instances: [{ id: legacyRequest.instance.id, legacyTag: "old-vless", protocol: "vless", listen: { port: 8443, transport: "tcp" }, tls: { security: "reality", sni: "www.example.com", publicKey: "legacy-public-key", shortId: "01" }, credential: { type: "uuid", value: legacyCredentialUuid, flow: "xtls-rprx-vision" }, resources: [{ type: "legacyConfigFragment", id: "old-vless", owned: false, shared: true }] }],
+      artifactVersion: "1.3.0",
+    };
+    const legacyReportRes = response();
+    await routes.get("POST /api/kns/report")({ headers: { authorization: "Bearer " + legacyRequest.report.oneTimeToken, "content-type": "application/json" }, body: JSON.stringify(legacyReport) }, legacyReportRes);
+    assert.equal(legacyReportRes.statusCode, 204);
+    taskResult = { exit_code: 0, stdout: "KNS_DISCOVERY=" + JSON.stringify(legacyDiscovery) };
+    await crons.find((item) => item.expression === "@every 15s").handler();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const afterLegacyImportRes = response();
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, afterLegacyImportRes);
+    const afterLegacyImport = JSON.parse(afterLegacyImportRes.body);
+    const importedLegacy = afterLegacyImport.instances.find((item) => item.legacyTag === "old-vless");
+    assert.ok(importedLegacy);
+    assert.equal(importedLegacy.managedBy, "legacy_import");
+    assert.equal(importedLegacy.readOnly, true);
+    assert.equal(importedLegacy.endpoint.host, "2.3.4.5");
+    assert.equal(importedLegacy.nat.externalPort, 30443);
+    assert.equal("credential" in importedLegacy, false);
+    assert.equal(JSON.stringify(afterLegacyImport).includes(legacyCredentialUuid), false);
+    const importedDisableRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "disable", machineUuid, instanceId: importedLegacy.id, confirm: true, idempotencyKey: "legacy-disable-denied" }) }, importedDisableRes);
+    assert.equal(importedDisableRes.statusCode, 409);
+    assert.equal(JSON.parse(importedDisableRes.body).error.code, "legacy_instance_readonly");
+
     const natCollisionRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({
-      action: "install", machineUuid, protocol: "vless", listenPort: 8443, listenAddress: "::", options: { security: "reality" },
+      action: "install", machineUuid, protocol: "vless", listenPort: 9443, listenAddress: "::", options: { security: "reality" },
       name: "colliding nat", endpointHost: "node.example.com", externalPort: 30443, confirm: true, idempotencyKey: "nat-collision-1",
     }) }, natCollisionRes);
     assert.equal(natCollisionRes.statusCode, 409);
@@ -182,7 +255,8 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.equal(subRes.statusCode, 200);
     assert.match(subRes.body, /^vless:\/\//);
     assert.match(subRes.body, new RegExp(credentialUuid));
-    assert.equal(subRes.headers["x-kns-snapshot-success"], "1");
+    assert.match(subRes.body, new RegExp(legacyCredentialUuid));
+    assert.equal(subRes.headers["x-kns-snapshot-success"], "2");
     assert.ok(subRes.headers["x-kns-snapshot-generated-at"]);
     const addTokenRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.token.create", profileId: profileState.id }) }, addTokenRes);
@@ -217,6 +291,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const snapshotFiles = fs.readdirSync(path.join(storage, "kns", "subscriptions"));
     assert.ok(snapshotFiles.length >= 1);
     for (const filename of snapshotFiles) assert.equal(fs.readFileSync(path.join(storage, "kns", "subscriptions", filename), "utf8").includes(credentialUuid), false);
+    for (const filename of snapshotFiles) assert.equal(fs.readFileSync(path.join(storage, "kns", "subscriptions", filename), "utf8").includes(legacyCredentialUuid), false);
     const subscriptionModule = require("../kns/subscription");
     const originalBuild = subscriptionModule.buildSubscription;
     subscriptionModule.buildSubscription = () => { throw new Error("GET must use the stored snapshot"); };
@@ -246,6 +321,9 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const hideRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "instance.publish.update", instanceId: request.instance.id, publish: false }) }, hideRes);
     assert.equal(hideRes.statusCode, 200);
+    const hideImportedRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "instance.publish.update", instanceId: importedLegacy.id, publish: false }) }, hideImportedRes);
+    assert.equal(hideImportedRes.statusCode, 200);
     const staleRes = response();
     await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(url.searchParams), headers: {} }, staleRes);
     assert.equal(staleRes.statusCode, 503);

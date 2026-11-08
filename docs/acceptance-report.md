@@ -14,7 +14,7 @@ python3 -m py_compile scripts/package.py
 python3 scripts/package.py
 ```
 
-本地 10 项 Node 测试通过范围：模拟 admin policy、agent task、OneBox callback/status、受保护 URI 订阅；state/key 备份恢复；secret 加密与 token hash；多令牌创建、独立撤销、宽限轮换、使用计数与档案有效期上限；口令加密导出往返解密；NAT 公网映射冲突拒绝；加密订阅快照的私有文件写入、替换失败清理、权限、修剪及 GET 只读快照；IPv6 URI 编码；七协议格式生成；机器/协议/标签/地址族筛选、排序与连接去重；profile 筛选字段创建和更新。以下每条 AT 的“本地模拟”不代表真实机器/客户端验收。
+本地 10 项 Node 测试通过范围：模拟 admin policy、agent task、OneBox callback/status、历史节点只读发现/导入与外部只读策略、资源余量失败提示、旧节点凭据进入加密订阅但不进入快照明文；受保护 URI 订阅；state/key 备份恢复；secret 加密与 token hash；多令牌创建、独立撤销、宽限轮换、使用计数与档案有效期上限；口令加密导出往返解密；NAT 公网映射冲突拒绝；加密订阅快照的私有文件写入、替换失败清理、权限、修剪及 GET 只读快照；IPv6 URI 编码；七协议格式生成；机器/协议/标签/地址族筛选、排序与连接去重；profile 筛选字段创建和更新。OneBox 低 PID/内存 guard 与五种旧协议发现另用临时 JSON 夹具做函数级模拟；这些本地模拟都不代表真实机器/客户端验收。
 
 ## AT-01 至 AT-32
 

@@ -2,7 +2,7 @@
 
 ## 运行结构
 
-Komari 插件注册路由和 cron，不在 Komari 主机启动自己的服务。每个远端机器上 KNS 管理一个共享 `onebox-main` sing-box Runtime 和实例清单。KNS 仅通过 `admin:exec` 下发命令，再通过 Agent task result 与 OneBox HTTPS 回调核验。管理页状态读取不会触发机器同步或远端操作。
+Komari 插件注册路由和 cron，不在 Komari 主机启动自己的服务。每个远端机器上 KNS 管理一个共享 `onebox-main` sing-box Runtime 和实例清单。KNS 仅通过 `admin:exec` 下发命令，再通过 Agent task result 与 OneBox HTTPS 回调核验。管理页状态读取不会触发机器同步或远端操作；管理员可手动触发旧节点只读扫描，凭据导入需要逐节点确认。
 
 ## 定时任务
 
@@ -37,6 +37,7 @@ Komari 插件注册路由和 cron，不在 Komari 主机启动自己的服务。
 ## 运行限制
 
 - 最多 5 个健康/地址 TCP 探测并发；远程动作按每台机器共享 runtime 串行。
+- OneBox 对低 PID/内存余量做预检：旧节点发现要求至少 3 个可见 PID 额度和 16 MiB 内存，导入要求 5 个 PID 和 32 MiB，安装或依赖变更要求 8 个 PID 和 64 MiB；不足时任务会明确显示跳过原因。Reality SNI 扫描按可见额度降为串行。预检无法控制其他进程抢占或检测未暴露给容器的宿主机限制。
 - 批量 UI 提交最多 10 个探针。
 - HTTP SubConverter URL 可用于内网试用，但订阅 token 和节点凭据会以明文传输；公网分发前应给 Komari 和 SubConverter 配置 HTTPS。
 - 私有 Endpoint 只应在管理员能控制的私网环境使用；该模式的真实部署/访问控制未在目标 Komari 私有站点上验收。

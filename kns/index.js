@@ -10,9 +10,9 @@ const subscriptions = require("./subscription");
 
 const API = "/api/kns";
 const LEGACY_API = "/api/onebox-bridge";
-const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/7c70c71957f6f96a3deca983745f7414fe1e490e/install.sh";
-const INSTALLER_SHA256 = "9c803f549eb6c579fed8a9e385e43d9a872235ab804e99da01e44eb361b458fa";
-const ONEBOX_ADAPTER_VERSION = "1.2.0";
+const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/d9b98f0fd00fe3c9687697baff5c99e398a020b2/install.sh";
+const INSTALLER_SHA256 = "f5b4a1fde9b773f7963f558411a11003a71183ddb8201fce55801461f5faa65e";
+const ONEBOX_ADAPTER_VERSION = "1.3.0";
 const SUBSCRIPTION_RULES_VERSION = "kns-subscription-v1";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -483,6 +483,12 @@ function safeMachine(machine) {
     uuid: machine.uuid, name: machine.name, region: machine.region, os: machine.os, arch: machine.arch,
     online: machine.online, lastSeen: machine.lastSeen, ipv4: machine.ipv4, ipv6: machine.ipv6, sourceIp: machine.sourceIp,
     observedAddress: machine.observedAddress || "", addressCandidate: machine.addressCandidate || "", policy: machine.policy,
+    discoveredAt: machine.discoveredAt || "", discoveredNodes: Array.isArray(machine.discoveredNodes) ? machine.discoveredNodes.map((node) => ({
+      tag: safeText(node.tag || "", 128), protocol: safeText(node.protocol || "unknown", 32),
+      listen: { port: Number(node.listen && node.listen.port) || 0, address: safeText(node.listen && node.listen.address || "", 64), transport: safeText(node.listen && node.listen.transport || "unknown", 16) },
+      managed: node.managed === true, importable: node.importable === true, options: { security: safeText(node.options && node.options.security || "", 32), sni: safeText(node.options && node.options.sni || "", 253), method: safeText(node.options && node.options.method || "", 64) },
+      reason: safeText(node.reason || "", 64),
+    })) : [],
   };
 }
 
@@ -695,11 +701,12 @@ function checkTwoFactor(value) {
 
 function makeRemoteCommand(state, job, instance) {
   const callbackUrl = state.settings.publicBaseUrl.replace(/\/$/, "") + API + "/report";
+  const remoteAction = job.action === "machine.import" ? "import" : job.action;
   const request = {
     schema: 1,
     jobId: job.id,
     machineUuid: job.machineUuid,
-    action: job.action,
+    action: remoteAction,
     runtime: { engine: "sing-box", id: instance.runtimeId || "onebox-main" },
     instance: {
       id: instance.id,
@@ -708,6 +715,7 @@ function makeRemoteCommand(state, job, instance) {
       listenAddress: instance.listen.address || "::",
       transport: instance.listen.transport,
       options: instance.options || {},
+      ...(job.action === "machine.import" ? { legacyTag: job.legacyTag } : {}),
     },
     idempotencyKey: job.idempotencyKey,
     report: { callback: callbackUrl, oneTimeToken: job._callbackToken },
@@ -728,9 +736,26 @@ function makeRemoteCommand(state, job, instance) {
     "printf %s " + quoteShell(payload) + " | base64 -d > \"$request_file\" && chmod 600 \"$request_file\" || exit 1",
     "if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 10 --max-time 180 " + installer + " -o \"$installer\"; elif command -v wget >/dev/null 2>&1; then wget -qO \"$installer\" " + installer + "; else echo 'KNS requires curl or wget.' >&2; exit 127; fi",
     "printf '%s  %s\\n' " + quoteShell(digest) + " \"$installer\" | sha256sum -c - >/dev/null || { echo 'OneBox installer SHA256 mismatch.' >&2; exit 65; }",
-    "bash \"$installer\" kns " + quoteShell(job.action) + " --request-file \"$request_file\"",
+    "bash \"$installer\" kns " + quoteShell(remoteAction) + " --request-file \"$request_file\"",
     "kns_rc=$?; [ \"$kns_rc\" -eq 0 ] || exit \"$kns_rc\"",
-    "if [ " + quoteShell(job.action) + " = uninstall ]; then verify=$(bash \"$installer\" kns status --instance-id " + statusId + ") || exit 1; printf 'KNS_STATUS=%s\\n' \"$verify\"; else verify=$(bash \"$installer\" kns status --instance-id " + statusId + ") || exit 1; printf 'KNS_STATUS=%s\\n' \"$verify\"; fi",
+    job.action === "machine.import"
+      ? "verify=$(bash \"$installer\" kns discover) || exit 1; printf 'KNS_DISCOVERY=%s\\n' \"$verify\""
+      : "verify=$(bash \"$installer\" kns status --instance-id " + statusId + ") || exit 1; printf 'KNS_STATUS=%s\\n' \"$verify\"",
+  ].join("; ");
+}
+
+function makeRemoteDiscoveryCommand() {
+  const installer = quoteShell(INSTALLER_URL);
+  const digest = quoteShell(INSTALLER_SHA256);
+  return [
+    "set -u",
+    "[ \"$(id -u)\" -eq 0 ] || { echo 'KNS requires a root Komari Agent.' >&2; exit 77; }",
+    "command -v sha256sum >/dev/null 2>&1 || exit 127",
+    "installer=$(mktemp) || exit 1; trap 'rm -f \"$installer\"' EXIT",
+    "if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 10 --max-time 180 " + installer + " -o \"$installer\"; elif command -v wget >/dev/null 2>&1; then wget -qO \"$installer\" " + installer + "; else exit 127; fi",
+    "printf '%s  %s\\n' " + digest + " \"$installer\" | sha256sum -c - >/dev/null || { echo 'OneBox installer SHA256 mismatch.' >&2; exit 65; }",
+    "result=$(bash \"$installer\" kns discover); discover_rc=$?; if [ \"$discover_rc\" -ne 0 ]; then case \"$result\" in *low_pid_headroom*) printf '%s\\n' KNS_RESOURCE=low_pid_headroom ;; *low_memory_headroom*) printf '%s\\n' KNS_RESOURCE=low_memory_headroom ;; esac; exit \"$discover_rc\"; fi",
+    "printf 'KNS_DISCOVERY=%s\\n' \"$result\"",
   ].join("; ");
 }
 
@@ -779,6 +804,25 @@ function extractStatus(value) {
   try { return JSON.parse(match[1]); } catch (_) { return null; }
 }
 
+function extractDiscovery(value) {
+  const text = taskText(value);
+  const match = text.match(/KNS_DISCOVERY=(\{[^\r\n]*\})/);
+  if (!match) return null;
+  try { return JSON.parse(match[1]); } catch (_) { return null; }
+}
+
+function validateDiscovery(job, result) {
+  if (!result || result.schema !== 1 || result.adapterVersion !== ONEBOX_ADAPTER_VERSION || !result.runtime || result.runtime.engine !== "sing-box" || result.runtime.id !== "onebox-main" || !Array.isArray(result.instances) || result.instances.length > 500) return null;
+  const allowedTransports = new Set(["tcp", "udp", "tcp+udp", "ws"]);
+  return result.instances.slice(0, 200).filter((node) => node && typeof node.tag === "string" && node.tag.length > 0 && node.tag.length <= 128 && node.listen && Number.isInteger(Number(node.listen.port)) && Number(node.listen.port) >= 0 && Number(node.listen.port) <= 65535 && typeof node.protocol === "string").map((node) => ({
+    tag: safeText(node.tag, 128), protocol: safeText(node.protocol, 32),
+    listen: { port: Number(node.listen.port), address: safeText(node.listen.address || "", 64), transport: allowedTransports.has(node.listen.transport) ? node.listen.transport : "unknown" },
+    managed: node.managed === true, importable: node.importable === true,
+    options: { security: safeText(node.options && node.options.security || "", 32), sni: safeText(node.options && node.options.sni || "", 253), method: safeText(node.options && node.options.method || "", 64) },
+    reason: safeText(node.reason || "", 64),
+  }));
+}
+
 function checkRemoteStatus(job, status) {
   if (!status || status.schema !== 1 || !status.runtime || status.runtime.engine !== "sing-box") return false;
   if (job.action === "uninstall") {
@@ -814,8 +858,11 @@ function validateCallbackInstance(job, body) {
     if (tls.security !== expectedSecurity || !validHostname(tls.sni)) fail("invalid_callback", "回调 TLS 安全参数或 SNI 无效。", 400);
     if (node.protocol === "vless" && (!secretString(tls.publicKey) || !secretString(tls.shortId))) fail("invalid_callback", "回调 Reality 公钥或 Short ID 缺失。", 400);
     if (tls.alpn != null && (!Array.isArray(tls.alpn) || tls.alpn.length > 8 || !tls.alpn.every((item) => typeof item === "string" && /^[A-Za-z0-9._/-]{1,32}$/.test(item)))) fail("invalid_callback", "回调 ALPN 列表无效。", 400);
+    if (tls.allowInsecure != null && typeof tls.allowInsecure !== "boolean") fail("invalid_callback", "回调 allowInsecure 必须是布尔值。", 400);
   }
-  if (!Array.isArray(node.resources) || !node.resources.length || !node.resources.every((resource) => resource && resource.owned === true && resource.shared === false)) fail("invalid_callback", "回调资源所有权声明无效。", 400);
+  if (job.action === "machine.import") {
+    if (node.legacyTag !== job.legacyTag || !Array.isArray(node.resources) || node.resources.length !== 1 || node.resources[0].type !== "legacyConfigFragment" || node.resources[0].id !== job.legacyTag || node.resources[0].owned !== false || node.resources[0].shared !== true) fail("invalid_callback", "旧版节点导入回调的 tag 或外部资源归属无效。", 400);
+  } else if (!Array.isArray(node.resources) || !node.resources.length || !node.resources.every((resource) => resource && resource.owned === true && resource.shared === false)) fail("invalid_callback", "回调资源所有权声明无效。", 400);
   if (!ID_RE.test(node.id) || !PROTOCOLS[node.protocol]) fail("invalid_callback", "回调实例标识或协议无效。", 400);
   return node;
 }
@@ -871,6 +918,18 @@ function ensureInstance(state, job, callbackInstance) {
     if (mode === "dual") endpoint.hosts = addresses.slice();
   }
   const credentialCiphertext = secrets.encryptSecret(JSON.stringify(callbackInstance.credential), masterKey);
+  if (job.action === "machine.import") {
+    const importedNat = job.nat ? Object.assign({}, job.nat, { publicHost: endpoint.host, publicHosts: endpointPublicHosts(endpoint) }) : null;
+    state.instances.push({
+      id: job.instanceId, machineUuid: job.machineUuid, name: job.name || job.legacyTag, tags: job.tags || [], protocol: callbackInstance.protocol,
+      runtimeId: job.runtimeId || "onebox-main", runtimeEngine: "sing-box", listen: { port: callbackInstance.listen.port, transport: callbackInstance.listen.transport, address: job.listenAddress || "::" },
+      options: job.options || {}, tls: callbackInstance.tls || {}, credentialCiphertext, resources: callbackInstance.resources, legacyTag: job.legacyTag,
+      managedBy: "legacy_import", ownership: "external", readOnly: true, endpoint, endpointOverride: job.endpointOverride || null, nat: importedNat,
+      enabled: true, publish: true, health: { state: callbackInstance.listen.transport === "udp" ? "unverified" : "unknown", level: "L0", consecutiveFailures: 0, consecutiveSuccesses: 0, lastCheckedAt: "", reason: "awaiting_probe" },
+      createdAt: now(), updatedAt: now(), artifactVersion: safeText(job.artifactVersion || "", 80),
+    });
+    return;
+  }
   const record = Object.assign(existing || {}, {
     id: callbackInstance.id,
     machineUuid: job.machineUuid,
@@ -928,9 +987,44 @@ async function pollPendingJobs() {
       const code = exitCode(result);
       if (code === undefined) { if (job.state === "dispatched") { job.state = "running"; changed = true; } continue; }
       if (code !== 0) {
-        job.state = "failed"; job.updatedAt = now(); job.message = "远程任务退出码 " + code + "。敏感输出未保存。"; closeJob(job); changed = true; continue;
+        const resourceLimit = taskText(result).match(/(?:KNS_RESOURCE=|"code"\s*:\s*")(low_pid_headroom|low_memory_headroom)/);
+        job.state = "failed"; job.updatedAt = now(); job.message = resourceLimit
+          ? (resourceLimit[1] === "low_pid_headroom" ? "探针剩余进程额度不足；OneBox 已跳过操作，请释放或提高 pids 限额后重试。" : "探针可用内存不足；OneBox 已跳过操作，请释放或提高内存限额后重试。")
+          : "远程任务退出码 " + code + "。敏感输出未保存。";
+        closeJob(job); changed = true; continue;
       }
       const status = extractStatus(result);
+      if (job.action === "machine.discover") {
+        const discovered = validateDiscovery(job, extractDiscovery(result));
+        const machine = state.machines.find((item) => item.uuid === job.machineUuid);
+        if (!discovered || !machine) {
+          job.state = "needs_reconcile"; job.updatedAt = now(); job.message = "远端发现结果格式无效，未保存节点信息。"; changed = true; continue;
+        }
+        machine.discoveredNodes = discovered;
+        machine.discoveredAt = now();
+        job.state = "succeeded"; job.updatedAt = now(); job.message = "只读扫描完成，发现 " + discovered.length + " 个 OneBox 入站；可导入的节点需要管理员逐个确认。"; closeJob(job); changed = true;
+        audit(state, null, "machine.legacy_discovery.completed", { jobId: job.id, machineUuid: job.machineUuid, discoveredCount: discovered.length, importableCount: discovered.filter((node) => node.importable).length });
+        continue;
+      }
+      if (job.action === "machine.import") {
+        const discovered = validateDiscovery(job, extractDiscovery(result));
+        const candidate = discovered && discovered.find((node) => node.tag === job.legacyTag && !node.managed && node.importable && node.protocol === job.protocol && node.listen.port === job.listenPort && node.listen.transport === job.listenTransport);
+        if (!candidate || !job.callback || job.callback.status !== "succeeded") {
+          job.state = "needs_reconcile"; job.updatedAt = now(); job.message = "导入未完成双重核验；请重新扫描并检查 OneBox 节点配置。"; closeJob(job); changed = true; continue;
+        }
+        try { ensureInstance(state, job, resolveCallbackNode(job)); }
+        catch (error) {
+          job.updatedAt = now();
+          job.pollErrorCode = error && error.code ? safeText(error.code, 32) : "verification_error";
+          job.state = error && error.code === "endpoint_missing" ? "verifying" : "needs_reconcile";
+          job.message = error && error.code === "endpoint_missing" ? "旧节点凭据已安全接收；请先设置可用 Endpoint 后重试核验。" : "旧节点回调已收到，但本地登记核对失败；需要管理员复核。";
+          if (job.state !== "verifying") closeJob(job);
+          changed = true; continue;
+        }
+        job.state = "succeeded"; job.updatedAt = now(); job.message = "旧节点已加密登记，可加入订阅；OneBox 原配置未修改。"; closeJob(job); changed = true;
+        audit(state, null, "instance.legacy_import.completed", { jobId: job.id, machineUuid: job.machineUuid, instanceId: job.instanceId, legacyTag: job.legacyTag });
+        continue;
+      }
         if (job.action === "instance.status") {
           const instance = state.instances.find((item) => item.id === job.instanceId && item.machineUuid === job.machineUuid);
           if (!status || !instance || !status.runtime || status.runtime.engine !== "sing-box") {
@@ -978,6 +1072,7 @@ async function pollPendingJobs() {
 }
 
 function createJob(state, req, action, machine, spec, existingInstance) {
+  const twoFactor = checkTwoFactor(spec.twoFactorCode);
   const token = secrets.createToken();
   const tokenRecord = secrets.tokenRecord(token);
   const instance = existingInstance || {
@@ -991,7 +1086,7 @@ function createJob(state, req, action, machine, spec, existingInstance) {
     instanceId: instance.id, protocol: instance.protocol, listenPort: instance.listen.port, listenAddress: instance.listen.address,
     listenTransport: instance.listen.transport,
     listenTransport: instance.listen.transport,
-    runtimeId: instance.runtimeId || "onebox-main", options: instance.options || {}, name: instance.name, tags: instance.tags || [],
+    runtimeId: instance.runtimeId || "onebox-main", options: instance.options || {}, name: instance.name, tags: instance.tags || [], legacyTag: spec.legacyTag || "",
     endpointOverride: spec.endpointOverride || instance.endpointOverride || null, nat: spec.nat || instance.nat || null,
     idempotencyKey, callbackTokenSalt: tokenRecord.salt, callbackTokenHash: tokenRecord.hash, _callbackToken: token,
     callback: null, taskId: "", createdAt: now(), updatedAt: now(), actor: safeText(((req.context || {}).principal || {}).username || "admin", 80),
@@ -1001,7 +1096,6 @@ function createJob(state, req, action, machine, spec, existingInstance) {
   state.jobs.push(job);
   const command = makeRemoteCommand(state, job, instance);
   const params = { command, clients: [machine.uuid] };
-  const twoFactor = checkTwoFactor(spec.twoFactorCode);
   if (twoFactor) params["2fa_code"] = twoFactor;
   delete job._callbackToken;
   return { job, instance, params };
@@ -1085,6 +1179,69 @@ async function handleAction(req, res) {
     }
     audit(state, req, "settings.updated", { privateSite: state.settings.privateSite });
     save(state); return json(res, 200, { ok: true, settings: publicState(state).settings });
+  }
+  if (action === "machine.discover") {
+    const machine = machineByUuid(state, String(body.machineUuid || "").toLowerCase());
+    if (machine.online !== true) fail("machine_offline", "探针当前不在线，无法扫描 OneBox 配置。", 409);
+    const key = safeText(body.idempotencyKey || "", 256);
+    if (!key) fail("idempotency_key_required", "只读扫描需要 idempotencyKey。", 400);
+    const requestHash = crypto.createHash("sha256").update(machine.uuid + ":discover-legacy-onebox").digest("hex");
+    const prior = state.jobs.find((item) => item.action === action && item.machineUuid === machine.uuid && item.idempotencyKey === key);
+    if (prior) {
+      if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于其他扫描请求。", 409);
+      return json(res, 200, { ok: prior.state !== "failed", reused: true, job: safeJob(prior) });
+    }
+    const conflict = state.jobs.find((item) => item.machineUuid === machine.uuid && item.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
+    if (conflict) fail("runtime_busy", "该探针已有 OneBox 任务进行中，请等待完成后再扫描。", 409);
+    const code = checkTwoFactor(body.twoFactorCode);
+    const job = { id: randomId("job"), action, state: "authorized", machineUuid: machine.uuid, machineName: machine.name, runtimeId: "onebox-main", idempotencyKey: key, requestHash, taskId: "", callback: null, createdAt: now(), updatedAt: now(), actor: safeText(((req.context || {}).principal || {}).username || "admin", 80), message: "正在远程只读扫描 OneBox 入站。" };
+    state.jobs.push(job); audit(state, req, "machine.legacy_discovery.requested", { jobId: job.id, machineUuid: machine.uuid }); save(state);
+    const params = { command: makeRemoteDiscoveryCommand(), clients: [machine.uuid] };
+    if (code) params["2fa_code"] = code;
+    const submitted = await finishDispatch(job, params); return json(res, 202, { ok: submitted.state !== "failed", job: safeJob(submitted) });
+  }
+  if (action === "machine.import") {
+    const machine = machineByUuid(state, String(body.machineUuid || "").toLowerCase());
+    if (machine.online !== true) fail("machine_offline", "探针当前不在线，无法导入 OneBox 凭据。", 409);
+    if (body.confirm !== true) fail("confirmation_required", "导入会把节点凭据加密保存到 KNS，并允许它进入订阅；需要显式确认。", 400);
+    if (!state.settings.publicBaseUrl) fail("public_url_required", "请先设置 Komari HTTPS 公网地址，以接收一次性加密回调。", 409);
+    const legacyTag = String(body.legacyTag || "");
+    if (!legacyTag || legacyTag.length > 128) fail("invalid_legacy_tag", "旧版 OneBox tag 无效。", 400);
+    const scannedAt = Date.parse(machine.discoveredAt || "");
+    if (!Number.isFinite(scannedAt) || Date.now() - scannedAt > 30 * 60 * 1000) fail("discovery_stale", "请先重新扫描；旧节点发现结果超过 30 分钟。", 409);
+    const candidate = (machine.discoveredNodes || []).find((node) => node.tag === legacyTag);
+    if (!candidate || candidate.managed || !candidate.importable || !PROTOCOLS[candidate.protocol] || !["tcp", "udp", "tcp+udp"].includes(candidate.listen.transport) || !Number.isInteger(candidate.listen.port) || candidate.listen.port < 1 || candidate.listen.port > 65535) fail("legacy_node_not_importable", "此历史节点不受安全导入支持，请查看扫描结果中的原因。", 409);
+    if ((state.instances || []).some((instance) => instance.machineUuid === machine.uuid && instance.managedBy === "legacy_import" && instance.legacyTag === legacyTag && !instance.deletedAt)) fail("legacy_node_already_imported", "该旧节点已经导入。", 409);
+    const idempotencyKey = safeText(body.idempotencyKey || "", 256);
+    if (!idempotencyKey) fail("idempotency_key_required", "节点导入需要 idempotencyKey。", 400);
+    const endpointOverride = makeEndpointOverride(body.endpointHost, body.endpointPort, !!state.settings.privateSite);
+    const nat = body.externalPort ? { externalPort: validatePort(body.externalPort) } : null;
+    const importEndpoint = candidateAddress(machine, state, { listen: { port: candidate.listen.port }, endpointOverride, nat });
+    if (!importEndpoint) fail("endpoint_missing", "请先设置可用公网地址或 DDNS，再导入订阅节点。", 409);
+    if (nat) {
+      nat.publicHost = importEndpoint.host;
+      nat.publicHosts = endpointPublicHosts(importEndpoint);
+      if (natMappingConflicts(state, nat.externalPort, candidate.listen.transport, nat.publicHosts)) fail("nat_mapping_conflict", "公网 IP、外部端口和 TCP/UDP 组合已被另一个 KNS 实例占用。", 409);
+    }
+    const requestHash = crypto.createHash("sha256").update(JSON.stringify({ action, machineUuid: machine.uuid, legacyTag, protocol: candidate.protocol, port: candidate.listen.port, transport: candidate.listen.transport, endpointOverride, externalPort: nat && nat.externalPort || 0 })).digest("hex");
+    const prior = state.jobs.find((item) => item.machineUuid === machine.uuid && item.action === action && item.idempotencyKey === idempotencyKey);
+    if (prior) {
+      if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于其他导入请求。", 409);
+      return json(res, 200, { ok: prior.state !== "failed", reused: true, job: safeJob(prior) });
+    }
+    const conflict = state.jobs.find((item) => item.machineUuid === machine.uuid && item.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
+    if (conflict) fail("runtime_busy", "该探针已有 OneBox 任务进行中，请等待完成后再导入。", 409);
+    const address = ["::", "0.0.0.0", "127.0.0.1", "::1"].includes(candidate.listen.address) ? candidate.listen.address : "::";
+    const spec = {
+      id: randomId("legacy"), legacyTag, name: safeText(body.name || legacyTag, 80), tags: Array.isArray(body.tags) ? body.tags.map((tag) => safeText(tag, 32)).filter(Boolean) : [],
+      protocol: candidate.protocol, port: candidate.listen.port, listenAddress: address, transport: candidate.listen.transport,
+      options: candidate.options || {}, endpointOverride, nat, idempotencyKey, twoFactorCode: body.twoFactorCode, requestHash,
+    };
+    const { job, params } = createJob(state, req, action, machine, spec, null);
+    job.legacyTag = legacyTag; job.requestHash = requestHash;
+    audit(state, req, "instance.legacy_import.authorized", { jobId: job.id, machineUuid: machine.uuid, instanceId: job.instanceId, legacyTag });
+    save(state);
+    const submitted = await finishDispatch(job, params); return json(res, 202, { ok: submitted.state !== "failed", job: safeJob(submitted) });
   }
   if (action === "backup.export") {
     const envelope = encryptedBackupEnvelope(state, body.passphrase);
@@ -1216,6 +1373,7 @@ async function handleAction(req, res) {
     const machine = machineByUuid(state, String(body.machineUuid || "").toLowerCase());
     const instance = state.instances.find((item) => item.id === String(body.instanceId || "") && item.machineUuid === machine.uuid && !item.deletedAt);
     if (!instance) fail("instance_not_found", "实例不存在或不属于此探针。", 404);
+    if (instance.managedBy === "legacy_import") fail("legacy_instance_readonly", "导入的旧版节点不由 KNS 托管，不能执行远端生命周期操作。", 409);
     const key = safeText(body.idempotencyKey || "", 256);
     if (!key) fail("idempotency_key_required", "状态核查需要 idempotencyKey。", 400);
     const prior = state.jobs.find((item) => item.action === action && item.machineUuid === machine.uuid && item.instanceId === instance.id && item.idempotencyKey === key);
@@ -1244,6 +1402,7 @@ async function handleAction(req, res) {
     instance = state.instances.find((item) => item.id === proposedId && item.machineUuid === machineUuid);
     if (actionName === "install" && instance && !instance.deletedAt) fail("instance_exists", "该实例已经登记，请选择重配置、重装或新建实例。", 409);
     if (actionName !== "install" && (!instance || instance.deletedAt)) fail("instance_not_found", "重配置或重装需要选择已登记实例。", 404);
+    if (instance && instance.managedBy === "legacy_import") fail("legacy_instance_readonly", "导入的旧版节点仅支持订阅发布设置；如需修改节点配置，请在 OneBox 中操作。", 409);
     const targetPort = actionName === "reinstall" ? instance.listen.port : validated.port;
     const targetTransport = actionName === "reinstall" ? instance.listen.transport : validated.transport;
     if (portConflicts(state, machineUuid, targetPort, targetTransport, proposedId, actionName === "reinstall" ? instance.listen.address : validated.listenAddress)) fail("port_conflict", "该机器上的监听地址、端口和传输类型与另一实例冲突。", 409);
@@ -1264,6 +1423,7 @@ async function handleAction(req, res) {
   } else {
     instance = state.instances.find((item) => item.id === String(body.instanceId || "") && item.machineUuid === machineUuid && !item.deletedAt);
     if (!instance) fail("instance_not_found", "目标实例不存在或不属于该探针。", 404);
+    if (instance.managedBy === "legacy_import") fail("legacy_instance_readonly", "导入的旧版节点仅支持订阅发布设置；如需修改节点配置，请在 OneBox 中操作。", 409);
     spec.id = instance.id; spec.protocol = instance.protocol; spec.port = instance.listen.port; spec.listenAddress = instance.listen.address; spec.transport = instance.listen.transport; spec.options = instance.options; spec.name = instance.name; spec.tags = instance.tags;
   }
   if (["enable", "disable"].includes(actionName)) {
