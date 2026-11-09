@@ -2,6 +2,10 @@
 
 Komari KNS 是 Komari 的节点管理与订阅插件。你可以在一个页面里查看机器、管理 OneBox 节点、检查远程任务，并为不同客户端生成订阅链接。
 
+## OneBox 项目介绍
+
+OneBox 负责在 Linux 机器上安装和运行代理节点；KNS 通过 Komari 集中管理这些节点并生成订阅。请查看 [OneBox 项目介绍与使用文档](https://github.com/liuarui/onebox)。
+
 > 下方是操作示意图。订阅地址、机器地址和节点凭据请勿公开分享。
 
 ## 工作台
