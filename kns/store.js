@@ -1,0 +1,505 @@
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const { createAuditLog } = require("./audit-log");
+
+const CURRENT_SCHEMA = 2;
+
+function initialState() {
+  const now = new Date().toISOString();
+  return {
+    schemaVersion: CURRENT_SCHEMA,
+    pluginVersion: "",
+    revision: 0,
+    createdAt: now,
+    updatedAt: now,
+    settings: {
+      setupComplete: false,
+      autoProvisionNewProbes: false,
+      autoProvisionBaselineUuids: [],
+      remoteInstallDefaultApplied: true,
+      defaultNode: { protocol: "vless", listenPort: 443, listenAddress: "::", sniMode: "preferred", version: 1, updatedAt: "" },
+      publicBaseUrl: "",
+      converterUrl: "",
+      converterTarget: "clash",
+      oneboxScriptUrl: "https://raw.githubusercontent.com/liuarui/onebox/35aedf3afd27210da1a8fcaba22bab3b7566256f/install.sh",
+      oneboxScriptSha256: "7a147616413eaadb8ca4bfb07111c88bc0e429b3cfcaadaccdb07d6081a1ba4e",
+      healthIntervalSeconds: 300,
+      addressSyncIntervalSeconds: 60,
+      privateSite: false,
+      maxBatch: 10,
+    },
+    machines: [],
+    runtimes: [],
+    instances: [],
+    jobs: [],
+    profiles: [],
+    audit: [],
+    legacyNodes: [],
+    lastSnapshotAt: "",
+    snapshotPending: false,
+  };
+}
+
+function migrateState(value) {
+  let state = value;
+  while (state.schemaVersion < CURRENT_SCHEMA) {
+    if (state.schemaVersion === 1) {
+      const settings = Object.assign({}, state.settings || {});
+      // Existing installs predate the setup flag. Treat them as initialized so
+      // an upgrade never blocks an administrator from their existing data.
+      if (typeof settings.setupComplete !== "boolean") settings.setupComplete = !!(state.pluginVersion || settings.publicBaseUrl);
+      // The target 1.1.x plugin never auto-provisioned new probes. Keep the
+      // capability opt-in when it is introduced by this schema migration.
+      if (typeof settings.autoProvisionNewProbes !== "boolean") settings.autoProvisionNewProbes = false;
+      if (!Array.isArray(settings.autoProvisionBaselineUuids)) settings.autoProvisionBaselineUuids = [];
+      if (!settings.defaultNode || typeof settings.defaultNode !== "object") settings.defaultNode = { protocol: "vless", listenPort: 443, listenAddress: "::", sniMode: "preferred", version: 1, updatedAt: "" };
+      state = Object.assign({}, state, { schemaVersion: 2, settings });
+      continue;
+    }
+    throw new Error("Unsupported KNS state schema version.");
+  }
+  return state;
+}
+
+function validateState(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("KNS state must be a JSON object.");
+  if (!Number.isInteger(value.schemaVersion) || value.schemaVersion < 1 || value.schemaVersion > CURRENT_SCHEMA) {
+    throw new Error("Unsupported KNS state schema version.");
+  }
+  value = migrateState(value);
+  const defaults = initialState();
+  if (value.settings != null && (typeof value.settings !== "object" || Array.isArray(value.settings))) throw new Error("KNS settings are invalid.");
+  const sourceSettings = value.settings || {};
+  if (sourceSettings.defaultNode != null && (typeof sourceSettings.defaultNode !== "object" || Array.isArray(sourceSettings.defaultNode))) throw new Error("KNS default node settings are invalid.");
+  const state = Object.assign({}, defaults, value);
+  state.settings = Object.assign({}, defaults.settings, sourceSettings);
+  state.settings.defaultNode = Object.assign({}, defaults.settings.defaultNode, sourceSettings.defaultNode || {});
+  if (typeof state.settings.setupComplete !== "boolean") state.settings.setupComplete = !!(state.pluginVersion || state.settings.publicBaseUrl);
+  if (typeof state.settings.autoProvisionNewProbes !== "boolean") state.settings.autoProvisionNewProbes = false;
+  if (typeof sourceSettings.remoteInstallDefaultApplied !== "boolean") state.settings.remoteInstallDefaultApplied = false;
+  if (!Array.isArray(state.settings.autoProvisionBaselineUuids)) state.settings.autoProvisionBaselineUuids = [];
+  state.settings.autoProvisionBaselineUuids = Array.from(new Set(state.settings.autoProvisionBaselineUuids.filter((uuid) => typeof uuid === "string" && uuid.length <= 64)));
+  for (const field of ["machines", "runtimes", "instances", "jobs", "profiles", "audit", "legacyNodes"]) {
+    if (!Array.isArray(state[field])) throw new Error("KNS state field is invalid: " + field);
+  }
+  if (!state.settings || typeof state.settings !== "object" || Array.isArray(state.settings)) throw new Error("KNS settings are invalid.");
+  return state;
+}
+
+function createStore(storageDir) {
+  const storageRoot = path.resolve(storageDir);
+  const root = path.join(storageRoot, "kns");
+  const stateFile = path.join(root, "state.json");
+  const backupDir = path.join(root, "backups");
+  const snapshotDir = path.join(root, "snapshots");
+  const subscriptionSnapshotDir = path.join(root, "subscriptions");
+  const auditLog = createAuditLog(storageRoot);
+
+  function ensureDirectories() {
+    fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(snapshotDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(subscriptionSnapshotDir, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(root, 0o700); fs.chmodSync(backupDir, 0o700); fs.chmodSync(snapshotDir, 0o700); fs.chmodSync(subscriptionSnapshotDir, 0o700); } catch (_) {}
+  }
+
+  function syncFile(filename) {
+    const fd = fs.openSync(filename, "r");
+    try { fs.fsyncSync(fd); }
+    finally { fs.closeSync(fd); }
+  }
+
+  function syncDirectory(directory) {
+    let fd;
+    try { fd = fs.openSync(directory, "r"); fs.fsyncSync(fd); }
+    catch (_) {}
+    finally { if (fd !== undefined) try { fs.closeSync(fd); } catch (_) {} }
+  }
+
+  function writeAtomicBytes(destination, contents, mode) {
+    const temporary = destination + "." + crypto.randomBytes(8).toString("hex") + ".tmp";
+    try {
+      fs.writeFileSync(temporary, contents, { mode: mode || 0o600, flag: "wx" });
+      try { fs.chmodSync(temporary, mode || 0o600); } catch (_) {}
+      syncFile(temporary);
+      fs.renameSync(temporary, destination);
+      try { fs.chmodSync(destination, mode || 0o600); } catch (_) {}
+      syncDirectory(path.dirname(destination));
+    } catch (error) {
+      try { fs.unlinkSync(temporary); } catch (_) {}
+      throw error;
+    }
+  }
+
+  function stateRequiresMasterKey(value) {
+    return (Array.isArray(value && value.instances) && value.instances.some((item) => !!(item && item.credentialCiphertext))) ||
+      (Array.isArray(value && value.legacyNodes) && value.legacyNodes.some((item) => !!(item && item.ciphertext)));
+  }
+
+  function backupStorageBeforeChange(reason) {
+    if (!["migration", "upgrade"].includes(reason)) throw new Error("Invalid storage snapshot reason.");
+    const suffix = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomBytes(5).toString("hex");
+    const destination = path.join(backupDir, "pre-" + reason + "-" + suffix);
+    // Komari confines plugin filesystem calls to BaseDir and __storageDir__.
+    // Keep staging inside the storage root so the host filesystem adapter permits it.
+    const temporary = path.join(storageRoot, ".pre-" + reason + "-" + suffix + ".tmp");
+    const rootStat = fs.lstatSync(storageRoot);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("Migration snapshot refuses a non-directory storage root.");
+    fs.mkdirSync(temporary, { mode: 0o700 });
+    try {
+      function copyDirectory(source, target) {
+        for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+          const sourcePath = path.join(source, entry.name);
+          if (path.resolve(source) === storageRoot && path.resolve(sourcePath) === path.resolve(temporary)) continue;
+          if (path.resolve(source) === path.resolve(backupDir) && (entry.name.startsWith("pre-migration-") || entry.name.startsWith("pre-upgrade-"))) continue;
+          const targetPath = path.join(target, entry.name);
+          if (entry.isSymbolicLink()) throw new Error("Migration backup refuses symbolic links: " + sourcePath);
+          if (entry.isDirectory()) {
+            fs.mkdirSync(targetPath, { mode: 0o700 });
+            copyDirectory(sourcePath, targetPath);
+          } else if (entry.isFile()) {
+            fs.copyFileSync(sourcePath, targetPath, fs.constants.COPYFILE_EXCL);
+            try { fs.chmodSync(targetPath, 0o600); } catch (_) {}
+          } else {
+            throw new Error("Migration backup encountered an unsupported file: " + sourcePath);
+          }
+        }
+      }
+      copyDirectory(storageRoot, temporary);
+      ensureDirectories();
+      fs.renameSync(temporary, destination);
+      return destination;
+    } catch (error) {
+      try { fs.rmSync(temporary, { recursive: true, force: true }); } catch (_) {}
+      throw error;
+    }
+  }
+
+  function subscriptionSnapshotPath(name) {
+    if (!/^[a-f0-9]{64}$/.test(String(name))) throw new Error("Invalid subscription snapshot key.");
+    return path.join(subscriptionSnapshotDir, String(name) + ".json");
+  }
+
+  function readSubscriptionSnapshot(name) {
+    const filename = subscriptionSnapshotPath(name);
+    if (!fs.existsSync(filename)) return null;
+    try { return JSON.parse(fs.readFileSync(filename, "utf8")); }
+    catch (error) {
+      if (error && error.code === "ENOENT") return null;
+      throw new Error("Subscription snapshot could not be read: " + (error.message || String(error)));
+    }
+  }
+
+  function writeSubscriptionSnapshot(name, value) {
+    ensureDirectories();
+    const destination = subscriptionSnapshotPath(name);
+    const temporary = destination + "." + crypto.randomBytes(8).toString("hex") + ".tmp";
+    try {
+      fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600, flag: "wx" });
+      try { fs.chmodSync(temporary, 0o600); } catch (_) {}
+      syncFile(temporary);
+      fs.renameSync(temporary, destination);
+      try { fs.chmodSync(destination, 0o600); } catch (_) {}
+    } catch (error) {
+      try { fs.unlinkSync(temporary); } catch (_) {}
+      throw error;
+    }
+  }
+
+  function pruneSubscriptionSnapshots(keep) {
+    ensureDirectories();
+    const names = new Set(Array.from(keep || []).map(String));
+    for (const filename of fs.readdirSync(subscriptionSnapshotDir)) {
+      const match = /^([a-f0-9]{64})\.json$/.exec(filename);
+      if (match && !names.has(match[1])) fs.unlinkSync(path.join(subscriptionSnapshotDir, filename));
+    }
+  }
+
+  function read() {
+    if (!fs.existsSync(stateFile)) return null;
+    try { return validateState(JSON.parse(fs.readFileSync(stateFile, "utf8"))); }
+    catch (error) {
+      if (error && error.code === "ENOENT") return null;
+      throw new Error("KNS state could not be read; it was left untouched: " + (error.message || String(error)));
+    }
+  }
+
+  function backupIfDue() {
+    if (!fs.existsSync(stateFile)) return;
+    const day = new Date().toISOString().slice(0, 10);
+    const destination = path.join(backupDir, "state-" + day + ".json");
+    if (fs.existsSync(destination)) return;
+    const keyPath = path.join(root, "master.key");
+    const configuredKey = typeof process !== "undefined" && process.env ? process.env.KNS_MASTER_KEY : "";
+    if (configuredKey && !/^[a-f0-9]{64}$/i.test(configuredKey)) throw new Error("KNS_MASTER_KEY must be 64 hexadecimal characters.");
+    const currentState = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    if (!configuredKey) {
+      if (fs.existsSync(keyPath)) {
+        const keyBackup = path.join(backupDir, "master-" + day + ".key");
+        // Publish the matching key first. If copying the state fails, the next
+        // attempt refreshes this key before it publishes the state file.
+        writeAtomicBytes(keyBackup, fs.readFileSync(keyPath), 0o600);
+      } else if (stateRequiresMasterKey(currentState)) {
+        throw new Error("Cannot create a consistent daily backup without the KNS master key.");
+      }
+    }
+    writeAtomicBytes(destination, fs.readFileSync(stateFile), 0o600);
+    const backups = fs.readdirSync(backupDir).filter((name) => /^state-\d{4}-\d{2}-\d{2}\.json$/.test(name)).sort();
+    while (backups.length > 7) {
+      const oldest = backups.shift();
+      const dayKey = oldest.slice("state-".length, -".json".length);
+      fs.unlinkSync(path.join(backupDir, oldest));
+      const keyBackup = path.join(backupDir, "master-" + dayKey + ".key");
+      if (fs.existsSync(keyBackup)) fs.unlinkSync(keyBackup);
+    }
+  }
+
+  function write(state, options) {
+    const value = validateState(state);
+    const current = read();
+    const currentRevision = current ? current.revision : 0;
+    const expectedRevision = options && Number.isSafeInteger(options.expectedRevision)
+      ? options.expectedRevision
+      : Math.max(0, Number(state.revision) || 0);
+    if (currentRevision !== expectedRevision) {
+      const error = new Error("KNS state changed while this action was in progress. Refresh before saving.");
+      error.code = "state_revision_conflict";
+      error.status = 409;
+      error.expectedRevision = expectedRevision;
+      error.currentRevision = currentRevision;
+      throw error;
+    }
+    ensureDirectories();
+    backupIfDue();
+    value.schemaVersion = CURRENT_SCHEMA;
+    value.revision = currentRevision + 1;
+    value.updatedAt = new Date().toISOString();
+    const makeSnapshot = value.snapshotPending === true || !value.lastSnapshotAt || Date.now() - Date.parse(value.lastSnapshotAt) >= 5 * 60 * 1000;
+    value.snapshotPending = false;
+    if (makeSnapshot) value.lastSnapshotAt = value.updatedAt;
+    const temp = stateFile + "." + crypto.randomBytes(8).toString("hex") + ".tmp";
+    let snapshotTemp = "";
+    let snapshotPath = "";
+    let snapshotPublished = false;
+    const serialized = JSON.stringify(value, null, 2);
+    try {
+      fs.writeFileSync(temp, serialized, { mode: 0o600, flag: "wx" });
+      try { fs.chmodSync(temp, 0o600); } catch (_) {}
+      syncFile(temp);
+      if (makeSnapshot) {
+        const snapshotName = "snapshot-" + value.updatedAt.replace(/[:.]/g, "-") + "-r" + value.revision + ".json";
+        snapshotTemp = path.join(snapshotDir, "." + snapshotName + "." + crypto.randomBytes(6).toString("hex") + ".tmp");
+        snapshotPath = path.join(snapshotDir, snapshotName);
+        fs.writeFileSync(snapshotTemp, serialized, { mode: 0o600, flag: "wx" });
+        try { fs.chmodSync(snapshotTemp, 0o600); } catch (_) {}
+        syncFile(snapshotTemp);
+        fs.renameSync(snapshotTemp, snapshotPath);
+        snapshotPublished = true;
+      }
+      fs.renameSync(temp, stateFile);
+    } catch (error) {
+      try { fs.unlinkSync(temp); } catch (_) {}
+      if (snapshotTemp) try { fs.unlinkSync(snapshotTemp); } catch (_) {}
+      if (snapshotPublished) try { fs.unlinkSync(snapshotPath); } catch (_) {}
+      throw error;
+    }
+    try { fs.chmodSync(stateFile, 0o600); } catch (_) {}
+    if (makeSnapshot) {
+      try {
+        const snapshots = fs.readdirSync(snapshotDir).filter((name) => /^snapshot-.*\.json$/.test(name)).sort();
+        while (snapshots.length > 288) fs.unlinkSync(path.join(snapshotDir, snapshots.shift()));
+      } catch (_) {}
+    }
+    Object.assign(state, value);
+    return value;
+  }
+
+  function preparePluginVersion(state, currentVersion) {
+    const requested = String(currentVersion || "");
+    const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+    const requestedMatch = versionPattern.exec(requested);
+    if (!requestedMatch) throw new Error("Current plugin version is invalid.");
+    const previous = String(state.pluginVersion || "");
+    if (previous === requested) return state;
+    if (previous) {
+      const previousMatch = versionPattern.exec(previous);
+      if (!previousMatch) throw new Error("Stored plugin version is invalid.");
+    }
+    backupStorageBeforeChange("upgrade");
+    state.pluginVersion = requested;
+    return write(state);
+  }
+
+  function listBackups() {
+    ensureDirectories();
+    return fs.readdirSync(backupDir).filter((name) => /^state-\d{4}-\d{2}-\d{2}\.json$/.test(name)).sort().reverse();
+  }
+
+  function inspectBackup(name) {
+    if (!/^state-\d{4}-\d{2}-\d{2}\.json$/.test(String(name))) throw new Error("Invalid backup name.");
+    const restored = validateState(JSON.parse(fs.readFileSync(path.join(backupDir, name), "utf8")));
+    const dayKey = String(name).slice("state-".length, -".json".length);
+    const keyBackup = path.join(backupDir, "master-" + dayKey + ".key");
+    const configuredKey = typeof process !== "undefined" && process.env ? process.env.KNS_MASTER_KEY : "";
+    const requiresKey = stateRequiresMasterKey(restored);
+    let keyAvailable = false;
+    if (configuredKey) {
+      if (!/^[a-f0-9]{64}$/i.test(configuredKey)) throw new Error("KNS_MASTER_KEY must be 64 hexadecimal characters.");
+      if (fs.existsSync(keyBackup)) {
+        const backupKey = fs.readFileSync(keyBackup);
+        const envKey = Buffer.from(configuredKey, "hex");
+        if (backupKey.length !== 32 || !crypto.timingSafeEqual(backupKey, envKey)) throw new Error("This backup uses a different KNS_MASTER_KEY; restore was stopped.");
+      }
+      keyAvailable = true;
+    } else if (fs.existsSync(keyBackup)) {
+      const backupKey = fs.readFileSync(keyBackup);
+      if (backupKey.length !== 32) throw new Error("KNS master-key backup has an invalid length.");
+      keyAvailable = true;
+    } else if (requiresKey) {
+      throw new Error("This state backup has encrypted credentials but no matching master-key backup; current state was left untouched.");
+    }
+    return {
+      name: String(name), schemaVersion: restored.schemaVersion, pluginVersion: restored.pluginVersion || "",
+      createdAt: restored.updatedAt || restored.createdAt || "", requiresMasterKey: requiresKey, keyAvailable,
+      counts: { machines: restored.machines.length, instances: restored.instances.filter((item) => !item.deletedAt).length, profiles: restored.profiles.length, jobs: restored.jobs.length },
+    };
+  }
+
+  function recoverInterruptedRestore() {
+    const transactionPath = path.join(backupDir, "restore-transaction.json");
+    if (!fs.existsSync(transactionPath)) return false;
+    const transaction = JSON.parse(fs.readFileSync(transactionPath, "utf8"));
+    if (!transaction || transaction.format !== "KNS-RESTORE-TRANSACTION-v1" || !/^pre-restore-[0-9]+-[a-f0-9]{12}\.json$/.test(String(transaction.stateBackup || "")) || !/^pre-restore-[0-9]+-[a-f0-9]{12}\.key$/.test(String(transaction.keyBackup || ""))) {
+      throw new Error("Interrupted KNS restore journal is invalid; existing files were left untouched.");
+    }
+    if (transaction.keyChanged === true) {
+      const keyPath = path.join(root, "master.key");
+      if (transaction.hadKey === true) {
+        const oldKeyPath = path.join(backupDir, transaction.keyBackup);
+        if (!fs.existsSync(oldKeyPath)) throw new Error("Interrupted KNS restore cannot recover the previous master key.");
+        writeAtomicBytes(keyPath, fs.readFileSync(oldKeyPath), 0o600);
+      } else if (fs.existsSync(keyPath)) fs.unlinkSync(keyPath);
+    }
+    if (transaction.hadState === true) {
+      const oldStatePath = path.join(backupDir, transaction.stateBackup);
+      if (!fs.existsSync(oldStatePath)) throw new Error("Interrupted KNS restore cannot recover the previous state.");
+      writeAtomicBytes(stateFile, fs.readFileSync(oldStatePath), 0o600);
+    } else if (fs.existsSync(stateFile)) fs.unlinkSync(stateFile);
+    fs.unlinkSync(transactionPath);
+    syncDirectory(backupDir);
+    return true;
+  }
+
+  function beginRestoreTransaction(keyChanged) {
+    const keyPath = path.join(root, "master.key");
+    const suffix = Date.now() + "-" + crypto.randomBytes(6).toString("hex");
+    const stateBackup = "pre-restore-" + suffix + ".json";
+    const keyBackupName = "pre-restore-" + suffix + ".key";
+    const hadState = fs.existsSync(stateFile);
+    const hadKey = fs.existsSync(keyPath);
+    if (hadState) writeAtomicBytes(path.join(backupDir, stateBackup), fs.readFileSync(stateFile), 0o600);
+    if (hadKey) writeAtomicBytes(path.join(backupDir, keyBackupName), fs.readFileSync(keyPath), 0o600);
+    const transaction = { format: "KNS-RESTORE-TRANSACTION-v1", stateBackup, keyBackup: keyBackupName, hadState, hadKey, keyChanged };
+    writeAtomicBytes(path.join(backupDir, "restore-transaction.json"), JSON.stringify(transaction), 0o600);
+  }
+
+  function restoreBackup(name, options) {
+    ensureDirectories();
+    recoverInterruptedRestore();
+    const current = read();
+    const expectedRevision = options && Number.isSafeInteger(options.expectedRevision) ? options.expectedRevision : (current ? current.revision : 0);
+    const currentRevision = current ? current.revision : 0;
+    if (expectedRevision !== currentRevision) {
+      const error = new Error("KNS state changed before restore. Refresh and preview the backup again.");
+      error.code = "state_revision_conflict"; error.status = 409;
+      error.expectedRevision = expectedRevision; error.currentRevision = currentRevision;
+      throw error;
+    }
+    inspectBackup(name);
+    const source = path.join(backupDir, name);
+    const restored = validateState(JSON.parse(fs.readFileSync(source, "utf8")));
+    const dayKey = String(name).slice("state-".length, -".json".length);
+    const keyBackup = path.join(backupDir, "master-" + dayKey + ".key");
+    const keyPath = path.join(root, "master.key");
+    const configuredKey = typeof process !== "undefined" && process.env ? process.env.KNS_MASTER_KEY : "";
+    const requiresKey = stateRequiresMasterKey(restored);
+    let restoredKey = null;
+    let keyChanged = false;
+    if (configuredKey) {
+      if (!/^[a-f0-9]{64}$/i.test(configuredKey)) throw new Error("KNS_MASTER_KEY must be 64 hexadecimal characters.");
+      restoredKey = Buffer.from(configuredKey, "hex");
+      if (fs.existsSync(keyBackup)) {
+        const backupKey = fs.readFileSync(keyBackup);
+        if (backupKey.length !== 32 || !crypto.timingSafeEqual(backupKey, restoredKey)) throw new Error("This backup uses a different KNS_MASTER_KEY; restore was stopped.");
+      }
+    } else if (fs.existsSync(keyBackup)) {
+      restoredKey = fs.readFileSync(keyBackup);
+      if (restoredKey.length !== 32) throw new Error("KNS master-key backup has an invalid length.");
+      keyChanged = true;
+    } else if (requiresKey) {
+      throw new Error("This state backup has encrypted credentials but no matching master-key backup; current state was left untouched.");
+    }
+
+    // Preserve today's state/key pair before replacing either member. The
+    // daily backup is also the recovery point if the process stops mid-write.
+    backupIfDue();
+    beginRestoreTransaction(keyChanged);
+    try {
+      if (keyChanged && restoredKey) writeAtomicBytes(keyPath, restoredKey, 0o600);
+      restored.revision = currentRevision;
+      const result = write(restored, { expectedRevision: currentRevision });
+      auditLog.importHistory(result.audit);
+      fs.unlinkSync(path.join(backupDir, "restore-transaction.json"));
+      syncDirectory(backupDir);
+      return result;
+    } catch (error) {
+      try { recoverInterruptedRestore(); }
+      catch (recoveryError) { throw new Error((error.message || String(error)) + "; restore rollback also failed: " + (recoveryError.message || String(recoveryError))); }
+      throw error;
+    }
+  }
+
+  function importBackup(value, key, options) {
+    ensureDirectories();
+    recoverInterruptedRestore();
+    const restored = validateState(value);
+    const current = read();
+    const currentRevision = current ? current.revision : 0;
+    const expectedRevision = options && Number.isSafeInteger(options.expectedRevision) ? options.expectedRevision : currentRevision;
+    if (expectedRevision !== currentRevision) {
+      const error = new Error("KNS state changed before import. Refresh and review the file again.");
+      error.code = "state_revision_conflict"; error.status = 409;
+      error.expectedRevision = expectedRevision; error.currentRevision = currentRevision;
+      throw error;
+    }
+    const importedKey = Buffer.from(key || []);
+    if (importedKey.length !== 32) throw new Error("Imported KNS master key has an invalid length.");
+    backupIfDue();
+    const keyPath = path.join(root, "master.key");
+    const configuredKey = typeof process !== "undefined" && process.env ? process.env.KNS_MASTER_KEY : "";
+    const keyChanged = !configuredKey;
+    // Use the same durable journal as daily restores, so startup recovery can
+    // roll back both files even when the host exits before catch can run.
+    beginRestoreTransaction(keyChanged);
+    try {
+      if (keyChanged) writeAtomicBytes(keyPath, importedKey, 0o600);
+      restored.revision = currentRevision;
+      const result = write(restored, { expectedRevision: currentRevision });
+      auditLog.importHistory(result.audit);
+      syncDirectory(root);
+      fs.unlinkSync(path.join(backupDir, "restore-transaction.json"));
+      syncDirectory(backupDir);
+      return result;
+    } catch (error) {
+      try { recoverInterruptedRestore(); }
+      catch (recoveryError) { throw new Error((error.message || String(error)) + "; import rollback also failed: " + (recoveryError.message || String(recoveryError))); }
+      throw error;
+    }
+  }
+
+  return { appendAudit: auditLog.append, auditRoot: auditLog.root, auditRetention: auditLog.retention, backupDir, backupStorageBeforeChange, ensureDirectories, importBackup, importLegacyAudit: auditLog.importLegacy, initialState, inspectBackup, listAudit: auditLog.list, listBackups, preparePluginVersion, pruneSubscriptionSnapshots, read, readSubscriptionSnapshot, recoverInterruptedRestore, restoreBackup, root, snapshotDir, stateFile, subscriptionSnapshotDir, write, writeSubscriptionSnapshot };
+}
+
+module.exports = { CURRENT_SCHEMA, createStore, initialState, migrateState, validateState };

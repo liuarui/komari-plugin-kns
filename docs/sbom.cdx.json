@@ -1,0 +1,33 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "Komari KNS",
+      "version": "1.0.0",
+      "licenses": [
+        {
+          "expression": "AGPL-3.0-only"
+        }
+      ]
+    }
+  },
+  "components": [],
+  "dependencies": [],
+  "properties": [
+    {
+      "name": "runtime.dependencies",
+      "value": "[{\"name\": \"qrcode-generator\", \"version\": \"2.0.4\", \"license\": \"MIT\", \"source\": \"https://github.com/kazuhikoarase/qrcode-generator\"}]"
+    },
+    {
+      "name": "dependency-lock.sha256",
+      "value": "c91e89e6729fb3ec38889dd17230541ded697f33d63f42b82b8c0ea4b99803cc"
+    },
+    {
+      "name": "packaging.dependencies",
+      "value": "[]"
+    }
+  ]
+}

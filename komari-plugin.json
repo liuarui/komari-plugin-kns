@@ -1,0 +1,31 @@
+{
+  "name": {
+    "zh_CN": "Komari KNS 节点与订阅",
+    "en": "Komari KNS Nodes and Subscriptions"
+  },
+  "short": "onebox-bridge",
+  "description": {
+    "zh_CN": "以机器为中心管理 OneBox 代理节点，通过三步向导安装协议，并发布受令牌保护的 Mihomo、sing-box 与多客户端订阅。",
+    "en": "Manage OneBox proxy nodes by machine, install protocols with a three-step wizard, and publish token-protected Mihomo, sing-box, and converted subscriptions."
+  },
+  "author": "ajax",
+  "version": "1.0.0",
+  "komari": ">=1.4.3",
+  "entry": "script.js",
+  "permissions": {
+    "node": true,
+    "allowRoutes": true,
+    "allowSystemRPC": true,
+    "timeout": 120
+  },
+  "pages": [
+    {
+      "file": "pages/admin.html",
+      "title": {
+        "zh_CN": "KNS 节点管理",
+        "en": "KNS Node Management"
+      },
+      "visibility": "admin"
+    }
+  ]
+}
