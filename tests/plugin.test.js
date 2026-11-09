@@ -305,7 +305,11 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("POST /api/kns/report")({ headers: { authorization: "Bearer " + legacyRequest.report.oneTimeToken, "content-type": "application/json" }, body: JSON.stringify(legacyReport) }, legacyReportRes);
     assert.equal(legacyReportRes.statusCode, 204);
     taskResult = { exit_code: 0, stdout: "KNS_DISCOVERY=" + JSON.stringify(legacyDiscovery) };
-    await crons.find((item) => item.expression === "@every 15s").handler();
+    const cryptoModule = require("../kns/crypto");
+    const decryptSecret = cryptoModule.decryptSecret;
+    cryptoModule.decryptSecret = () => { throw new Error("legacy import should transfer its encrypted callback credential"); };
+    try { await crons.find((item) => item.expression === "@every 15s").handler(); }
+    finally { cryptoModule.decryptSecret = decryptSecret; }
     await new Promise((resolve) => setTimeout(resolve, 20));
     const afterLegacyImportRes = response();
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, afterLegacyImportRes);
@@ -318,6 +322,10 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.equal(importedLegacy.nat.externalPort, 30443);
     assert.equal("credential" in importedLegacy, false);
     assert.equal(JSON.stringify(afterLegacyImport).includes(legacyCredentialUuid), false);
+    const importedJob = afterLegacyImport.jobs.find((job) => job.id === legacyRequest.jobId);
+    assert.equal("keyFingerprint" in importedJob.callback, false);
+    const persistedLegacy = JSON.parse(fs.readFileSync(path.join(storage, "kns", "state.json"), "utf8")).instances.find((item) => item.id === importedLegacy.id);
+    assert.equal(JSON.parse(decryptSecret(persistedLegacy.credentialCiphertext, cryptoModule.getMasterKey(storage))).value, legacyCredentialUuid);
     const importedDisableRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "disable", machineUuid, instanceId: importedLegacy.id, confirm: true, idempotencyKey: "legacy-disable-denied" }) }, importedDisableRes);
     assert.equal(importedDisableRes.statusCode, 409);
@@ -407,7 +415,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.match(subRes.body, new RegExp(legacyCredentialUuid));
     assert.equal(subRes.headers["x-kns-snapshot-success"], "2");
     assert.ok(subRes.headers["x-kns-snapshot-generated-at"]);
-    assert.equal(subRes.headers.link, '<https://github.com/liuarui/komari-plugin-kns/tree/v1.2.2>; rel="source"');
+    assert.equal(subRes.headers.link, '<https://github.com/liuarui/komari-plugin-kns/tree/v1.2.3>; rel="source"');
     assert.equal(subRes.headers["x-kns-license"], "AGPL-3.0-only");
     const singboxOnlyProfileRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.create", name: "singbox-only", formats: ["singbox-full"] }) }, singboxOnlyProfileRes);

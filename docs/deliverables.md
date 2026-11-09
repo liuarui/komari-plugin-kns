@@ -2,8 +2,8 @@
 
 | DEL | 规格要求 | 交付物/状态 |
 | --- | --- | --- |
-| 01 | 源码仓库与 Git Tag | OneBox 适配代码固定在 `liuarui/onebox` 提交 `a36b55c`（分支 `codex/kns-adapter`）。Komari 插件 [v1.2.2 正式发布](https://github.com/liuarui/komari-plugin-kns/releases/tag/v1.2.2)，已完成目标 Komari 1.6.1 在线状态映射、HTTPS 同源设置保存和只读节点发现验收 |
-| 02 | Komari 插件安装/升级 ZIP | `dist/onebox-bridge.zip`，v1.2.2；包含 GNU AGPL v3.0-only 许可证文本，根 manifest、ZIP CRC 与 SHA-256 已核验。新增 `common:getNodesLatestStatus` 在线状态映射与 Fetch Metadata 反代写入兼容；已上传至目标面板并确认 KNS v1.2.2 运行。只读扫描发现一个可导入实例；凭据导入未执行。SHA-256 `ebc777d47b373b1aa3a0ae27c115ae2da5bf4c4df0ccf27410f9be3ee7fb4d64` |
+| 01 | 源码仓库与 Git Tag | OneBox 适配代码固定在 `liuarui/onebox` 提交 `a36b55c`（分支 `codex/kns-adapter`）。Komari 插件 [v1.2.3 正式发布](https://github.com/liuarui/komari-plugin-kns/releases/tag/v1.2.3)，包含旧节点导入登记修复，并通过 Komari 1.6.1 目标环境的加密登记验收 |
+| 02 | Komari 插件安装/升级 ZIP | `dist/onebox-bridge.zip`，v1.2.3；包含 GNU AGPL v3.0-only 许可证文本，根 manifest、ZIP CRC 与 SHA-256 已核验。修复旧节点导入在回调验签后无法登记的问题；已上传目标面板并确认 KNS v1.2.3 正常运行。旧节点加密登记成功、OneBox 配置未修改；旧实例仍由 OneBox 管理。SHA-256 `1c260af7874718f1e224bba6833be60acc1722ce0947ef72638445b55bbc98a1` |
 | 03 | 打包脚本、依赖说明、SHA-256 | `scripts/package.py` 会校验机器可读 `requirements.lock` 并把锁文件哈希写入 CycloneDX SBOM；`dist/onebox-bridge.zip.sha256` |
 | 04 | 安装/查询/卸载/重装适配器源码 | OneBox 仓库 `install.sh` KNS schema 1；包括旧节点 discover/import、install/reconfigure/reinstall/enable/disable/status/uninstall，以及低 PID/内存预检；实施结果与待验收项见 `OneBox_KNS_适配改造说明_2026-11-08.docx` |
 | 05 | 数据模型、JSON Schema、迁移 | `docs/data-model.md`、`docs/state.schema.json`、`docs/migrations.md` |

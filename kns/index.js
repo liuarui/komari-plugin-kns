@@ -50,6 +50,7 @@ const pendingTokenUsage = new Map();
 function now() { return new Date().toISOString(); }
 function randomId(prefix) { return prefix + "-" + Date.now().toString(36) + "-" + crypto.randomBytes(5).toString("hex"); }
 function deepClone(value) { return JSON.parse(JSON.stringify(value)); }
+function masterKeyFingerprint(key) { return crypto.createHash("sha256").update(key).digest("hex").slice(0, 16); }
 function fail(code, message, status) {
   const error = new Error(message);
   error.code = code;
@@ -689,6 +690,7 @@ function safeJob(job) {
   delete copy.retrySpec;
   delete copy.retryIdempotencyKey;
   if (copy.callback) {
+    delete copy.callback.keyFingerprint;
     if (copy.callback.instance) {
       delete copy.callback.instance.credential;
       delete copy.callback.instance.credentialCiphertext;
@@ -1099,6 +1101,13 @@ function ensureInstance(state, job, callbackInstance) {
   }
   const machine = state.machines.find((item) => item.uuid === job.machineUuid);
   if (!machine) fail("machine_missing", "目标探针在 Komari 列表中不存在。", 409);
+  if (!callbackInstance) fail("callback_instance_missing", "远端回调实例信息缺失。", 409);
+  if (job.action === "machine.import") {
+    if (job.callback && job.callback.keyFingerprint && job.callback.keyFingerprint !== masterKeyFingerprint(masterKey)) {
+      fail("callback_key_changed", "KNS 主密钥在回调接收后发生变化，无法安全登记回调凭据。", 409);
+    }
+    if (!callbackInstance.credentialCiphertext) fail("callback_ciphertext_missing", "远端回调中的加密凭据缺失。", 409);
+  }
   const endpoint = candidateAddress(machine, state, { listen: { port: callbackInstance.listen.port }, endpointOverride: job.endpointOverride, nat: job.nat });
   if (!endpoint) fail("endpoint_missing", "无法为实例解析可用公网 Endpoint。", 409);
   if (endpoint.source === "ddns") {
@@ -1114,7 +1123,9 @@ function ensureInstance(state, job, callbackInstance) {
     endpoint.resolvedAddresses = addresses.slice();
     if (mode === "dual") endpoint.hosts = addresses.slice();
   }
-  const credentialCiphertext = secrets.encryptSecret(JSON.stringify(callbackInstance.credential), masterKey);
+  const credentialCiphertext = job.action === "machine.import" && callbackCiphertextMatchesCurrentKey(job)
+    ? callbackInstance.credentialCiphertext
+    : secrets.encryptSecret(JSON.stringify(callbackInstance.credential), masterKey);
   if (job.action === "machine.import") {
     const importedNat = job.nat ? Object.assign({}, job.nat, { publicHost: endpoint.host, publicHosts: endpointPublicHosts(endpoint) }) : null;
     state.instances.push({
@@ -1209,10 +1220,16 @@ async function pollPendingJobs() {
         if (!candidate || !job.callback || job.callback.status !== "succeeded") {
           job.state = "needs_reconcile"; job.updatedAt = now(); job.message = "导入未完成双重核验；请重新扫描并检查 OneBox 节点配置。"; closeJob(job); changed = true; continue;
         }
-        try { ensureInstance(state, job, resolveCallbackNode(job)); }
+        try {
+          const callbackInstance = job.action === "machine.import" && callbackCiphertextMatchesCurrentKey(job)
+            ? job.callback.instance
+            : resolveCallbackNode(job);
+          ensureInstance(state, job, callbackInstance);
+        }
         catch (error) {
           job.updatedAt = now();
-          job.pollErrorCode = error && error.code ? safeText(error.code, 32) : "verification_error";
+          const errorType = error && typeof error.name === "string" ? safeText(error.name, 24).toLowerCase().replace(/[^a-z0-9_-]/g, "") : "";
+          job.pollErrorCode = error && error.code ? safeText(error.code, 32) : (errorType ? "verification_" + errorType : "verification_error");
           job.state = error && error.code === "endpoint_missing" ? "verifying" : "needs_reconcile";
           job.message = error && error.code === "endpoint_missing" ? "旧节点凭据已安全接收；请先设置可用 Endpoint 后重试核验。" : "旧节点回调已收到，但本地登记核对失败；需要管理员复核。";
           if (job.state !== "verifying") closeJob(job);
@@ -2013,7 +2030,7 @@ async function handleReport(req, res) {
   try {
     const node = validateCallbackInstance(job, body);
     job.artifactVersion = body.artifactVersion;
-    job.callback = { status: body.status, receivedAt: now(), payloadHash: bodyDigest, instance: node ? Object.assign({}, node, { credentialCiphertext: secrets.encryptSecret(JSON.stringify(node.credential), masterKey) }) : null };
+    job.callback = { status: body.status, receivedAt: now(), payloadHash: bodyDigest, keyFingerprint: masterKeyFingerprint(masterKey), instance: node ? Object.assign({}, node, { credentialCiphertext: secrets.encryptSecret(JSON.stringify(node.credential), masterKey) }) : null };
     if (job.callback.instance) delete job.callback.instance.credential;
     delete job.callbackTokenHash;
     delete job.callbackTokenSalt;
@@ -2036,14 +2053,29 @@ function safeNodeFromCallback(job, state) {
 function resolveCallbackNode(job, state) {
   const node = job.callback && job.callback.instance;
   if (!node) return null;
+  if (job.callback.keyFingerprint && job.callback.keyFingerprint !== masterKeyFingerprint(masterKey)) {
+    const error = new Error("KNS 主密钥在回调接收后发生变化，无法解密回调凭据。");
+    error.code = "callback_key_changed";
+    throw error;
+  }
   const result = Object.assign({}, node);
-  result.credential = JSON.parse(secrets.decryptSecret(node.credentialCiphertext, masterKey));
+  try { result.credential = JSON.parse(secrets.decryptSecret(node.credentialCiphertext, masterKey)); }
+  catch (_) {
+    const error = new Error("回调凭据密文无法使用当前 KNS 主密钥解密。");
+    error.code = "callback_decrypt_failed";
+    throw error;
+  }
   return result;
 }
 
 function closeJob(job) {
   if (job.callback && job.callback.instance) delete job.callback.instance.credentialCiphertext;
   delete job.callbackTokenHash; delete job.callbackTokenSalt; delete job._callbackToken;
+}
+
+function callbackCiphertextMatchesCurrentKey(job) {
+  const fingerprint = job && job.callback && job.callback.keyFingerprint;
+  return !!fingerprint && fingerprint === masterKeyFingerprint(masterKey);
 }
 
 async function resolveDoh(host) {

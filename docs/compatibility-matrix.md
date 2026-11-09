@@ -4,8 +4,8 @@
 
 | 组件 | 本次识别/实现 | 验收状态 |
 | --- | --- | --- |
-| Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | 目标面板已运行 v1.2.2；在线状态映射、HTTPS 同源设置写入及只读旧节点发现通过。完整 OneBox 生命周期仍未验收 |
-| Komari Agent | 目标 Agent 版本未提供；使用 `admin:exec` 与 `admin:getSpecificTaskResult` | 目标在线探针成功完成只读旧节点扫描并返回一个可导入实例；未读取或导入凭据，安装、重配置、启停及卸载未在目标探针执行 |
+| Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | 目标面板已运行 v1.2.3；在线状态映射、HTTPS 同源设置写入、只读旧节点发现及一次旧节点加密登记通过。节点检测仍未知；订阅客户端与完整 OneBox 生命周期未验收 |
+| Komari Agent | 目标 Agent 版本未提供；使用 `admin:exec` 与 `admin:getSpecificTaskResult` | 在线探针只读扫描成功；一次旧节点导入任务通过 Agent 退出码、OneBox 回调和登记核验，并在 KNS 加密登记。旧节点为只读托管；安装、重配置、启停和卸载未在目标探针执行 |
 | OneBox | adapter schema 1，版本 `1.4.0`；[提交 `a36b55c`](https://github.com/liuarui/onebox/commit/a36b55cd455053f66cdf18fe3045e306d06d3934)，分支 `codex/kns-adapter` | 安装脚本固定 SHA-256 `507801b3ce9b1226657420bd17a0601e7ac2fe4508ebf2dd440c5e0514b0477f`；Linux/LXC 真机未执行；低 PID/内存预检阈值见 OneBox README |
 | sing-box | OneBox 共享 `onebox-main` Runtime；实际 target 版本由 OneBox 安装过程决定，未锁定 | 结构通过本地生成/JSON 解析，未对目标二进制 `check` |
 | Mihomo | 输出 Mihomo full/provider YAML | 已检查生成文本片段；未用冻结客户端导入 |
