@@ -19,12 +19,13 @@ function initialState() {
       setupComplete: false,
       autoProvisionNewProbes: false,
       autoProvisionBaselineUuids: [],
+      remoteInstallDefaultApplied: true,
       defaultNode: { protocol: "vless", listenPort: 443, listenAddress: "::", sniMode: "preferred", version: 1, updatedAt: "" },
       publicBaseUrl: "",
-      converterUrl: "http://23.146.156.234:25500/sub",
+      converterUrl: "",
       converterTarget: "clash",
-      oneboxScriptUrl: "https://raw.githubusercontent.com/liuarui/onebox/a36b55cd455053f66cdf18fe3045e306d06d3934/install.sh",
-      oneboxScriptSha256: "507801b3ce9b1226657420bd17a0601e7ac2fe4508ebf2dd440c5e0514b0477f",
+      oneboxScriptUrl: "https://raw.githubusercontent.com/liuarui/onebox/35aedf3afd27210da1a8fcaba22bab3b7566256f/install.sh",
+      oneboxScriptSha256: "7a147616413eaadb8ca4bfb07111c88bc0e429b3cfcaadaccdb07d6081a1ba4e",
       healthIntervalSeconds: 300,
       addressSyncIntervalSeconds: 60,
       privateSite: false,
@@ -70,11 +71,15 @@ function validateState(value) {
   }
   value = migrateState(value);
   const defaults = initialState();
-  const state = Object.assign(defaults, value);
-  state.settings = Object.assign({}, defaults.settings, value.settings || {});
-  state.settings.defaultNode = Object.assign({}, defaults.settings.defaultNode, state.settings.defaultNode || {});
+  if (value.settings != null && (typeof value.settings !== "object" || Array.isArray(value.settings))) throw new Error("KNS settings are invalid.");
+  const sourceSettings = value.settings || {};
+  if (sourceSettings.defaultNode != null && (typeof sourceSettings.defaultNode !== "object" || Array.isArray(sourceSettings.defaultNode))) throw new Error("KNS default node settings are invalid.");
+  const state = Object.assign({}, defaults, value);
+  state.settings = Object.assign({}, defaults.settings, sourceSettings);
+  state.settings.defaultNode = Object.assign({}, defaults.settings.defaultNode, sourceSettings.defaultNode || {});
   if (typeof state.settings.setupComplete !== "boolean") state.settings.setupComplete = !!(state.pluginVersion || state.settings.publicBaseUrl);
   if (typeof state.settings.autoProvisionNewProbes !== "boolean") state.settings.autoProvisionNewProbes = false;
+  if (typeof sourceSettings.remoteInstallDefaultApplied !== "boolean") state.settings.remoteInstallDefaultApplied = false;
   if (!Array.isArray(state.settings.autoProvisionBaselineUuids)) state.settings.autoProvisionBaselineUuids = [];
   state.settings.autoProvisionBaselineUuids = Array.from(new Set(state.settings.autoProvisionBaselineUuids.filter((uuid) => typeof uuid === "string" && uuid.length <= 64)));
   for (const field of ["machines", "runtimes", "instances", "jobs", "profiles", "audit", "legacyNodes"]) {
@@ -278,15 +283,16 @@ function createStore(storageDir) {
     let snapshotTemp = "";
     let snapshotPath = "";
     let snapshotPublished = false;
+    const serialized = JSON.stringify(value, null, 2);
     try {
-      fs.writeFileSync(temp, JSON.stringify(value, null, 2), { mode: 0o600, flag: "wx" });
+      fs.writeFileSync(temp, serialized, { mode: 0o600, flag: "wx" });
       try { fs.chmodSync(temp, 0o600); } catch (_) {}
       syncFile(temp);
       if (makeSnapshot) {
         const snapshotName = "snapshot-" + value.updatedAt.replace(/[:.]/g, "-") + "-r" + value.revision + ".json";
         snapshotTemp = path.join(snapshotDir, "." + snapshotName + "." + crypto.randomBytes(6).toString("hex") + ".tmp");
         snapshotPath = path.join(snapshotDir, snapshotName);
-        fs.writeFileSync(snapshotTemp, JSON.stringify(value, null, 2), { mode: 0o600, flag: "wx" });
+        fs.writeFileSync(snapshotTemp, serialized, { mode: 0o600, flag: "wx" });
         try { fs.chmodSync(snapshotTemp, 0o600); } catch (_) {}
         syncFile(snapshotTemp);
         fs.renameSync(snapshotTemp, snapshotPath);
@@ -320,11 +326,6 @@ function createStore(storageDir) {
     if (previous) {
       const previousMatch = versionPattern.exec(previous);
       if (!previousMatch) throw new Error("Stored plugin version is invalid.");
-      for (let index = 1; index <= 3; index += 1) {
-        const before = Number(previousMatch[index]); const after = Number(requestedMatch[index]);
-        if (before > after) throw new Error("KNS state belongs to a newer plugin version.");
-        if (before < after) break;
-      }
     }
     backupStorageBeforeChange("upgrade");
     state.pluginVersion = requested;
@@ -391,6 +392,19 @@ function createStore(storageDir) {
     return true;
   }
 
+  function beginRestoreTransaction(keyChanged) {
+    const keyPath = path.join(root, "master.key");
+    const suffix = Date.now() + "-" + crypto.randomBytes(6).toString("hex");
+    const stateBackup = "pre-restore-" + suffix + ".json";
+    const keyBackupName = "pre-restore-" + suffix + ".key";
+    const hadState = fs.existsSync(stateFile);
+    const hadKey = fs.existsSync(keyPath);
+    if (hadState) writeAtomicBytes(path.join(backupDir, stateBackup), fs.readFileSync(stateFile), 0o600);
+    if (hadKey) writeAtomicBytes(path.join(backupDir, keyBackupName), fs.readFileSync(keyPath), 0o600);
+    const transaction = { format: "KNS-RESTORE-TRANSACTION-v1", stateBackup, keyBackup: keyBackupName, hadState, hadKey, keyChanged };
+    writeAtomicBytes(path.join(backupDir, "restore-transaction.json"), JSON.stringify(transaction), 0o600);
+  }
+
   function restoreBackup(name, options) {
     ensureDirectories();
     recoverInterruptedRestore();
@@ -431,15 +445,7 @@ function createStore(storageDir) {
     // Preserve today's state/key pair before replacing either member. The
     // daily backup is also the recovery point if the process stops mid-write.
     backupIfDue();
-    const suffix = Date.now() + "-" + crypto.randomBytes(6).toString("hex");
-    const stateBackup = "pre-restore-" + suffix + ".json";
-    const keyBackupName = "pre-restore-" + suffix + ".key";
-    const hadState = fs.existsSync(stateFile);
-    const hadKey = fs.existsSync(keyPath);
-    if (hadState) writeAtomicBytes(path.join(backupDir, stateBackup), fs.readFileSync(stateFile), 0o600);
-    if (hadKey) writeAtomicBytes(path.join(backupDir, keyBackupName), fs.readFileSync(keyPath), 0o600);
-    const transaction = { format: "KNS-RESTORE-TRANSACTION-v1", stateBackup, keyBackup: keyBackupName, hadState, hadKey, keyChanged };
-    writeAtomicBytes(path.join(backupDir, "restore-transaction.json"), JSON.stringify(transaction), 0o600);
+    beginRestoreTransaction(keyChanged);
     try {
       if (keyChanged && restoredKey) writeAtomicBytes(keyPath, restoredKey, 0o600);
       restored.revision = currentRevision;
@@ -457,6 +463,7 @@ function createStore(storageDir) {
 
   function importBackup(value, key, options) {
     ensureDirectories();
+    recoverInterruptedRestore();
     const restored = validateState(value);
     const current = read();
     const currentRevision = current ? current.revision : 0;
@@ -472,47 +479,22 @@ function createStore(storageDir) {
     backupIfDue();
     const keyPath = path.join(root, "master.key");
     const configuredKey = typeof process !== "undefined" && process.env ? process.env.KNS_MASTER_KEY : "";
-    const priorKey = fs.existsSync(keyPath) ? fs.readFileSync(keyPath) : null;
-    if (fs.existsSync(stateFile)) {
-      const preState = path.join(backupDir, "pre-import-" + Date.now() + ".json");
-      fs.copyFileSync(stateFile, preState);
-      try { fs.chmodSync(preState, 0o600); } catch (_) {}
-    }
-    if (priorKey) {
-      const preKey = path.join(backupDir, "pre-import-" + Date.now() + ".key");
-      fs.copyFileSync(keyPath, preKey);
-      try { fs.chmodSync(preKey, 0o600); } catch (_) {}
-    }
-    let keyChanged = false;
-    if (!configuredKey) {
-      const keyTemp = keyPath + ".import-" + crypto.randomBytes(6).toString("hex");
-      fs.writeFileSync(keyTemp, importedKey, { mode: 0o600, flag: "wx" });
-      try { fs.chmodSync(keyTemp, 0o600); } catch (_) {}
-      fs.renameSync(keyTemp, keyPath);
-      keyChanged = true;
-    }
+    const keyChanged = !configuredKey;
+    // Use the same durable journal as daily restores, so startup recovery can
+    // roll back both files even when the host exits before catch can run.
+    beginRestoreTransaction(keyChanged);
     try {
+      if (keyChanged) writeAtomicBytes(keyPath, importedKey, 0o600);
       restored.revision = currentRevision;
       const result = write(restored, { expectedRevision: currentRevision });
       auditLog.importHistory(result.audit);
+      syncDirectory(root);
+      fs.unlinkSync(path.join(backupDir, "restore-transaction.json"));
+      syncDirectory(backupDir);
       return result;
     } catch (error) {
-      let committed = false;
-      try {
-        const current = read();
-        committed = !!current && current.revision === restored.revision && current.updatedAt === restored.updatedAt;
-      } catch (_) {}
-      if (!committed && keyChanged) {
-        if (priorKey) {
-          const rollback = keyPath + ".rollback";
-          fs.writeFileSync(rollback, priorKey, { mode: 0o600 });
-          try { fs.chmodSync(rollback, 0o600); } catch (_) {}
-          fs.renameSync(rollback, keyPath);
-        } else {
-          try { fs.unlinkSync(keyPath); } catch (_) {}
-        }
-      }
-      if (committed) return restored;
+      try { recoverInterruptedRestore(); }
+      catch (recoveryError) { throw new Error((error.message || String(error)) + "; import rollback also failed: " + (recoveryError.message || String(recoveryError))); }
       throw error;
     }
   }

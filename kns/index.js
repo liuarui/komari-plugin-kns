@@ -13,10 +13,11 @@ const PLUGIN_VERSION = require("../komari-plugin.json").version;
 const API = "/api/kns";
 const LEGACY_API = "/api/onebox-bridge";
 const SOURCE_URL = "https://github.com/liuarui/komari-plugin-kns/tree/v" + PLUGIN_VERSION;
-const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/a36b55cd455053f66cdf18fe3045e306d06d3934/install.sh";
-const INSTALLER_SHA256 = "507801b3ce9b1226657420bd17a0601e7ac2fe4508ebf2dd440c5e0514b0477f";
-const ONEBOX_ADAPTER_VERSION = "1.4.0";
-const SUBSCRIPTION_RULES_VERSION = "kns-subscription-v1";
+const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/66c18c352dc591e58075b6c10468ff7bc3bba233/install.sh";
+const INSTALLER_SHA256 = "9e83c464455d81162170c4e2d33a6b5d8c7e278c959959d86ad431c7ec55ec51";
+const ONEBOX_SCRIPT_VERSION = "1.0.1";
+const ONEBOX_ADAPTER_VERSION = "1.8.0";
+const SUBSCRIPTION_RULES_VERSION = "kns-subscription-v4";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PROTOCOLS = {
@@ -28,10 +29,30 @@ const PROTOCOLS = {
   tuic: { transport: "udp", security: "tls" },
   anytls: { transport: "tcp", security: "tls" },
 };
-const FORMATS = new Set(["uri", "mihomo-full", "mihomo-provider", "singbox-full", "singbox-outbounds"]);
+const FORMATS = new Set(["uri", "mihomo-full", "mihomo-provider", "singbox-full", "singbox-outbounds", "loon", "surge", "surfboard", "quanx", "quan", "shadowrocket", "stash", "mellow", "v2rayn", "v2rayng", "ss", "sssub", "ssd", "trojan", "vless", "hysteria2"]);
 const CONVERTER_TARGETS = new Set(["clash", "clashr", "surge", "quan", "quanx", "loon", "surfboard", "stash", "mellow", "singbox", "ss", "ssd", "ssr", "sssub", "v2ray", "v2rayn", "v2rayng", "shadowrocket", "trojan", "vless", "hysteria2", "mixed"]);
+const CONVERTER_RULE_PRESETS = Object.freeze({
+  "acl4ssr-mini": "config/ACL4SSR_Online_Mini.ini",
+  "acl4ssr-full": "config/ACL4SSR_Online_Full.ini",
+});
 const store = createStore(__storageDir__);
 let masterKey = null;
+function currentMasterKey() {
+  try {
+    const configured = typeof process !== "undefined" && process.env ? process.env.KNS_MASTER_KEY : "";
+    if (configured) {
+      if (!masterKey) masterKey = secrets.getMasterKey(__storageDir__);
+      return masterKey;
+    }
+    const keyPath = path.join(__storageDir__, "kns", "master.key");
+    if (fs.existsSync(keyPath)) {
+      const key = fs.readFileSync(keyPath);
+      if (key.length === 32) { masterKey = key; return key; }
+    }
+  } catch (_) {}
+  if (!masterKey) masterKey = secrets.getMasterKey(__storageDir__);
+  return masterKey;
+}
 
 let pollBusy = false;
 let syncBusy = false;
@@ -40,7 +61,6 @@ let endpointBusy = false;
 let autoProvisionBusy = false;
 let maintenanceLock = false;
 let lastLiveSync = 0;
-let stateCache = null;
 let subscriptionRefreshBusy = false;
 let subscriptionRefreshPending = false;
 let subscriptionRefreshTimer = null;
@@ -56,6 +76,22 @@ function fail(code, message, status) {
   error.code = code;
   error.status = status || 400;
   throw error;
+}
+
+function parseSemver(value) {
+  const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(String(value || "").trim());
+  if (!match) throw new Error("invalid_semver");
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function compareSemver(left, right) {
+  const a = parseSemver(left);
+  const b = parseSemver(right);
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] > b[index]) return 1;
+    if (a[index] < b[index]) return -1;
+  }
+  return 0;
 }
 
 function assertExpectedRevision(actual, body) {
@@ -92,7 +128,7 @@ function encryptedBackupEnvelope(state, passphrase) {
   const key = crypto.pbkdf2Sync(secret, salt, iterations, 32, "sha256");
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
   cipher.setAAD(Buffer.from("KNS-ENCRYPTED-EXPORT-v1", "utf8"));
-  const payload = JSON.stringify({ format: "KNS-ENCRYPTED-EXPORT", schemaVersion: 1, createdAt: now(), masterKey: masterKey.toString("hex"), state: deepClone(state) });
+  const payload = JSON.stringify({ format: "KNS-ENCRYPTED-EXPORT", schemaVersion: 1, createdAt: now(), masterKey: currentMasterKey().toString("hex"), state: deepClone(state) });
   const data = Buffer.concat([cipher.update(payload, "utf8"), cipher.final()]);
   return {
     format: "KNS-ENCRYPTED-EXPORT",
@@ -170,7 +206,7 @@ function readBody(req, maxBytes) {
   const type = String((req.headers || {})["content-type"] || "").toLowerCase();
   const body = String(req.body || "");
   const limit = Number(maxBytes) || 1024 * 1024;
-  if (body.length > limit) fail("body_too_large", "请求正文超过允许大小。", 413);
+  if (Buffer.byteLength(body, "utf8") > limit) fail("body_too_large", "请求正文超过允许大小。", 413);
   if (!type.includes("application/json")) fail("unsupported_media_type", "请求必须使用 application/json。", 415);
   let value;
   try { value = JSON.parse(body); } catch (_) { fail("invalid_json", "JSON 格式无效。", 400); }
@@ -225,15 +261,72 @@ function profileFilterFields(body, current) {
   return next;
 }
 
+function constrainLegacyFormats(state) {
+  if (!state || !Array.isArray(state.profiles)) return { state, changed: false };
+  let changed = false;
+  for (const profile of state.profiles) {
+    if (!profile || profile.legacy !== true) continue;
+    const formats = Array.isArray(profile.formats) ? profile.formats.filter((format) => format === "uri") : [];
+    if (formats.length === 1 && formats[0] === "uri" && Array.isArray(profile.formats) && profile.formats.length === 1) continue;
+    profile.formats = ["uri"];
+    changed = true;
+  }
+  return { state, changed };
+}
+
+function stripLegacyCiphertext(state) {
+  let changed = false;
+  const decrypt = (box) => { try { return secrets.decryptSecret(box, currentMasterKey()); } catch (_) { return null; } };
+  for (const instance of state.instances || []) {
+    if (!instance.credential && instance.credentialCiphertext) {
+      const value = decrypt(instance.credentialCiphertext);
+      if (value) { try { instance.credential = JSON.parse(value); } catch (_) {} }
+    }
+    if (instance.credential && instance.credentialCiphertext) { delete instance.credentialCiphertext; changed = true; }
+  }
+  for (const profile of state.profiles || []) {
+    if (!profile.token && profile.tokenCiphertext) {
+      const value = decrypt(profile.tokenCiphertext);
+      if (value) profile.token = value;
+    }
+    if (profile.token && profile.tokenCiphertext) { delete profile.tokenCiphertext; changed = true; }
+  }
+  for (const node of state.legacyNodes || []) {
+    if (!node.uri && node.ciphertext) {
+      const value = decrypt(node.ciphertext);
+      if (value) node.uri = value;
+    }
+    if (node.uri && node.ciphertext) { delete node.ciphertext; changed = true; }
+  }
+  return changed;
+}
+
 function getState() {
   let state = store.read();
   if (state) {
+    if (stripLegacyCiphertext(state)) state = save(state);
     store.importLegacyAudit(state.audit);
-    try { return store.preparePluginVersion(state, PLUGIN_VERSION); }
+    const previousPluginVersion = String(state.pluginVersion || "");
+    try { state = store.preparePluginVersion(state, PLUGIN_VERSION); }
     catch (error) {
       const cause = safeText(error && error.message || error, 160);
       fail("upgrade_backup_failed", "插件升级前备份或版本检查失败，已停止加载；现有状态未修改。原因：" + cause, 500);
     }
+    if (state.settings.remoteInstallDefaultApplied !== true) {
+      if (previousPluginVersion === PLUGIN_VERSION) {
+        try { store.backupStorageBeforeChange("upgrade"); }
+        catch (error) { fail("upgrade_backup_failed", "启用机器默认远程安装前无法完成存储备份，已停止修改；现有状态未修改。", 500); }
+      }
+      state.settings.remoteInstallDefaultApplied = true;
+      state.machines = state.machines.map((machine) => {
+        machine.policy = Object.assign({ deployAllowed: true, addressMode: "auto", manualAddress: "", ddnsHostname: "", tags: [], managementTags: [] }, machine.policy || {});
+        machine.policy.deployAllowed = true;
+        return machine;
+      });
+      return save(state);
+    }
+    const constrained = constrainLegacyFormats(state);
+    return constrained.changed ? save(constrained.state) : constrained.state;
   }
   state = initialState();
   const legacyPath = path.join(__storageDir__, "onebox-bridge.json");
@@ -260,23 +353,34 @@ function migrateLegacy(state, legacy) {
   const oldToken = typeof legacy.token === "string" ? legacy.token : "";
   if (oldToken.length >= 32) {
     const token = secrets.tokenRecord(oldToken);
-    state.profiles.push({ id: "legacy-default", name: "旧版默认订阅", ...token, createdAt: now(), formats: ["uri", "mihomo-full", "singbox-full"], instanceIds: [], includeTags: [], excludeUnhealthy: false, legacy: true });
+    state.profiles.push({ id: "legacy-default", name: "旧版默认订阅", ...token, tokenRequired: true, token: oldToken, createdAt: now(), formats: ["uri"], instanceIds: [], includeTags: [], excludeUnhealthy: false, legacy: true });
   }
   for (const record of Array.isArray(legacy.records) ? legacy.records : []) {
     const uuid = String(record.clientUuid || "");
     if (UUID_RE.test(uuid) && !state.machines.some((machine) => machine.uuid === uuid)) {
-      state.machines.push({ uuid, name: safeText(record.clientName || uuid), online: null, lastSeen: null, ipv4: "", ipv6: "", sourceIp: "", policy: { deployAllowed: false, addressMode: "auto", manualAddress: "", ddnsHostname: "", tags: [] }, updatedAt: now() });
+      state.machines.push({ uuid, name: safeText(record.clientName || uuid), online: null, lastSeen: null, ipv4: "", ipv6: "", sourceIp: "", policy: { deployAllowed: true, addressMode: "auto", manualAddress: "", ddnsHostname: "", tags: [], managementTags: [] }, updatedAt: now() });
     }
     if (typeof record.link === "string" && record.link) {
-      state.legacyNodes.push({ id: randomId("legacy"), machineUuid: uuid, name: safeText(record.clientName || uuid), ciphertext: secrets.encryptSecret(record.link, masterKey), enabled: record.state === "published", migratedAt: now() });
+      state.legacyNodes.push({ id: randomId("legacy"), machineUuid: uuid, name: safeText(record.clientName || uuid), uri: record.link, enabled: record.state === "published", migratedAt: now() });
     }
   }
   state.audit.push({ id: randomId("audit"), at: now(), action: "state.migrated", actor: "system", details: { from: "onebox-bridge", records: state.legacyNodes.length } });
 }
 
+const JOB_HISTORY_LIMIT = 200;
+const ACTIVE_JOB_STATES = ["authorized", "dispatched", "running", "verifying"];
+
+function pruneJobHistory(state) {
+  const jobs = Array.isArray(state.jobs) ? state.jobs : [];
+  const active = jobs.filter((job) => ACTIVE_JOB_STATES.includes(job.state));
+  const finished = jobs.filter((job) => !ACTIVE_JOB_STATES.includes(job.state));
+  const keptFinished = finished.length > JOB_HISTORY_LIMIT ? finished.slice(-JOB_HISTORY_LIMIT) : finished;
+  state.jobs = jobs.filter((job) => active.includes(job) || keptFinished.includes(job));
+  return state;
+}
+
 function save(state) {
-  stateCache = null;
-  const saved = store.write(state);
+  const saved = store.write(pruneJobHistory(state));
   scheduleSubscriptionRefresh();
   return saved;
 }
@@ -301,8 +405,19 @@ function subscriptionSourceHash(state, profile, format) {
       sortBy: profile.sortBy || "name",
     },
     machines: (state.machines || []).map((machine) => ({ uuid: machine.uuid, name: machine.name })),
-    instances: state.instances || [],
-    legacyNodes: profile.legacy ? (state.legacyNodes || []) : [],
+    instances: (state.instances || []).map((instance) => ({
+      id: instance.id, machineUuid: instance.machineUuid, name: instance.name, tag: instance.tag,
+      protocol: instance.protocol, enabled: instance.enabled, publish: instance.publish,
+      deleted: !!instance.deletedAt, remoteMissing: !!(instance.remoteStatus && instance.remoteStatus.installed === false), mappingConflict: !!(instance.nat && instance.nat.mappingConflict),
+      unhealthy: !!(instance.health && instance.health.state === "unhealthy"),
+      hostHealth: instance.health && instance.health.hosts || {},
+      endpoint: instance.endpoint && { host: instance.endpoint.host, hosts: instance.endpoint.hosts, port: instance.endpoint.port },
+      listen: instance.listen && { port: instance.listen.port, transport: instance.listen.transport },
+      tls: instance.tls, options: instance.options, tags: instance.tags,
+      credential: instance.credential || null,
+      credentialCiphertext: instance.credentialCiphertext,
+    })),
+    legacyNodes: profile.legacy ? (state.legacyNodes || []).map((node) => ({ uri: node.uri || "", ciphertext: node.ciphertext, enabled: node.enabled })) : [],
   };
   return crypto.createHash("sha256").update(JSON.stringify(projection)).digest("hex");
 }
@@ -310,7 +425,7 @@ function subscriptionSourceHash(state, profile, format) {
 function readSubscriptionSnapshot(profileId, format) {
   const box = store.readSubscriptionSnapshot(subscriptionSnapshotKey(profileId, format));
   if (!box) return null;
-  const record = JSON.parse(secrets.decryptSecret(box, masterKey));
+  const record = box && box.schemaVersion === 1 ? box : JSON.parse(secrets.decryptSecret(box, currentMasterKey()));
   if (!record || record.schemaVersion !== 1 || record.profileId !== profileId || record.format !== format || record.rulesVersion !== SUBSCRIPTION_RULES_VERSION || typeof record.body !== "string" || typeof record.contentType !== "string" || !/^[a-f0-9]{64}$/.test(record.contentHash || "") || !/^[a-f0-9]{64}$/.test(record.sourceHash || "") || !Number.isSafeInteger(record.successCount) || !Number.isSafeInteger(record.skippedCount) || !Number.isFinite(Date.parse(record.generatedAt || "")) || crypto.createHash("sha256").update(record.body).digest("hex") !== record.contentHash) {
     throw new Error("Subscription snapshot is invalid.");
   }
@@ -327,40 +442,42 @@ async function refreshSubscriptionSnapshots() {
   subscriptionRefreshPending = false;
   try {
     const initial = getState();
-    const queue = [];
-    for (const profile of initial.profiles) {
-      if (!activeSubscriptionProfile(profile)) continue;
-      for (const format of Array.isArray(profile.formats) ? profile.formats : []) {
-        if (FORMATS.has(format)) queue.push({ profileId: profile.id, format });
-      }
-    }
-    for (const item of queue) {
+    const queue = initial.profiles.filter(activeSubscriptionProfile).map((profile) => profile.id);
+    for (const profileId of queue) {
       if (subscriptionRefreshStopped) break;
       const current = getState();
-      const profile = current.profiles.find((candidate) => candidate.id === item.profileId);
-      if (!activeSubscriptionProfile(profile) || !Array.isArray(profile.formats) || !profile.formats.includes(item.format)) continue;
-      const sourceHash = subscriptionSourceHash(current, profile, item.format);
+      const profile = current.profiles.find((candidate) => candidate.id === profileId);
+      if (!activeSubscriptionProfile(profile)) continue;
+      const pending = [];
+      for (const format of new Set(Array.isArray(profile.formats) ? profile.formats : [])) {
+        if (!FORMATS.has(format)) continue;
+        const sourceHash = subscriptionSourceHash(current, profile, format);
+        try {
+          const existing = readSubscriptionSnapshot(profile.id, format);
+          if (existing && existing.sourceHash === sourceHash) continue;
+        } catch (_) {}
+        pending.push({ format, sourceHash });
+      }
+      if (!pending.length) continue;
       try {
-        const existing = readSubscriptionSnapshot(profile.id, item.format);
-        if (existing && existing.sourceHash === sourceHash) continue;
-      } catch (_) {}
-      try {
-        const built = subscriptions.buildSubscription(current, profile, item.format, (box) => secrets.decryptSecret(box, masterKey));
-        const record = {
-          schemaVersion: 1,
-          profileId: profile.id,
-          format: item.format,
-          sourceHash,
-          rulesVersion: SUBSCRIPTION_RULES_VERSION,
-          generatedAt: now(),
-          successCount: built.successCount,
-          skippedCount: built.skippedCount,
-          contentType: built.contentType,
-          contentHash: crypto.createHash("sha256").update(built.body).digest("hex"),
-          body: built.body,
-        };
-        const encrypted = secrets.encryptSecret(JSON.stringify(record), masterKey);
-        store.writeSubscriptionSnapshot(subscriptionSnapshotKey(profile.id, item.format), encrypted);
+        const built = subscriptions.buildSubscriptions(current, profile, pending.map((item) => item.format), (box) => secrets.decryptSecret(box, currentMasterKey()));
+        for (const { format, sourceHash } of pending) {
+          const result = built[format];
+          const record = {
+            schemaVersion: 1,
+            profileId: profile.id,
+            format,
+            sourceHash,
+            rulesVersion: SUBSCRIPTION_RULES_VERSION,
+            generatedAt: now(),
+            successCount: result.successCount,
+            skippedCount: result.skippedCount,
+            contentType: result.contentType,
+            contentHash: crypto.createHash("sha256").update(result.body).digest("hex"),
+            body: result.body,
+          };
+          store.writeSubscriptionSnapshot(subscriptionSnapshotKey(profile.id, format), record);
+        }
       } catch (error) {
         console.error("[KNS] subscription snapshot refresh failed:", safeText(error && error.message || error, 200));
       }
@@ -427,6 +544,24 @@ function createProfileToken(profile, token, expiresAt) {
   return record;
 }
 
+function replaceProfileToken(profile, token, expiresAt) {
+  ensureProfileTokens(profile);
+  profile.tokens = [];
+  const record = createProfileToken(profile, token, expiresAt);
+  profile.token = token;
+  delete profile.tokenCiphertext;
+  profile.tokenRequired = true;
+  return record;
+}
+
+function recoverProfileToken(profile) {
+  if (!profile) return "";
+  if (profile.token) return profile.token;
+  if (!profile.tokenCiphertext) return "";
+  try { return secrets.decryptSecret(profile.tokenCiphertext, currentMasterKey()); }
+  catch (_) { fail("token_unavailable", "无法解密当前订阅令牌；请轮换令牌后再使用。", 409); }
+}
+
 function safeProfileToken(token) {
   return {
     id: safeText(token.id || "legacy-token", 80),
@@ -447,11 +582,9 @@ function recordTokenUsage(profileId, tokenId) {
   pendingTokenUsage.set(key, current);
 }
 
-function flushTokenUsage() {
-  if (!pendingTokenUsage.size) return;
+function applyPendingTokenUsage(state) {
+  if (!pendingTokenUsage.size) return false;
   const updates = Array.from(pendingTokenUsage.values());
-  pendingTokenUsage.clear();
-  const state = getState();
   let changed = false;
   for (const update of updates) {
     const profile = state.profiles.find((candidate) => candidate.id === update.profileId);
@@ -462,7 +595,14 @@ function flushTokenUsage() {
     token.lastUsedAt = update.lastUsedAt;
     changed = true;
   }
-  if (changed) save(state);
+  return changed;
+}
+
+function flushTokenUsage() {
+  if (!pendingTokenUsage.size) return;
+  const state = getState();
+  if (applyPendingTokenUsage(state)) save(state);
+  pendingTokenUsage.clear();
 }
 
 function nodesFrom(value) {
@@ -532,9 +672,11 @@ async function syncMachines() {
     const incoming = [];
     for (const node of live) {
       const old = current.get(node.uuid);
-      const previous = old || { policy: { deployAllowed: false, addressMode: "auto", manualAddress: "", ddnsHostname: "", tags: [] } };
+      const previous = old || { policy: { deployAllowed: true, addressMode: "auto", manualAddress: "", ddnsHostname: "", tags: [], managementTags: [] } };
       const merged = Object.assign({}, previous, node);
-      merged.policy = Object.assign({ deployAllowed: false, addressMode: "auto", manualAddress: "", ddnsHostname: "", tags: [] }, previous.policy || {});
+      if (old && old.removedFromKomariAt) audit(state, null, "machine.returned_to_komari", { machineUuid: node.uuid });
+      delete merged.removedFromKomariAt;
+      merged.policy = Object.assign({ deployAllowed: true, addressMode: "auto", manualAddress: "", ddnsHostname: "", tags: [], managementTags: [] }, previous.policy || {});
       if (!old && state.settings.setupComplete === true && state.settings.autoProvisionNewProbes === true && !baseline.has(node.uuid)) {
         merged.policy.deployAllowed = true;
         merged.autoProvision = { state: "queued", templateVersion: Number(state.settings.defaultNode && state.settings.defaultNode.version) || 1, template: deepClone(state.settings.defaultNode), createdAt: now(), updatedAt: now(), message: "新探针已加入自动部署队列。" };
@@ -543,7 +685,7 @@ async function syncMachines() {
       const observed = preferredObservedAddress(merged);
       const prior = previous.observedAddress || "";
       if (observed && observed !== prior) {
-        merged.addressCandidate = observed === (previous.addressCandidate || "") ? observed : observed;
+        merged.addressCandidate = observed;
         merged.addressCandidateCount = observed === (previous.addressCandidate || "") ? Number(previous.addressCandidateCount || 0) + 1 : 1;
         if (merged.addressCandidateCount >= 2) merged.observedAddress = observed;
       } else if (observed) {
@@ -553,10 +695,31 @@ async function syncMachines() {
       incoming.push(merged);
     }
     const known = new Set(incoming.map((machine) => machine.uuid));
-    state.machines = incoming.concat(state.machines.filter((machine) => !known.has(machine.uuid)).map((machine) => Object.assign({}, machine, { online: false })));
+    const removed = state.machines.filter((machine) => !known.has(machine.uuid)).map((machine) => {
+      const next = Object.assign({}, machine, { online: false });
+      if (!next.removedFromKomariAt) {
+        next.removedFromKomariAt = now();
+        audit(state, null, "machine.removed_from_komari", { machineUuid: next.uuid });
+      }
+      if (next.autoProvision && next.autoProvision.state === "queued") {
+        next.autoProvision = Object.assign({}, next.autoProvision, { state: "cancelled", updatedAt: now(), message: "机器已从 Komari 删除，自动部署队列已取消。" });
+        audit(state, null, "auto_provision.cancelled", { machineUuid: next.uuid, reason: "machine_removed_from_komari" });
+      }
+      return next;
+    });
+    const machines = incoming.concat(removed);
+    const nextState = Object.assign({}, state, { machines });
     lastLiveSync = Date.now();
-    save(state);
-    if (state.machines.some((machine) => machine.autoProvision && machine.autoProvision.state === "queued")) setTimeout(dispatchAutoProvisionQueue, 0);
+    const snapshot = (items) => JSON.stringify((items || []).map((machine) => ({
+      uuid: machine.uuid, name: machine.name, online: machine.online, lastSeen: machine.lastSeen || "", ipv4: machine.ipv4 || "", ipv6: machine.ipv6 || "", sourceIp: machine.sourceIp || "",
+      removedFromKomariAt: machine.removedFromKomariAt || "",
+      region: machine.region || "", os: machine.os || "", arch: machine.arch || "",
+      observedAddress: machine.observedAddress || "",
+      policy: { deployAllowed: !!(machine.policy && machine.policy.deployAllowed), addressMode: (machine.policy && machine.policy.addressMode) || "auto", manualAddress: (machine.policy && machine.policy.manualAddress) || "", ddnsHostname: (machine.policy && machine.policy.ddnsHostname) || "", tags: (machine.policy && machine.policy.tags) || [], managementTags: (machine.policy && machine.policy.managementTags) || [] },
+      autoProvision: machine.autoProvision && { state: machine.autoProvision.state, instanceId: machine.autoProvision.instanceId || "", templateVersion: Number(machine.autoProvision.templateVersion) || 0 },
+    })));
+    if (snapshot(state.machines) !== snapshot(machines)) save(nextState);
+    if (nextState.machines.some((machine) => !machine.removedFromKomariAt && machine.autoProvision && machine.autoProvision.state === "queued")) setTimeout(dispatchAutoProvisionQueue, 0);
     return true;
   } finally { syncBusy = false; }
 }
@@ -586,7 +749,7 @@ async function dispatchAutoProvisionQueue() {
     const state = getState();
     if (state.settings.setupComplete !== true || state.settings.autoProvisionNewProbes !== true) return;
     const batchSize = Math.max(1, Math.min(10, Number(state.settings.maxBatch) || 10));
-    const queued = state.machines.filter((machine) => machine.autoProvision && machine.autoProvision.state === "queued" && machine.online === true).slice(0, batchSize);
+    const queued = state.machines.filter((machine) => !machine.removedFromKomariAt && machine.autoProvision && machine.autoProvision.state === "queued" && machine.online === true).slice(0, batchSize);
     for (const machine of queued) {
       try { await startAutoProvision(machine.uuid); }
       catch (error) {
@@ -605,7 +768,7 @@ async function dispatchAutoProvisionQueue() {
 async function startAutoProvision(machineUuid) {
   let state = getState();
   let machine = state.machines.find((item) => item.uuid === machineUuid);
-  if (!machine || !machine.autoProvision || machine.autoProvision.state !== "queued") return;
+  if (!machine || machine.removedFromKomariAt || !machine.autoProvision || machine.autoProvision.state !== "queued") return;
   if (state.settings.setupComplete !== true || state.settings.autoProvisionNewProbes !== true || machine.online !== true) return;
   if (!machine.policy || machine.policy.deployAllowed !== true) {
     machine.autoProvision = Object.assign({}, machine.autoProvision, { state: "cancelled", updatedAt: now(), message: "已关闭此探针的部署权限。" });
@@ -619,6 +782,12 @@ async function startAutoProvision(machineUuid) {
   const template = normalizeDefaultNode({}, machine.autoProvision.template || state.settings.defaultNode);
   const instanceId = "autov1-" + machine.uuid.replace(/-/g, "");
   const existing = state.instances.find((instance) => instance.id === instanceId && instance.machineUuid === machine.uuid && !instance.deletedAt);
+  const owner = (state.instances.find((instance) => instance.id === instanceId) || {}).machineUuid || reservedInstanceOwner(state, instanceId);
+  if (owner && owner !== machine.uuid) {
+    machine.autoProvision = Object.assign({}, machine.autoProvision, { state: "failed", updatedAt: now(), message: "默认实例 ID 已被另一台探针占用。" });
+    audit(state, null, "auto_provision.failed", { machineUuid, reason: "instance_id_conflict", instanceId });
+    save(state); return;
+  }
   if (existing) {
     machine.autoProvision = Object.assign({}, machine.autoProvision, { state: "succeeded", instanceId, updatedAt: now(), message: "默认节点已存在。" });
     save(state); return;
@@ -663,14 +832,16 @@ function preferredObservedAddress(machine) {
 function safeMachine(machine) {
   return {
     uuid: machine.uuid, name: machine.name, region: machine.region, os: machine.os, arch: machine.arch,
-    online: machine.online, lastSeen: machine.lastSeen, ipv4: machine.ipv4, ipv6: machine.ipv6, sourceIp: machine.sourceIp,
-    observedAddress: machine.observedAddress || "", addressCandidate: machine.addressCandidate || "", policy: machine.policy,
+     online: machine.online, lastSeen: machine.lastSeen, ipv4: machine.ipv4, ipv6: machine.ipv6, sourceIp: machine.sourceIp,
+    removedFromKomariAt: machine.removedFromKomariAt || "",
+     observedAddress: machine.observedAddress || "", addressCandidate: machine.addressCandidate || "", policy: Object.assign({}, machine.policy || {}, { managementTags: Array.isArray(machine.policy && machine.policy.managementTags) ? Array.from(new Set(machine.policy.managementTags.map((tag) => safeText(tag, 32)).filter(Boolean))).slice(0, 30) : [] }),
     discoveredAt: machine.discoveredAt || "", discoveredNodes: Array.isArray(machine.discoveredNodes) ? machine.discoveredNodes.map((node) => ({
       tag: safeText(node.tag || "", 128), protocol: safeText(node.protocol || "unknown", 32),
       listen: { port: Number(node.listen && node.listen.port) || 0, address: safeText(node.listen && node.listen.address || "", 64), transport: safeText(node.listen && node.listen.transport || "unknown", 16) },
       managed: node.managed === true, importable: node.importable === true, options: { security: safeText(node.options && node.options.security || "", 32), sni: safeText(node.options && node.options.sni || "", 253), method: safeText(node.options && node.options.method || "", 64) },
       reason: safeText(node.reason || "", 64),
     })) : [],
+    runtimeStatus: machine.runtimeStatus ? deepClone(machine.runtimeStatus) : null,
     autoProvision: machine.autoProvision ? deepClone(machine.autoProvision) : null,
   };
 }
@@ -708,12 +879,16 @@ function jobRetryable(state, job) {
 
 function publicState(state) {
   const auditPage = store.listAudit(200);
-  const jobs = state.jobs.slice(-200).reverse().map((job) => Object.assign(safeJob(job), { canRetry: jobRetryable(state, job) }));
+  const jobs = state.jobs.slice().reverse().map((job) => Object.assign(safeJob(job), { canRetry: jobRetryable(state, job) }));
+  const settings = Object.assign({}, state.settings);
+  delete settings.remoteInstallDefaultApplied;
   return {
     schemaVersion: state.schemaVersion,
+    pluginVersion: PLUGIN_VERSION,
+    sourceUrl: SOURCE_URL,
     revision: state.revision,
     updatedAt: state.updatedAt,
-    settings: Object.assign({}, state.settings, { oneboxScriptUrl: INSTALLER_URL, oneboxScriptSha256: INSTALLER_SHA256 }),
+    settings: Object.assign({}, settings, { oneboxScriptUrl: INSTALLER_URL, oneboxScriptSha256: INSTALLER_SHA256 }),
     machines: state.machines.map(safeMachine),
     runtimes: state.runtimes,
     instances: state.instances.map(safeInstance),
@@ -722,14 +897,14 @@ function publicState(state) {
     auditCursor: auditPage.nextCursor,
     auditHasMore: auditPage.hasMore,
     auditRetention: auditPage.retention,
-    profiles: state.profiles.map((profile) => ({ id: profile.id, name: profile.name, createdAt: profile.createdAt, expiresAt: profile.expiresAt || "", revokedAt: profile.revokedAt || "", tokens: profileTokenRecords(profile).map(safeProfileToken), formats: profile.formats, instanceIds: profile.instanceIds || null, machineUuids: profile.machineUuids || null, excludeMachineUuids: profile.excludeMachineUuids || [], protocols: profile.protocols || null, includeTags: profile.includeTags || [], excludeUnhealthy: profile.excludeUnhealthy !== false, addressMode: profile.addressMode || "auto", sortBy: profile.sortBy || "name", legacy: !!profile.legacy })),
+    profiles: state.profiles.map((profile) => ({ id: profile.id, name: profile.name, createdAt: profile.createdAt, expiresAt: profile.expiresAt || "", revokedAt: profile.revokedAt || "", tokenRequired: profile.tokenRequired !== false, hasRecoverableToken: !!(profile.token || profile.tokenCiphertext) && profileTokenRecords(profile).some((record) => record && !record.revokedAt && (!record.expiresAt || Date.parse(record.expiresAt) > Date.now())), tokens: profileTokenRecords(profile).map(safeProfileToken), formats: profile.formats, instanceIds: profile.instanceIds || null, machineUuids: profile.machineUuids || null, excludeMachineUuids: profile.excludeMachineUuids || [], protocols: profile.protocols || null, includeTags: profile.includeTags || [], excludeUnhealthy: profile.excludeUnhealthy !== false, addressMode: profile.addressMode || "auto", sortBy: profile.sortBy || "name", legacy: !!profile.legacy })),
     backups: store.listBackups(),
     subscriptionFormats: Array.from(FORMATS),
     endpointPrecedence: ["instance endpoint override", "machine manual public address", "DDNS domain", "Komari-reported address"],
   };
 }
 
-function quoteShell(value) { return "'" + String(value).replace(/'/g, "'\"'\"'") + "'"; }
+
 
 function validHostname(value) {
   const host = String(value || "").trim().toLowerCase().replace(/\.$/, "");
@@ -753,9 +928,26 @@ function normalizeHost(value, allowPrivate) {
     return host;
   }
   if (family === 6) {
-    const lowered = host.toLowerCase();
-    if (lowered === "::" || lowered.startsWith("ff")) fail("invalid_host", "Endpoint 不能使用未指定或组播 IPv6 地址。", 400);
-    const privateV6 = lowered === "::1" || /^f[cd]/.test(lowered) || /^fe[89ab]/.test(lowered) || lowered.startsWith("2001:db8:") || lowered.includes("::ffff:") && /(?:::ffff:)(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(lowered);
+    // Compare numeric address segments so compressed, expanded and dotted
+    // spellings enforce the same boundary. A scope ID is not address data.
+    let address = host.toLowerCase().split("%")[0];
+    if (address.includes(".")) {
+      const tail = address.slice(address.lastIndexOf(":") + 1).split(".").map(Number);
+      if (tail.length !== 4 || tail.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) fail("invalid_host", "IPv6 地址无效。", 400);
+      address = address.slice(0, address.lastIndexOf(":") + 1) + ((tail[0] << 8) | tail[1]).toString(16) + ":" + ((tail[2] << 8) | tail[3]).toString(16);
+    }
+    const halves = address.split("::");
+    const left = halves[0] ? halves[0].split(":") : [];
+    const right = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+    const missing = 8 - left.length - right.length;
+    if (halves.length > 2 || (halves.length === 2 ? missing < 1 : missing !== 0) || left.concat(right).some((part) => !/^[0-9a-f]{1,4}$/.test(part))) fail("invalid_host", "IPv6 地址无效。", 400);
+    const words = left.concat(Array(halves.length === 2 ? missing : 0).fill("0"), right).map((part) => parseInt(part, 16));
+    if (words.every((part) => part === 0) || (words[0] & 0xff00) === 0xff00) fail("invalid_host", "Endpoint 不能使用未指定或组播 IPv6 地址。", 400);
+    if (words.slice(0, 5).every((part) => part === 0) && words[5] === 0xffff) {
+      normalizeHost([words[6] >> 8, words[6] & 255, words[7] >> 8, words[7] & 255].join("."), allowPrivate);
+    }
+    const privateV6 = words.slice(0, 7).every((part) => part === 0) && words[7] === 1 ||
+      (words[0] & 0xfe00) === 0xfc00 || (words[0] & 0xffc0) === 0xfe80 || words[0] === 0x2001 && words[1] === 0x0db8;
     if (privateV6 && !allowPrivate) fail("private_endpoint", "公网订阅不能使用私有、回环或保留 IPv6 地址。", 400);
     return host;
   }
@@ -768,12 +960,16 @@ function candidateAddress(machine, state, instance) {
   const override = instance.endpointOverride || {};
   const manual = override.host || (machine.policy && machine.policy.manualAddress);
   const mode = machine.policy && machine.policy.addressMode || "auto";
-  if (!manual && !(machine.policy && machine.policy.ddnsHostname) && mode === "ipv4" && !machine.ipv4) return null;
-  if (!manual && !(machine.policy && machine.policy.ddnsHostname) && mode === "ipv6" && !machine.ipv6) return null;
+  const family = mode === "ipv4" ? 4 : mode === "ipv6" ? 6 : 0;
+  const matchesMode = (address) => !!address && (!family || require("net").isIP(address) === family);
+  if (!manual && !(machine.policy && machine.policy.ddnsHostname) && family && !matchesMode(family === 4 ? machine.ipv4 : machine.ipv6)) return null;
   let hosts = [];
-  if (!manual && !(machine.policy && machine.policy.ddnsHostname) && mode === "dual") hosts = [machine.ipv4, machine.ipv6].filter(Boolean);
-  if (!manual && !(machine.policy && machine.policy.ddnsHostname) && !hosts.length && machine.observedAddress) hosts = String(machine.observedAddress).split(",").filter(Boolean);
-  let host = manual || (machine.policy && machine.policy.ddnsHostname) || hosts[0] || machine.ipv4 || machine.ipv6 || machine.sourceIp;
+  if (!manual && !(machine.policy && machine.policy.ddnsHostname)) {
+    if (mode === "dual") hosts = [machine.ipv4, machine.ipv6].filter(Boolean);
+    if (!hosts.length && machine.observedAddress) hosts = String(machine.observedAddress).split(",").filter(matchesMode);
+    if (!hosts.length) hosts = preferredObservedAddress(machine).split(",").filter(matchesMode);
+  }
+  let host = manual || (machine.policy && machine.policy.ddnsHostname) || hosts[0];
   let source = manual ? (override.host ? "profile_override" : "manual") : ((machine.policy && machine.policy.ddnsHostname) ? "ddns" : "komari");
   if (String(host).includes(",")) {
     const family = machine.policy && machine.policy.addressMode;
@@ -819,14 +1015,33 @@ function validateProtocolSettings(body) {
   const port = Number(body.listenPort || body.port);
   if (!Number.isInteger(port) || port < 1 || port > 65535) fail("invalid_port", "监听端口必须在 1–65535 之间。", 400);
   const options = body.options && typeof body.options === "object" ? body.options : {};
-  const allowedOptions = new Set(["security", "sni", "method"]);
-  if (Object.keys(options).some((key) => !allowedOptions.has(key))) fail("invalid_options", "OneBox 适配器当前只接受 security、sni、method 选项。", 400);
+  const allowedOptions = new Set(["security", "sni", "method", "alpn", "allowInsecure", "flow", "fingerprint", "spiderX", "handshakeServer", "handshakePort", "upMbps", "downMbps", "obfs", "obfsPassword", "alterId", "cipher", "congestionControl", "udpRelayMode"]);
+  if (Object.keys(options).some((key) => !allowedOptions.has(key))) fail("invalid_options", "存在 OneBox 不支持的选项。", 400);
   const sni = options.sni ? validHostname(options.sni) : "";
   if (options.sni && !sni) fail("invalid_sni", "SNI 必须是域名。", 400);
   if (["trojan", "vmess", "hysteria2", "tuic", "anytls"].includes(protocol) && !sni) fail("sni_required", "该协议需要配置 TLS SNI。", 400);
   if (protocol === "vless" && options.security !== "reality") fail("security_required", "当前 OneBox 适配器要求 VLESS 使用 Reality。", 400);
   if (protocol === "shadowsocks" && options.method && !["aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"].includes(String(options.method))) fail("invalid_method", "Shadowsocks 加密方法不受当前 OneBox 适配器支持。", 400);
   if (protocol === "shadowsocks" && !options.method) fail("method_required", "Shadowsocks 需要指定加密方法。", 400);
+  if (options.alpn != null) {
+    if (!Array.isArray(options.alpn) || options.alpn.length > 8 || !options.alpn.every((item) => typeof item === "string" && /^[A-Za-z0-9._/-]{1,32}$/.test(item))) fail("invalid_alpn", "ALPN 必须是 1–8 个合法字符串。", 400);
+  }
+  if (options.allowInsecure != null && typeof options.allowInsecure !== "boolean") fail("invalid_allow_insecure", "allowInsecure 必须是布尔值。", 400);
+  if (options.flow != null && !["", "xtls-rprx-vision"].includes(String(options.flow))) fail("invalid_flow", "VLESS flow 只支持 xtls-rprx-vision 或留空。", 400);
+  if (options.fingerprint != null && !["chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq", "random"].includes(String(options.fingerprint))) fail("invalid_fingerprint", "Reality fingerprint 不受支持。", 400);
+  if (options.spiderX != null && (typeof options.spiderX !== "string" || options.spiderX.length > 256)) fail("invalid_spider_x", "spiderX 必须是不超过 256 字符的字符串。", 400);
+  if (options.handshakeServer != null && !validHostname(String(options.handshakeServer))) fail("invalid_handshake_server", "Reality 握手地址必须是域名或 IP。", 400);
+  if (options.handshakePort != null && (!Number.isInteger(Number(options.handshakePort)) || Number(options.handshakePort) < 1 || Number(options.handshakePort) > 65535)) fail("invalid_handshake_port", "Reality 握手端口必须是 1–65535 的整数。", 400);
+  for (const keyName of ["upMbps", "downMbps"]) {
+    if (options[keyName] != null && (!Number.isInteger(Number(options[keyName])) || Number(options[keyName]) < 0 || Number(options[keyName]) > 100000)) fail("invalid_" + keyName, keyName + " 必须是 0–100000 的整数。", 400);
+  }
+  if (options.obfs != null && !["", "salamander"].includes(String(options.obfs))) fail("invalid_obfs", "Hysteria2 obfs 只支持 salamander 或留空。", 400);
+  if (options.obfs === "salamander" && !options.obfsPassword) fail("obfs_password_required", "obfs=salamander 需要 obfsPassword。", 400);
+  if (options.obfsPassword != null && (typeof options.obfsPassword !== "string" || options.obfsPassword.length > 256)) fail("invalid_obfs_password", "obfsPassword 过长。", 400);
+  if (options.alterId != null && (!Number.isInteger(Number(options.alterId)) || Number(options.alterId) < 0 || Number(options.alterId) > 65535)) fail("invalid_alter_id", "VMess alterId 必须是 0–65535 的整数。", 400);
+  if (options.cipher != null && !["auto", "aes-128-gcm", "chacha20-poly1305", "zero", "none"].includes(String(options.cipher))) fail("invalid_cipher", "VMess cipher 不受支持。", 400);
+  if (options.congestionControl != null && !["bbr", "cubic", "new_reno"].includes(String(options.congestionControl))) fail("invalid_congestion", "TUIC congestionControl 不受支持。", 400);
+  if (options.udpRelayMode != null && !["native", "quic"].includes(String(options.udpRelayMode))) fail("invalid_udp_relay", "TUIC udpRelayMode 不受支持。", 400);
   const listenAddress = String(body.listenAddress || "::");
   if (!["::", "0.0.0.0", "127.0.0.1", "::1"].includes(listenAddress)) fail("invalid_listen_address", "监听地址只允许 ::、0.0.0.0、127.0.0.1 或 ::1。", 400);
   return { protocol, port, transport: definition.transport, options: Object.assign({}, options, { sni }), listenAddress };
@@ -900,14 +1115,15 @@ function checkTwoFactor(value) {
 
 function makeRemoteCommand(state, job, instance) {
   const callbackUrl = state.settings.publicBaseUrl.replace(/\/$/, "") + API + "/report";
-  const remoteAction = job.action === "machine.import" ? "import" : job.action;
+  const runtimeUpgrade = ["runtime.script.update", "runtime.kernel.update"].includes(job.action);
+  const remoteAction = job.action === "machine.import" ? "claim" : job.action === "runtime.script.update" ? "update-script" : job.action === "runtime.kernel.update" ? "update-kernel" : job.action;
   const request = {
     schema: 1,
     jobId: job.id,
     machineUuid: job.machineUuid,
     action: remoteAction,
-    runtime: { engine: "sing-box", id: instance.runtimeId || "onebox-main" },
-    instance: {
+    runtime: { engine: "sing-box", id: job.runtimeId || (instance && instance.runtimeId) || "onebox-main" },
+    instance: runtimeUpgrade ? null : {
       id: instance.id,
       protocol: instance.protocol,
       listenPort: instance.listen.port,
@@ -916,6 +1132,8 @@ function makeRemoteCommand(state, job, instance) {
       options: instance.options || {},
       ...(job.action === "machine.import" ? { legacyTag: job.legacyTag } : {}),
     },
+    ...(job.action === "runtime.script.update" ? { upgrade: { scriptSha256: INSTALLER_SHA256 } } : {}),
+    ...(job.action === "runtime.kernel.update" ? { upgrade: { version: job.requestedVersion || "latest" } } : {}),
     idempotencyKey: job.idempotencyKey,
     report: { callback: callbackUrl, oneTimeToken: job._callbackToken },
   };
@@ -923,7 +1141,18 @@ function makeRemoteCommand(state, job, instance) {
   const scriptUrl = INSTALLER_URL;
   const digest = INSTALLER_SHA256;
   const installer = quoteShell(scriptUrl);
-  const statusId = quoteShell(instance.id);
+  const statusId = instance ? quoteShell(instance.id) : "";
+  const verifyCommand = runtimeUpgrade
+    ? "kns_rc=$?; verify=$(bash \"$installer\" kns runtime-status); verify_rc=$?; if [ \"$verify_rc\" -eq 0 ]; then printf 'KNS_RUNTIME_STATUS=%s\\n' \"$verify\"; fi; [ \"$kns_rc\" -eq 0 ] || exit \"$kns_rc\"; [ \"$verify_rc\" -eq 0 ] || exit \"$verify_rc\""
+    : job.action === "machine.import"
+      ? "kns_rc=$?; verify=$(bash \"$installer\" kns discover); discover_rc=$?; if [ \"$discover_rc\" -eq 0 ]; then printf 'KNS_DISCOVERY=%s\\n' \"$verify\"; fi; runtime=$(bash \"$installer\" kns runtime-status); runtime_rc=$?; if [ \"$runtime_rc\" -eq 0 ]; then printf 'KNS_RUNTIME_STATUS=%s\\n' \"$runtime\"; fi; [ \"$kns_rc\" -eq 0 ] || exit \"$kns_rc\"; [ \"$discover_rc\" -eq 0 ] || exit \"$discover_rc\"; [ \"$runtime_rc\" -eq 0 ] || exit \"$runtime_rc\""
+      : "kns_rc=$?; verify=$(bash \"$installer\" kns status --instance-id " + statusId + "); verify_rc=$?; if [ \"$verify_rc\" -eq 0 ]; then printf 'KNS_STATUS=%s\\n' \"$verify\"; fi; [ \"$kns_rc\" -eq 0 ] || exit \"$kns_rc\"; [ \"$verify_rc\" -eq 0 ] || exit \"$verify_rc\"";
+  const bootstrapCommands = job.action === "install" ? [
+    "onebox_config=/etc/onebox/config.json; onebox_needs_bootstrap=0; onebox_bootstrap_blocked=''",
+    "if [ -L /etc/onebox ] || [ -L \"$onebox_config\" ]; then onebox_bootstrap_blocked=invalid_config; elif [ -e \"$onebox_config\" ]; then if [ ! -f \"$onebox_config\" ]; then onebox_bootstrap_blocked=invalid_config; elif ! command -v jq >/dev/null 2>&1; then onebox_needs_bootstrap=1; elif ! jq -e 'type == \"object\" and (.inbounds | type == \"array\")' \"$onebox_config\" >/dev/null 2>&1; then onebox_bootstrap_blocked=invalid_config; elif [ ! -x /usr/local/bin/onebox ] || [ ! -x /usr/local/lib/onebox/sing-box ]; then onebox_needs_bootstrap=1; fi; else if [ -e /etc/onebox ] && [ ! -d /etc/onebox ]; then onebox_bootstrap_blocked=existing_state; elif [ -d /etc/onebox ]; then if ! command -v find >/dev/null 2>&1; then onebox_bootstrap_blocked=existing_state; else onebox_existing_state=$(find /etc/onebox -mindepth 1 ! -path /etc/onebox/.version_cache -print -quit 2>/dev/null); onebox_find_rc=$?; if [ \"$onebox_find_rc\" -ne 0 ] || [ -n \"$onebox_existing_state\" ]; then onebox_bootstrap_blocked=existing_state; fi; fi; fi; for onebox_unit in /etc/systemd/system/onebox.service /run/systemd/system/onebox.service /usr/lib/systemd/system/onebox.service /lib/systemd/system/onebox.service /usr/local/lib/systemd/system/onebox.service /etc/init.d/onebox; do if [ -e \"$onebox_unit\" ] || [ -L \"$onebox_unit\" ]; then onebox_bootstrap_blocked=existing_state; fi; done; if [ -z \"$onebox_bootstrap_blocked\" ]; then onebox_needs_bootstrap=1; fi; fi",
+    "if [ -n \"$onebox_bootstrap_blocked\" ]; then printf 'KNS_BOOTSTRAP_BLOCKED=%s\\n' \"$onebox_bootstrap_blocked\"; exit 1; fi",
+    "if [ \"$onebox_needs_bootstrap\" -eq 1 ]; then printf 'KNS_BOOTSTRAP=started\\n'; bash \"$installer\" install --non-interactive; bootstrap_rc=$?; if [ \"$bootstrap_rc\" -ne 0 ]; then printf 'KNS_BOOTSTRAP_FAILED=%s\\n' \"$bootstrap_rc\"; exit \"$bootstrap_rc\"; fi; printf 'KNS_BOOTSTRAP=completed\\n'; fi",
+  ] : [];
   return [
     "set -u",
     "[ \"$(id -u)\" -eq 0 ] || { echo 'KNS requires a root Komari Agent.' >&2; exit 77; }",
@@ -935,11 +1164,9 @@ function makeRemoteCommand(state, job, instance) {
     "printf %s " + quoteShell(payload) + " | base64 -d > \"$request_file\" && chmod 600 \"$request_file\" || exit 1",
     "if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 10 --max-time 180 " + installer + " -o \"$installer\"; elif command -v wget >/dev/null 2>&1; then wget -qO \"$installer\" " + installer + "; else echo 'KNS requires curl or wget.' >&2; exit 127; fi",
     "printf '%s  %s\\n' " + quoteShell(digest) + " \"$installer\" | sha256sum -c - >/dev/null || { echo 'OneBox installer SHA256 mismatch.' >&2; exit 65; }",
+    ...bootstrapCommands,
     "bash \"$installer\" kns " + quoteShell(remoteAction) + " --request-file \"$request_file\"",
-    "kns_rc=$?; [ \"$kns_rc\" -eq 0 ] || exit \"$kns_rc\"",
-    job.action === "machine.import"
-      ? "verify=$(bash \"$installer\" kns discover) || exit 1; printf 'KNS_DISCOVERY=%s\\n' \"$verify\""
-      : "verify=$(bash \"$installer\" kns status --instance-id " + statusId + ") || exit 1; printf 'KNS_STATUS=%s\\n' \"$verify\"",
+    verifyCommand,
   ].join("; ");
 }
 
@@ -955,6 +1182,7 @@ function makeRemoteDiscoveryCommand() {
     "printf '%s  %s\\n' " + digest + " \"$installer\" | sha256sum -c - >/dev/null || { echo 'OneBox installer SHA256 mismatch.' >&2; exit 65; }",
     "result=$(bash \"$installer\" kns discover); discover_rc=$?; if [ \"$discover_rc\" -ne 0 ]; then case \"$result\" in *low_pid_headroom*) printf '%s\\n' KNS_RESOURCE=low_pid_headroom ;; *low_memory_headroom*) printf '%s\\n' KNS_RESOURCE=low_memory_headroom ;; esac; exit \"$discover_rc\"; fi",
     "printf 'KNS_DISCOVERY=%s\\n' \"$result\"",
+    "runtime=$(bash \"$installer\" kns runtime-status) || exit 1; printf 'KNS_RUNTIME_STATUS=%s\\n' \"$runtime\"",
   ].join("; ");
 }
 
@@ -1010,6 +1238,83 @@ function extractDiscovery(value) {
   try { return JSON.parse(match[1]); } catch (_) { return null; }
 }
 
+function extractRuntimeStatus(value) {
+  const text = taskText(value);
+  const match = text.match(/KNS_RUNTIME_STATUS=(\{[^\r\n]*\})/);
+  if (!match) return null;
+  try { return JSON.parse(match[1]); } catch (_) { return null; }
+}
+
+function extractOneboxErrorCode(value, job) {
+  for (const line of taskText(value).split(/\r?\n/)) {
+    const candidate = line.trim();
+    if (!candidate.startsWith("{") || !candidate.endsWith("}")) continue;
+    let result;
+    try { result = JSON.parse(candidate); } catch (_) { continue; }
+    const error = result && result.error;
+    const code = error && typeof error.code === "string" ? error.code : "";
+    if (result.schema !== 1 || result.status !== "failed" || result.jobId !== job.id || result.machineUuid !== job.machineUuid || !/^[a-z][a-z0-9_]{0,63}$/.test(code)) continue;
+    return code;
+  }
+  return "";
+}
+
+function safeOneboxErrorMessage(code) {
+  const messages = {
+    onebox_not_installed: "OneBox 基础环境未就绪。请检查 OneBox 初始化结果。",
+    missing_dependency: "目标机器缺少 OneBox 安装所需依赖。",
+    port_in_use: "目标监听端口与现有 OneBox 节点冲突。",
+    sni_selection_failed: "OneBox 未能自动选择 VLESS Reality SNI。",
+    config_invalid: "OneBox 配置校验失败；系统已尝试恢复原配置。",
+    service_reload_failed: "OneBox 配置校验或服务重载失败；系统已尝试恢复原配置。",
+  };
+  return messages[code] || "OneBox 返回错误（" + code + "）。";
+}
+
+function isRuntimeUpgradeAction(action) { return action === "runtime.script.update" || action === "runtime.kernel.update"; }
+
+function validateRuntimeStatus(value) {
+  const runtime = value && value.runtime;
+  if (!value || value.schema !== 1 || value.adapterVersion !== ONEBOX_ADAPTER_VERSION || !runtime || runtime.engine !== "sing-box" || runtime.id !== "onebox-main") return null;
+  const scriptVersion = String(runtime.oneboxScriptVersion || "");
+  const scriptSha256 = String(runtime.oneboxScriptSha256 || "");
+  const singBoxVersion = String(runtime.singBoxVersion || "");
+  const serviceState = String(runtime.serviceState || "");
+  if (scriptVersion.length > 32 || (scriptSha256 && !/^[0-9a-f]{64}$/.test(scriptSha256))) return null;
+  if (singBoxVersion !== "unknown" && !/^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.-]+)?$/.test(singBoxVersion)) return null;
+  if (!["active", "inactive", "unknown"].includes(serviceState)) return null;
+  return { adapterVersion: ONEBOX_ADAPTER_VERSION, oneboxScriptVersion: scriptVersion || "unknown", oneboxScriptSha256: scriptSha256, singBoxVersion, serviceState };
+}
+
+function validateRuntimeCallback(job, body) {
+  if (!body || body.schema !== 1 || body.status !== "succeeded" || body.jobId !== job.id || body.machineUuid !== job.machineUuid || !body.runtime || body.runtime.engine !== "sing-box" || body.runtime.id !== "onebox-main" || body.artifactVersion !== ONEBOX_ADAPTER_VERSION || !Array.isArray(body.instances) || body.instances.length !== 0) fail("invalid_callback", "运行时升级回调结构或任务身份无效。", 400);
+  const result = body.operationResult;
+  if (!result || typeof result !== "object" || Array.isArray(result)) fail("invalid_callback", "运行时升级回调缺少结果。", 400);
+  if (job.action === "runtime.script.update") {
+    if (result.type !== "script_update" || result.version !== ONEBOX_SCRIPT_VERSION || result.scriptSha256 !== INSTALLER_SHA256 || !/^[0-9a-f]{64}$/.test(String(result.previousSha256 || "")) || typeof result.changed !== "boolean") fail("invalid_callback", "OneBox 管理脚本升级回调与固定产物不匹配。", 400);
+    return { type: "script_update", version: ONEBOX_SCRIPT_VERSION, previousSha256: result.previousSha256, scriptSha256: INSTALLER_SHA256, changed: result.changed };
+  }
+  if (result.type !== "kernel_update" || result.requestedVersion !== "latest" || !/^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.-]+)?$/.test(String(result.previousVersion || "")) || !/^\d+\.\d+\.\d+(?:[.-][A-Za-z0-9.-]+)?$/.test(String(result.singBoxVersion || "")) || !["active", "inactive"].includes(result.serviceState)) fail("invalid_callback", "sing-box 内核升级回调字段无效。", 400);
+  return { type: "kernel_update", requestedVersion: "latest", previousVersion: result.previousVersion, singBoxVersion: result.singBoxVersion, serviceState: result.serviceState };
+}
+
+function runtimeUpgradeMatches(job, status, operationResult) {
+  if (!status || !operationResult) return false;
+  if (job.action === "runtime.script.update") return status.oneboxScriptVersion === ONEBOX_SCRIPT_VERSION && status.oneboxScriptSha256 === INSTALLER_SHA256 && operationResult.scriptSha256 === status.oneboxScriptSha256;
+  return status.singBoxVersion === operationResult.singBoxVersion && status.serviceState === operationResult.serviceState && ["active", "inactive"].includes(status.serviceState);
+}
+
+function runtimeUpgradeWasApplied(job, status) {
+  if (!status) return false;
+  if (job.action === "runtime.script.update") {
+    if (status.oneboxScriptSha256 !== INSTALLER_SHA256) return false;
+    const previousSha256 = job.previousRuntimeStatus && job.previousRuntimeStatus.oneboxScriptSha256;
+    return !previousSha256 || previousSha256 !== INSTALLER_SHA256;
+  }
+  const previous = job.previousRuntimeStatus || {};
+  return typeof previous.singBoxVersion === "string" && previous.singBoxVersion !== "unknown" && status.singBoxVersion !== "unknown" && status.singBoxVersion !== previous.singBoxVersion;
+}
+
 function validateDiscovery(job, result) {
   if (!result || result.schema !== 1 || result.adapterVersion !== ONEBOX_ADAPTER_VERSION || !result.runtime || result.runtime.engine !== "sing-box" || result.runtime.id !== "onebox-main" || !Array.isArray(result.instances) || result.instances.length > 500) return null;
   const allowedTransports = new Set(["tcp", "udp", "tcp+udp", "ws"]);
@@ -1060,7 +1365,8 @@ function validateCallbackInstance(job, body) {
     if (tls.allowInsecure != null && typeof tls.allowInsecure !== "boolean") fail("invalid_callback", "回调 allowInsecure 必须是布尔值。", 400);
   }
   if (job.action === "machine.import") {
-    if (node.legacyTag !== job.legacyTag || !Array.isArray(node.resources) || node.resources.length !== 1 || node.resources[0].type !== "legacyConfigFragment" || node.resources[0].id !== job.legacyTag || node.resources[0].owned !== false || node.resources[0].shared !== true) fail("invalid_callback", "旧版节点导入回调的 tag 或外部资源归属无效。", 400);
+    const expectedTag = "kns-" + job.instanceId;
+    if (node.legacyTag !== job.legacyTag || node.tag !== expectedTag || !Array.isArray(node.resources) || node.resources.length !== 1 || node.resources[0].type !== "oneboxInbound" || node.resources[0].id !== expectedTag || node.resources[0].owned !== true || node.resources[0].shared !== false) fail("invalid_callback", "旧节点接管回调的 tag 或资源归属无效。", 400);
   } else if (!Array.isArray(node.resources) || !node.resources.length || !node.resources.every((resource) => resource && resource.owned === true && resource.shared === false)) fail("invalid_callback", "回调资源所有权声明无效。", 400);
   if (!ID_RE.test(node.id) || !PROTOCOLS[node.protocol]) fail("invalid_callback", "回调实例标识或协议无效。", 400);
   return node;
@@ -1070,8 +1376,14 @@ function findTask(job) {
   return server.call("admin:getSpecificTaskResult", { task_id: job.taskId, uuid: job.machineUuid });
 }
 
+function reservedInstanceOwner(state, instanceId, excludeJobId) {
+  const job = (state.jobs || []).find((item) => item.instanceId === instanceId && item.id !== excludeJobId && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
+  return job ? job.machineUuid : "";
+}
+
 function ensureInstance(state, job, callbackInstance) {
   const existing = state.instances.find((item) => item.id === job.instanceId);
+  if (existing && existing.machineUuid !== job.machineUuid) fail("instance_id_conflict", "该实例 ID 已属于另一台探针。", 409);
   if (job.action === "uninstall") {
     if (existing) {
       existing.deletedAt = now();
@@ -1092,7 +1404,8 @@ function ensureInstance(state, job, callbackInstance) {
     if (!existing) fail("instance_missing", "启停操作的实例记录不存在。", 409);
     if (callbackInstance) {
       existing.tls = callbackInstance.tls || existing.tls;
-      existing.credentialCiphertext = secrets.encryptSecret(JSON.stringify(callbackInstance.credential), masterKey);
+      existing.credential = callbackInstance.credential;
+      delete existing.credentialCiphertext;
     }
     existing.enabled = job.action === "enable";
     existing.updatedAt = now();
@@ -1103,10 +1416,10 @@ function ensureInstance(state, job, callbackInstance) {
   if (!machine) fail("machine_missing", "目标探针在 Komari 列表中不存在。", 409);
   if (!callbackInstance) fail("callback_instance_missing", "远端回调实例信息缺失。", 409);
   if (job.action === "machine.import") {
-    if (job.callback && job.callback.keyFingerprint && job.callback.keyFingerprint !== masterKeyFingerprint(masterKey)) {
+    if (job.callback && job.callback.keyFingerprint && job.callback.keyFingerprint !== masterKeyFingerprint(currentMasterKey())) {
       fail("callback_key_changed", "KNS 主密钥在回调接收后发生变化，无法安全登记回调凭据。", 409);
     }
-    if (!callbackInstance.credentialCiphertext) fail("callback_ciphertext_missing", "远端回调中的加密凭据缺失。", 409);
+    if (!callbackInstance.credential || typeof callbackInstance.credential !== "object") fail("callback_credential_missing", "远端回调中的凭据缺失。", 409);
   }
   const endpoint = candidateAddress(machine, state, { listen: { port: callbackInstance.listen.port }, endpointOverride: job.endpointOverride, nat: job.nat });
   if (!endpoint) fail("endpoint_missing", "无法为实例解析可用公网 Endpoint。", 409);
@@ -1123,46 +1436,43 @@ function ensureInstance(state, job, callbackInstance) {
     endpoint.resolvedAddresses = addresses.slice();
     if (mode === "dual") endpoint.hosts = addresses.slice();
   }
-  const credentialCiphertext = job.action === "machine.import" && callbackCiphertextMatchesCurrentKey(job)
-    ? callbackInstance.credentialCiphertext
-    : secrets.encryptSecret(JSON.stringify(callbackInstance.credential), masterKey);
-  if (job.action === "machine.import") {
-    const importedNat = job.nat ? Object.assign({}, job.nat, { publicHost: endpoint.host, publicHosts: endpointPublicHosts(endpoint) }) : null;
-    state.instances.push({
-      id: job.instanceId, machineUuid: job.machineUuid, name: job.name || job.legacyTag, tags: job.tags || [], protocol: callbackInstance.protocol,
-      runtimeId: job.runtimeId || "onebox-main", runtimeEngine: "sing-box", listen: { port: callbackInstance.listen.port, transport: callbackInstance.listen.transport, address: job.listenAddress || "::" },
-      options: job.options || {}, tls: callbackInstance.tls || {}, credentialCiphertext, resources: callbackInstance.resources, legacyTag: job.legacyTag,
-      managedBy: "legacy_import", ownership: "external", readOnly: true, endpoint, endpointOverride: job.endpointOverride || null, nat: importedNat,
-      enabled: true, publish: true, health: { state: callbackInstance.listen.transport === "udp" ? "unverified" : "unknown", level: "L0", consecutiveFailures: 0, consecutiveSuccesses: 0, lastCheckedAt: "", reason: "awaiting_probe" },
-      createdAt: now(), updatedAt: now(), artifactVersion: safeText(job.artifactVersion || "", 80),
-    });
-    return;
-  }
+  const credential = callbackInstance.credential || null;
   const record = Object.assign(existing || {}, {
     id: callbackInstance.id,
     machineUuid: job.machineUuid,
-    name: job.name,
-    tags: job.tags || [],
+    name: job.name || (existing && existing.name) || job.legacyTag || callbackInstance.id,
+    tags: Array.isArray(job.tags) ? job.tags : existing && existing.tags || [],
     protocol: callbackInstance.protocol,
     runtimeId: job.runtimeId || "onebox-main",
     runtimeEngine: "sing-box",
     listen: { port: callbackInstance.listen.port, transport: callbackInstance.listen.transport, address: job.listenAddress || "::" },
     options: job.options || {},
     tls: callbackInstance.tls || {},
-    credentialCiphertext,
+    credential,
     resources: callbackInstance.resources,
     endpoint,
-    endpointOverride: job.endpointOverride || null,
-    nat: job.nat || null,
+    endpointOverride: job.endpointOverride || existing && existing.endpointOverride || null,
+    nat: job.nat || existing && existing.nat || null,
     enabled: true,
-    publish: true,
+    publish: existing ? existing.publish : true,
     health: existing && existing.health || { state: callbackInstance.listen.transport === "udp" ? "unverified" : "unknown", level: "L0", consecutiveFailures: 0, consecutiveSuccesses: 0, lastCheckedAt: "", reason: "awaiting_probe" },
     createdAt: existing && existing.createdAt || now(),
     updatedAt: now(),
     artifactVersion: safeText(job.artifactVersion || "", 80),
   });
-  if (existing) { Object.assign(existing, record); delete existing.deletedAt; }
-  else state.instances.push(record);
+  delete record.credentialCiphertext;
+  if (job.action === "machine.import") {
+    record.managedBy = "onebox";
+    record.ownership = "owned";
+    record.legacyTag = job.legacyTag;
+    record.oneboxTag = callbackInstance.tag || "kns-" + job.instanceId;
+    delete record.readOnly;
+  }
+  if (existing) {
+    Object.assign(existing, record);
+    delete existing.deletedAt;
+    if (existing.remoteStatus && existing.remoteStatus.installed === false) delete existing.remoteStatus;
+  } else state.instances.push(record);
   state.runtimes = state.runtimes.filter((runtime) => !(runtime.machineUuid === job.machineUuid && runtime.id === record.runtimeId));
   state.runtimes.push({ machineUuid: job.machineUuid, id: record.runtimeId, engine: "sing-box", state: "shared", updatedAt: now(), references: state.instances.filter((item) => item.machineUuid === job.machineUuid && !item.deletedAt).length });
 }
@@ -1171,6 +1481,19 @@ async function pollPendingJobs() {
   if (pollBusy) return;
   pollBusy = true;
   try {
+    const stateBeforePoll = getState();
+    let recoveredOrphans = false;
+    const orphanCutoff = Date.now() - 30 * 60 * 1000;
+    for (const job of stateBeforePoll.jobs) {
+      if (!job.taskId && ["authorized", "dispatched", "running", "verifying"].includes(job.state) && Date.parse(job.createdAt) < orphanCutoff) {
+        job.state = "needs_reconcile";
+        job.updatedAt = now();
+        job.message = "任务派发结果未知且没有 Komari task ID；请核对探针状态后再操作。系统未自动重发远程命令。";
+        closeJob(job);
+        recoveredOrphans = true;
+      }
+    }
+    if (recoveredOrphans) save(stateBeforePoll);
     const candidates = getState().jobs.filter((job) => job.taskId && !["succeeded", "failed", "timed_out", "cancelled", "needs_reconcile"].includes(job.state)).slice(0, 20);
     const results = [];
     for (const snapshot of candidates) {
@@ -1194,31 +1517,73 @@ async function pollPendingJobs() {
       const result = polled.result;
       const code = exitCode(result);
       if (code === undefined) { if (job.state === "dispatched") { job.state = "running"; changed = true; } continue; }
+      if (isRuntimeUpgradeAction(job.action)) {
+        const runtimeStatus = validateRuntimeStatus(extractRuntimeStatus(result));
+        const machine = state.machines.find((item) => item.uuid === job.machineUuid);
+        if (machine && runtimeStatus) { machine.runtimeStatus = runtimeStatus; job.runtimeStatus = runtimeStatus; changed = true; }
+        if (code !== 0) {
+          const applied = runtimeUpgradeMatches(job, runtimeStatus, job.callback && job.callback.operationResult) || runtimeUpgradeWasApplied(job, runtimeStatus);
+          job.state = applied ? "needs_reconcile" : "failed";
+          job.updatedAt = now();
+          job.message = applied
+            ? "目标版本已在机器上出现，但任务/回调未完整确认；请核查 OneBox 状态后再操作。"
+            : "OneBox 更新未完成目标版本核验；请查看机器当前版本和服务状态。未将任务标记为成功。";
+          closeJob(job); changed = true; continue;
+        }
+        if (!machine || !runtimeStatus || !job.callback || job.callback.status !== "succeeded" || !runtimeUpgradeMatches(job, runtimeStatus, job.callback.operationResult)) {
+          job.state = "needs_reconcile"; job.updatedAt = now(); job.message = "OneBox 更新已执行，但 Agent、一次性回调与版本/服务状态没有全部匹配；请核查任务详情。";
+          closeJob(job); changed = true; continue;
+        }
+        job.state = "succeeded"; job.updatedAt = now();
+        job.message = job.action === "runtime.script.update"
+          ? "OneBox 管理脚本已固定校验并更新；现有节点配置未修改。"
+          : "sing-box 内核已更新并核验；共享服务状态保持原样。";
+        closeJob(job); changed = true;
+        audit(state, null, "runtime.upgrade.succeeded", { jobId: job.id, action: job.action, machineUuid: job.machineUuid, previousVersion: job.callback.operationResult.previousVersion || "", version: job.callback.operationResult.version || job.callback.operationResult.singBoxVersion || "" });
+        continue;
+      }
       if (code !== 0) {
-        const resourceLimit = taskText(result).match(/(?:KNS_RESOURCE=|"code"\s*:\s*")(low_pid_headroom|low_memory_headroom)/);
+        const outputText = taskText(result);
+        const resourceLimit = outputText.match(/(?:KNS_RESOURCE=|"code"\s*:\s*")(low_pid_headroom|low_memory_headroom)/);
+        const bootstrapBlocked = outputText.match(/(?:^|\n)KNS_BOOTSTRAP_BLOCKED=(existing_state|invalid_config)(?:\r?\n|$)/);
+        const bootstrapFailure = outputText.match(/(?:^|\n)KNS_BOOTSTRAP_FAILED=(\d{1,3})(?:\r?\n|$)/);
+        const bootstrapCompleted = /^KNS_BOOTSTRAP=completed$/m.test(outputText);
+        const oneboxErrorCode = extractOneboxErrorCode(result, job);
         job.state = "failed"; job.updatedAt = now(); job.message = resourceLimit
           ? (resourceLimit[1] === "low_pid_headroom" ? "探针剩余进程额度不足；OneBox 已跳过操作，请释放或提高 pids 限额后重试。" : "探针可用内存不足；OneBox 已跳过操作，请释放或提高内存限额后重试。")
-          : "远程任务退出码 " + code + "。敏感输出未保存。";
+          : bootstrapBlocked
+            ? (bootstrapBlocked[1] === "existing_state" ? "检测到 OneBox 主配置缺失，但仍有旧数据或服务文件；为保护现场，自动初始化已停止。请先恢复 OneBox 配置。" : "OneBox 主配置路径异常或格式无效；自动初始化已停止，未覆盖现有配置。请检查配置路径和文件结构后重试。")
+            : bootstrapFailure
+            ? "OneBox 基础环境初始化失败（退出码 " + bootstrapFailure[1] + "），节点安装未继续。请检查目标机系统、依赖和网络。原始输出未保存在 KNS。"
+            : oneboxErrorCode
+              ? (bootstrapCompleted ? "OneBox 基础环境已就绪，但节点安装失败：" : "节点安装失败：") + safeOneboxErrorMessage(oneboxErrorCode) + "原始输出未保存在 KNS。"
+              : "远程任务退出码 " + code + "。敏感输出未保存在 KNS。";
         closeJob(job); changed = true; continue;
       }
       const status = extractStatus(result);
       if (job.action === "machine.discover") {
         const discovered = validateDiscovery(job, extractDiscovery(result));
+        const runtimeStatus = validateRuntimeStatus(extractRuntimeStatus(result));
         const machine = state.machines.find((item) => item.uuid === job.machineUuid);
-        if (!discovered || !machine) {
+        if (!discovered || !runtimeStatus || !machine) {
           job.state = "needs_reconcile"; job.updatedAt = now(); job.message = "远端发现结果格式无效，未保存节点信息。"; changed = true; continue;
         }
         machine.discoveredNodes = discovered;
         machine.discoveredAt = now();
+        machine.runtimeStatus = runtimeStatus;
         job.state = "succeeded"; job.updatedAt = now(); job.message = "只读扫描完成，发现 " + discovered.length + " 个 OneBox 入站；可导入的节点需要管理员逐个确认。"; closeJob(job); changed = true;
         audit(state, null, "machine.legacy_discovery.completed", { jobId: job.id, machineUuid: job.machineUuid, discoveredCount: discovered.length, importableCount: discovered.filter((node) => node.importable).length });
         continue;
       }
       if (job.action === "machine.import") {
         const discovered = validateDiscovery(job, extractDiscovery(result));
-        const candidate = discovered && discovered.find((node) => node.tag === job.legacyTag && !node.managed && node.importable && node.protocol === job.protocol && node.listen.port === job.listenPort && node.listen.transport === job.listenTransport);
-        if (!candidate || !job.callback || job.callback.status !== "succeeded") {
-          job.state = "needs_reconcile"; job.updatedAt = now(); job.message = "导入未完成双重核验；请重新扫描并检查 OneBox 节点配置。"; closeJob(job); changed = true; continue;
+        const runtimeStatus = validateRuntimeStatus(extractRuntimeStatus(result));
+        const expectedTag = "kns-" + job.instanceId;
+        const candidate = discovered && discovered.find((node) => node.tag === expectedTag && node.managed && node.protocol === job.protocol && node.listen.port === job.listenPort && node.listen.transport === job.listenTransport);
+        const oldTagRemains = discovered && discovered.some((node) => node.tag === job.legacyTag);
+        const machine = state.machines.find((item) => item.uuid === job.machineUuid);
+        if (!candidate || oldTagRemains || !runtimeStatus || !machine || !job.callback || job.callback.status !== "succeeded") {
+          job.state = "needs_reconcile"; job.updatedAt = now(); job.message = "旧节点接管未完成双重核验；请检查 OneBox 配置和节点 tag。"; closeJob(job); changed = true; continue;
         }
         try {
           const callbackInstance = job.action === "machine.import" && callbackCiphertextMatchesCurrentKey(job)
@@ -1235,8 +1600,9 @@ async function pollPendingJobs() {
           if (job.state !== "verifying") closeJob(job);
           changed = true; continue;
         }
-        job.state = "succeeded"; job.updatedAt = now(); job.message = "旧节点已加密登记，可加入订阅；OneBox 原配置未修改。"; closeJob(job); changed = true;
-        audit(state, null, "instance.legacy_import.completed", { jobId: job.id, machineUuid: job.machineUuid, instanceId: job.instanceId, legacyTag: job.legacyTag });
+        machine.runtimeStatus = runtimeStatus;
+        job.state = "succeeded"; job.updatedAt = now(); job.message = "旧节点已接管；现可在 KNS 中重配置、启停、重装或卸载。"; closeJob(job); changed = true;
+        audit(state, null, "instance.legacy_claim.completed", { jobId: job.id, machineUuid: job.machineUuid, instanceId: job.instanceId, legacyTag: job.legacyTag });
         continue;
       }
         if (job.action === "instance.status") {
@@ -1259,6 +1625,7 @@ async function pollPendingJobs() {
             const absent = Array.isArray(status.instances) && status.instances.find((item) => item.id === job.instanceId && item.installed === false);
             if (!absent) { job.state = "needs_reconcile"; job.updatedAt = now(); job.message = "OneBox 未返回该实例的可识别状态。"; changed = true; continue; }
             instance.remoteStatus = { installed: false, enabled: false, serviceState: "unknown", healthLevel: "L0", checkedAt: now(), installState: "not_installed" };
+            instance.updatedAt = now();
           }
           job.state = "succeeded"; job.updatedAt = now(); job.message = "已读取 OneBox 远端实例状态。"; closeJob(job); changed = true;
           audit(state, null, "instance.status.checked", { jobId: job.id, machineUuid: job.machineUuid, instanceId: job.instanceId });
@@ -1281,7 +1648,8 @@ async function pollPendingJobs() {
           job.message = error && error.code === "endpoint_missing" ? "OneBox 已完成；等待可验证的公网 Endpoint。" : "远端状态已收到，但本地登记核对失败；需要管理员复核。";
           changed = true; continue;
         }
-        job.state = "succeeded"; job.updatedAt = now(); job.message = job.action === "uninstall" ? "已验证实例已卸载。" : "回调和远程实例状态均已验证。"; closeJob(job); changed = true;
+        const bootstrapped = job.action === "install" && /^KNS_BOOTSTRAP=completed$/m.test(taskText(result));
+        job.state = "succeeded"; job.updatedAt = now(); job.message = job.action === "uninstall" ? "已验证实例已卸载。" : bootstrapped ? "OneBox 基础环境已初始化；节点安装和远端核查均完成。" : "回调和远程实例状态均已验证。"; closeJob(job); changed = true;
         audit(state, null, "job.succeeded", { jobId: job.id, action: job.action, machineUuid: job.machineUuid, instanceId: job.instanceId });
     }
     for (const job of state.jobs.filter((item) => item.autoProvision === true)) {
@@ -1296,11 +1664,17 @@ async function pollPendingJobs() {
       }
     }
     if (changed) save(state);
-    if (state.machines.some((machine) => machine.autoProvision && machine.autoProvision.state === "queued")) setTimeout(dispatchAutoProvisionQueue, 0);
+    if (state.machines.some((machine) => !machine.removedFromKomariAt && machine.autoProvision && machine.autoProvision.state === "queued")) setTimeout(dispatchAutoProvisionQueue, 0);
   } finally { pollBusy = false; }
 }
 
 function createJob(state, req, action, machine, spec, existingInstance) {
+  if (action === "install" && !existingInstance) {
+    const instanceId = String(spec.id || "");
+    const owner = (state.instances || []).find((item) => item.id === instanceId) || null;
+    const reservedOwner = reservedInstanceOwner(state, instanceId);
+    if (owner && owner.machineUuid !== machine.uuid || reservedOwner && reservedOwner !== machine.uuid) fail("instance_id_conflict", "该实例 ID 已属于或保留给另一台探针。", 409);
+  }
   const twoFactor = checkTwoFactor(spec.twoFactorCode);
   const token = secrets.createToken();
   const tokenRecord = secrets.tokenRecord(token);
@@ -1323,7 +1697,7 @@ function createJob(state, req, action, machine, spec, existingInstance) {
   job.retrySpec = {
     machineUuid: machine.uuid, instanceId: instance.id, protocol: instance.protocol,
     listenPort: instance.listen.port, listenAddress: instance.listen.address, listenTransport: instance.listen.transport,
-    options: instance.options || {}, name: instance.name, tags: instance.tags || [], action,
+    options: instance.options || {}, name: instance.name, tags: instance.tags || [], action, legacyTag: spec.legacyTag || "",
     endpointOverride: spec.endpointOverride || instance.endpointOverride || null, nat: spec.nat || instance.nat || null,
   };
   job.requestHash = String(spec.requestHash || "");
@@ -1333,6 +1707,26 @@ function createJob(state, req, action, machine, spec, existingInstance) {
   if (twoFactor) params["2fa_code"] = twoFactor;
   delete job._callbackToken;
   return { job, instance, params };
+}
+
+function createRuntimeUpgradeJob(state, req, action, machine, spec) {
+  const twoFactor = checkTwoFactor(spec.twoFactorCode);
+  const token = secrets.createToken();
+  const tokenRecord = secrets.tokenRecord(token);
+  const job = {
+    id: randomId("job"), action, state: "authorized", machineUuid: machine.uuid, machineName: machine.name,
+    instanceId: "", protocol: "runtime", runtimeId: "onebox-main", idempotencyKey: safeText(spec.idempotencyKey, 256),
+    requestedVersion: action === "runtime.kernel.update" ? "latest" : "", expectedScriptSha256: action === "runtime.script.update" ? INSTALLER_SHA256 : "",
+    expectedScriptVersion: action === "runtime.script.update" ? ONEBOX_SCRIPT_VERSION : "", previousRuntimeStatus: machine.runtimeStatus || null,
+    callbackTokenSalt: tokenRecord.salt, callbackTokenHash: tokenRecord.hash, _callbackToken: token,
+    callback: null, taskId: "", createdAt: now(), updatedAt: now(), actor: safeText(((req.context || {}).principal || {}).username || "admin", 80),
+    message: "运行时升级已授权，正在发送到 Komari Agent。", requestHash: spec.requestHash,
+  };
+  state.jobs.push(job);
+  const params = { command: makeRemoteCommand(state, job, null), clients: [machine.uuid] };
+  if (twoFactor) params["2fa_code"] = twoFactor;
+  delete job._callbackToken;
+  return { job, params };
 }
 
 async function dispatchJob(state, job, params) {
@@ -1363,24 +1757,54 @@ async function finishDispatch(job, params) {
 function machineByUuid(state, uuid) {
   const machine = state.machines.find((item) => item.uuid === uuid);
   if (!machine) fail("machine_not_found", "Komari 中不存在这台探针。", 404);
+  if (machine.removedFromKomariAt) fail("machine_removed", "这台机器已从 Komari 删除，远程操作已停用；重新接入 Komari 后可恢复管理。", 409);
   return machine;
 }
 
 function requirePolicy(machine) {
-  if (!machine.policy || machine.policy.deployAllowed !== true) fail("deployment_not_allowed", "此探针尚未加入部署允许列表。请先在机器策略中显式启用。", 403);
+  if (!machine.policy || machine.policy.deployAllowed !== true) fail("deployment_not_allowed", "此探针已关闭远程安装。请先在机器卡片中重新启用。", 403);
 }
 
 function installAction(body) { return ["install", "reconfigure", "reinstall", "uninstall", "enable", "disable"].includes(String(body.action || "")); }
 
 async function handleAction(req, res) {
   checkOrigin(req);
-  const body = readBody(req);
-  const state = getState();
+  const body = readBody(req, 16 * 1024 * 1024);
   const action = String(body.action || "");
+  if (action !== "backup.inspect" && Buffer.byteLength(String(req.body || ""), "utf8") > 1024 * 1024) fail("body_too_large", "请求正文超过允许大小。", 413);
+  const state = getState();
   if (maintenanceLock) fail("maintenance_in_progress", "KNS 正在执行互斥设置或数据维护；请稍后重试。", 409);
   assertExpectedRevision(state.revision, body);
-  if (state.settings.setupComplete !== true && !["setup.complete", "backup.export", "backup.inspect", "backup.restore.preview", "profile.preview"].includes(action)) {
+  if (state.settings.setupComplete !== true && !["setup.complete", "backup.export", "backup.inspect", "backup.restore.preview", "profile.preview", "plugin.update.check"].includes(action)) {
     fail("setup_required", "请先完成连接设置；未初始化期间管理页面为只读。", 409);
+  }
+  if (action === "plugin.update.check") {
+    const current = String(PLUGIN_VERSION || "");
+    let latest = "";
+    let latestUrl = "";
+    let publishedAt = "";
+    try {
+      const controller = typeof AbortController === "function" ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), 8000) : null;
+      const response = await fetch("https://api.github.com/repos/liuarui/komari-plugin-kns/releases/latest", {
+        headers: { accept: "application/vnd.github+json", "user-agent": "komari-plugin-kns/" + current },
+        signal: controller && controller.signal,
+      });
+      if (timer) clearTimeout(timer);
+      if (!response || !response.ok) fail("update_check_failed", "无法检查更新：GitHub 返回 HTTP " + (response && response.status || "未知") + "。", 502);
+      const payload = await response.json();
+      latest = String(payload.tag_name || payload.name || "").replace(/^v/i, "");
+      latestUrl = String(payload.html_url || "https://github.com/liuarui/komari-plugin-kns/releases");
+      publishedAt = String(payload.published_at || "");
+      if (!latest) fail("update_check_failed", "无法检查更新：GitHub 未返回有效版本号。", 502);
+    } catch (error) {
+      if (error && error.status) throw error;
+      fail("update_check_failed", "无法检查更新：" + safeText(error && error.message || error, 160), 502);
+    }
+    let updateAvailable;
+    try { updateAvailable = compareSemver(latest, current) > 0; }
+    catch (_) { fail("update_check_failed", "无法检查更新：GitHub 返回的版本号无法按 SemVer 比较。", 502); }
+    return json(res, 200, { ok: true, currentVersion: current, latestVersion: latest, updateAvailable, sourceUrl: SOURCE_URL, latestUrl, publishedAt, checkedAt: now() });
   }
   if (action === "setup.complete") {
     if (state.settings.setupComplete === true) return json(res, 200, { ok: true, alreadyComplete: true });
@@ -1408,12 +1832,12 @@ async function handleAction(req, res) {
         profile = {
           id: randomId("profile"), name: "KNS 默认订阅", createdAt: now(), expiresAt: "", revokedAt: "",
           formats: ["uri", "mihomo-full"], instanceIds: null, machineUuids: null, excludeMachineUuids: [],
-          protocols: null, includeTags: [], excludeUnhealthy: true, addressMode: "auto", sortBy: "name", autoManagedDefault: true, tokens: [],
+          protocols: null, includeTags: [], excludeUnhealthy: true, addressMode: "auto", sortBy: "name", autoManagedDefault: true, tokenRequired: true, tokens: [],
         };
         fresh.profiles.push(profile);
       }
       const token = secrets.createToken();
-      const tokenRecord = createProfileToken(profile, token, profile.expiresAt || "");
+      const tokenRecord = replaceProfileToken(profile, token, profile.expiresAt || "");
       audit(fresh, req, "setup.completed", { profileId: profile.id, tokenId: tokenRecord.id, defaultNode, autoProvisionNewProbes: fresh.settings.autoProvisionNewProbes, baselineMachineCount: fresh.settings.autoProvisionBaselineUuids.length });
       save(fresh);
       return json(res, 200, Object.assign({ ok: true, baselineMachineCount: fresh.settings.autoProvisionBaselineUuids.length, profile: { id: profile.id, name: profile.name }, tokenId: tokenRecord.id }, buildProfileTokenLinks(fresh, profile, token)));
@@ -1494,7 +1918,7 @@ async function handleAction(req, res) {
     }
     const spec = {
       id: failed.instanceId, protocol: validated.protocol, port: validated.port, listenAddress: validated.listenAddress,
-      transport: validated.transport, options: validated.options, name: priorSpec.name, tags: priorSpec.tags,
+      transport: validated.transport, options: validated.options, name: priorSpec.name, tags: priorSpec.tags, legacyTag: priorSpec.legacyTag || failed.legacyTag || "",
       endpointOverride: priorSpec.endpointOverride, nat: retryNat, idempotencyKey: retryKey,
       requestHash: failed.requestHash, twoFactorCode: body.twoFactorCode,
     };
@@ -1533,6 +1957,7 @@ async function handleAction(req, res) {
       const machine = state.machines.find((item) => item.uuid === machineUuid);
       try {
         if (!machine) fail("machine_not_found", "Komari 中不存在这台探针。", 404);
+        if (machine.removedFromKomariAt) fail("machine_removed", "这台机器已从 Komari 删除，不能再提交远程安装。", 409);
         if (machine.online !== true) fail("machine_offline", "探针当前离线或状态未知。", 409);
         requirePolicy(machine);
         const requestHash = crypto.createHash("sha256").update(JSON.stringify({ action: "install", machineUuid, instanceId: "", protocol: validated.protocol, port: validated.port, transport: validated.transport, options: validated.options, listenAddress: validated.listenAddress, endpointHost: body.endpointHost || "", endpointPort: body.endpointPort || 0, externalPort })).digest("hex");
@@ -1588,6 +2013,8 @@ async function handleAction(req, res) {
     if (policy.ddnsHostname != null) next.ddnsHostname = policy.ddnsHostname ? validHostname(policy.ddnsHostname) : "";
     if (policy.ddnsHostname && !next.ddnsHostname) fail("invalid_ddns", "DDNS 必须是有效域名。", 400);
     if (policy.tags != null) next.tags = Array.isArray(policy.tags) ? Array.from(new Set(policy.tags.map((tag) => safeText(tag, 32)).filter(Boolean))).slice(0, 30) : [];
+    if (policy.managementTags != null) next.managementTags = Array.isArray(policy.managementTags) ? Array.from(new Set(policy.managementTags.map((tag) => safeText(tag, 32)).filter(Boolean))).slice(0, 30) : [];
+    if (!Array.isArray(next.managementTags)) next.managementTags = [];
     machine.policy = next; machine.updatedAt = now();
     audit(state, req, "machine.policy.updated", { machineUuid: machine.uuid, deployAllowed: next.deployAllowed, addressMode: next.addressMode });
     save(state); return json(res, 200, { ok: true, machine: safeMachine(machine) });
@@ -1600,10 +2027,10 @@ async function handleAction(req, res) {
     state.settings.publicBaseUrl = parsed.origin + parsed.pathname.replace(/\/$/, "");
     state.settings.privateSite = body.privateSite === true;
     if (body.converterUrl != null) {
-      let converter;
-      try { converter = new URLConstructor(String(body.converterUrl)); } catch (_) { fail("invalid_converter_url", "SubConverter 地址无效。", 400); }
-      if (!["http:", "https:"].includes(converter.protocol) || converter.username || converter.password || converter.hash || !converter.pathname.endsWith("/sub")) fail("invalid_converter_url", "SubConverter 地址必须是以 /sub 结尾的 HTTP(S) URL。", 400);
-      state.settings.converterUrl = converter.toString();
+      const configuredUrl = String(body.converterUrl).trim();
+      const converter = configuredUrl ? parseConverterUrl(configuredUrl) : null;
+      if (configuredUrl && !converter) fail("invalid_converter_url", "SubConverter 地址必须是以 /sub 结尾且不含账号或片段的 HTTPS URL；留空可关闭外部转换。", 400);
+      state.settings.converterUrl = converter ? converter.toString() : "";
     }
     if (body.converterTarget != null) {
       if (!CONVERTER_TARGETS.has(String(body.converterTarget))) fail("invalid_converter_target", "SubConverter target 不在支持列表中。", 400);
@@ -1635,27 +2062,31 @@ async function handleAction(req, res) {
   if (action === "machine.import") {
     const machine = machineByUuid(state, String(body.machineUuid || "").toLowerCase());
     if (machine.online !== true) fail("machine_offline", "探针当前不在线，无法导入 OneBox 凭据。", 409);
-    if (body.confirm !== true) fail("confirmation_required", "导入会把节点凭据加密保存到 KNS，并允许它进入订阅；需要显式确认。", 400);
+    if (body.confirm !== true) fail("confirmation_required", "接管会把旧 OneBox 入站迁移到 KNS 管理，并重载共享 sing-box 服务；需要明确确认。", 400);
     if (!state.settings.publicBaseUrl) fail("public_url_required", "请先设置 Komari HTTPS 公网地址，以接收一次性加密回调。", 409);
     const legacyTag = String(body.legacyTag || "");
     if (!legacyTag || legacyTag.length > 128) fail("invalid_legacy_tag", "旧版 OneBox tag 无效。", 400);
     const scannedAt = Date.parse(machine.discoveredAt || "");
-    if (!Number.isFinite(scannedAt) || Date.now() - scannedAt > 30 * 60 * 1000) fail("discovery_stale", "请先重新扫描；旧节点发现结果超过 30 分钟。", 409);
+    if (!Number.isFinite(scannedAt) || scannedAt > Date.now() || Date.now() - scannedAt > 30 * 60 * 1000) fail("discovery_stale", "请先重新扫描；旧节点发现结果无效或超过 30 分钟。", 409);
     const candidate = (machine.discoveredNodes || []).find((node) => node.tag === legacyTag);
     if (!candidate || candidate.managed || !candidate.importable || !PROTOCOLS[candidate.protocol] || !["tcp", "udp", "tcp+udp"].includes(candidate.listen.transport) || !Number.isInteger(candidate.listen.port) || candidate.listen.port < 1 || candidate.listen.port > 65535) fail("legacy_node_not_importable", "此历史节点不受安全导入支持，请查看扫描结果中的原因。", 409);
-    if ((state.instances || []).some((instance) => instance.machineUuid === machine.uuid && instance.managedBy === "legacy_import" && instance.legacyTag === legacyTag && !instance.deletedAt)) fail("legacy_node_already_imported", "该旧节点已经导入。", 409);
+    const legacyExisting = (state.instances || []).find((instance) => instance.machineUuid === machine.uuid && instance.managedBy === "legacy_import" && instance.legacyTag === legacyTag && !instance.deletedAt) || null;
+    if ((state.instances || []).some((instance) => instance.machineUuid === machine.uuid && instance.legacyTag === legacyTag && instance.managedBy !== "legacy_import" && !instance.deletedAt)) fail("legacy_node_already_managed", "该旧 tag 已被 KNS 节点记录占用，请重新扫描并核对配置。", 409);
+    const instanceId = legacyExisting ? legacyExisting.id : randomId("legacy");
     const idempotencyKey = safeText(body.idempotencyKey || "", 256);
     if (!idempotencyKey) fail("idempotency_key_required", "节点导入需要 idempotencyKey。", 400);
-    const endpointOverride = makeEndpointOverride(body.endpointHost, body.endpointPort, !!state.settings.privateSite);
-    const nat = body.externalPort ? { externalPort: validatePort(body.externalPort) } : null;
+    const endpointOverrideProvided = Object.prototype.hasOwnProperty.call(body, "endpointHost") || Object.prototype.hasOwnProperty.call(body, "endpointPort");
+    const endpointOverride = endpointOverrideProvided ? makeEndpointOverride(body.endpointHost, body.endpointPort, !!state.settings.privateSite) : legacyExisting && legacyExisting.endpointOverride || null;
+    const externalPortProvided = Object.prototype.hasOwnProperty.call(body, "externalPort");
+    const nat = externalPortProvided ? (body.externalPort ? { externalPort: validatePort(body.externalPort) } : null) : legacyExisting && legacyExisting.nat ? deepClone(legacyExisting.nat) : null;
     const importEndpoint = candidateAddress(machine, state, { listen: { port: candidate.listen.port }, endpointOverride, nat });
     if (!importEndpoint) fail("endpoint_missing", "请先设置可用公网地址或 DDNS，再导入订阅节点。", 409);
     if (nat) {
       nat.publicHost = importEndpoint.host;
       nat.publicHosts = endpointPublicHosts(importEndpoint);
-      if (natMappingConflicts(state, nat.externalPort, candidate.listen.transport, nat.publicHosts)) fail("nat_mapping_conflict", "公网 IP、外部端口和 TCP/UDP 组合已被另一个 KNS 实例占用。", 409);
+      if (natMappingConflicts(state, nat.externalPort, candidate.listen.transport, nat.publicHosts, instanceId)) fail("nat_mapping_conflict", "公网 IP、外部端口和 TCP/UDP 组合已被另一个 KNS 实例占用。", 409);
     }
-    const requestHash = crypto.createHash("sha256").update(JSON.stringify({ action, machineUuid: machine.uuid, legacyTag, protocol: candidate.protocol, port: candidate.listen.port, transport: candidate.listen.transport, endpointOverride, externalPort: nat && nat.externalPort || 0 })).digest("hex");
+    const requestHash = crypto.createHash("sha256").update(JSON.stringify({ action, machineUuid: machine.uuid, instanceId, legacyTag, protocol: candidate.protocol, port: candidate.listen.port, transport: candidate.listen.transport, endpointOverride, externalPort: nat && nat.externalPort || 0 })).digest("hex");
     const prior = state.jobs.find((item) => item.machineUuid === machine.uuid && item.action === action && item.idempotencyKey === idempotencyKey);
     if (prior) {
       if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于其他导入请求。", 409);
@@ -1665,11 +2096,12 @@ async function handleAction(req, res) {
     if (conflict) fail("runtime_busy", "该探针已有 OneBox 任务进行中，请等待完成后再导入。", 409);
     const address = ["::", "0.0.0.0", "127.0.0.1", "::1"].includes(candidate.listen.address) ? candidate.listen.address : "::";
     const spec = {
-      id: randomId("legacy"), legacyTag, name: safeText(body.name || legacyTag, 80), tags: Array.isArray(body.tags) ? body.tags.map((tag) => safeText(tag, 32)).filter(Boolean) : [],
+      id: instanceId, legacyTag, name: safeText(body.name || legacyExisting && legacyExisting.name || legacyTag, 80), tags: Array.isArray(body.tags) ? body.tags.map((tag) => safeText(tag, 32)).filter(Boolean) : legacyExisting && legacyExisting.tags || [],
       protocol: candidate.protocol, port: candidate.listen.port, listenAddress: address, transport: candidate.listen.transport,
       options: candidate.options || {}, endpointOverride, nat, idempotencyKey, twoFactorCode: body.twoFactorCode, requestHash,
     };
-    const { job, params } = createJob(state, req, action, machine, spec, null);
+    const claimInstance = legacyExisting ? Object.assign({}, legacyExisting, { protocol: candidate.protocol, listen: { port: candidate.listen.port, address, transport: candidate.listen.transport }, options: candidate.options || {}, endpointOverride, nat, name: spec.name, tags: spec.tags }) : null;
+    const { job, params } = createJob(state, req, action, machine, spec, claimInstance);
     job.legacyTag = legacyTag; job.requestHash = requestHash;
     audit(state, req, "instance.legacy_import.authorized", { jobId: job.id, machineUuid: machine.uuid, instanceId: job.instanceId, legacyTag });
     save(state);
@@ -1685,6 +2117,27 @@ async function handleAction(req, res) {
     res.setHeader("Content-Disposition", "attachment; filename=kns-encrypted-export.json");
     res.end(JSON.stringify(envelope));
     return;
+  }
+  if (action === "diagnostics.key.check") {
+    const instance = (state.instances || []).find((item) => item.credentialCiphertext && !item.deletedAt);
+    if (!instance) return json(res, 200, { ok: true, instanceId: "", candidates: [] });
+    const candidates = [];
+    const tryKey = (source, key) => {
+      if (!key || key.length !== 32) { candidates.push({ source, works: false, reason: "invalid_length" }); return; }
+      try { secrets.decryptSecret(instance.credentialCiphertext, key); candidates.push({ source, works: true }); }
+      catch (_) { candidates.push({ source, works: false }); }
+    };
+    tryKey("current", currentMasterKey());
+    try {
+      for (const name of fs.readdirSync(store.backupDir).filter((n) => /^master-\d{4}-\d{2}-\d{2}\.key$/.test(n)).sort().reverse()) {
+        tryKey("backup:" + name, fs.readFileSync(path.join(store.backupDir, name)));
+      }
+      for (const name of fs.readdirSync(store.backupDir).filter((n) => /^pre-(upgrade|migration)-/.test(n))) {
+        const keyPath = path.join(store.backupDir, name, "kns", "master.key");
+        if (fs.existsSync(keyPath)) tryKey("snapshot:" + name, fs.readFileSync(keyPath));
+      }
+    } catch (error) { candidates.push({ source: "scan", works: false, reason: safeText(error && error.message || error, 160) }); }
+    return json(res, 200, { ok: true, instanceId: instance.id, candidates });
   }
   if (action === "backup.restore.preview") {
     assertNoActiveJobs(state, "恢复备份");
@@ -1702,6 +2155,51 @@ async function handleAction(req, res) {
     const backup = imported.state;
     return json(res, 200, { ok: true, currentRevision: state.revision, keyCompatible: true, backup: { schemaVersion: backup.schemaVersion, pluginVersion: backup.pluginVersion || "", createdAt: backup.updatedAt || backup.createdAt || "", counts: { machines: backup.machines.length, instances: backup.instances.filter((item) => !item.deletedAt).length, profiles: backup.profiles.length, jobs: backup.jobs.length } } });
   }
+  if (action === "profile.token.show") {
+    const profile = state.profiles.find((item) => item.id === String(body.profileId || ""));
+    if (!profile) fail("profile_not_found", "订阅档案不存在。", 404);
+    if (profile.revokedAt || (profile.expiresAt && Date.parse(profile.expiresAt) <= Date.now())) fail("profile_unavailable", "订阅档案已停用或过期。", 409);
+    if (profile.tokenRequired === false) {
+      return json(res, 200, Object.assign({ ok: true, profileId: profile.id, token: "", tokenId: "", tokenRequired: false }, buildProfileTokenLinks(state, profile, "", body.format)));
+    }
+    const token = recoverProfileToken(profile);
+    const record = profileTokenRecords(profile).find((item) => item && !item.revokedAt && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now()) && secrets.verifyToken(token, item));
+    if (!token || !record) fail("token_reissue_required", "旧版令牌无法恢复；请轮换一次以生成可重复查看的新令牌。", 409);
+    res.setHeader("Cache-Control", "no-store");
+    return json(res, 200, Object.assign({ ok: true, profileId: profile.id, token, tokenId: record.id || "legacy-token", tokenRequired: profile.tokenRequired !== false }, buildProfileTokenLinks(state, profile, token, body.format)));
+  }
+  if (action === "profile.token.configure") {
+    const profile = state.profiles.find((item) => item.id === String(body.profileId || ""));
+    if (!profile) fail("profile_not_found", "订阅档案不存在。", 404);
+    if (typeof body.enabled !== "boolean") fail("invalid_token_mode", "enabled 必须是布尔值。", 400);
+    if (profile.revokedAt) fail("profile_revoked", "订阅档案已撤销，请先轮换令牌恢复。", 409);
+    if (profile.expiresAt && Date.parse(profile.expiresAt) <= Date.now()) fail("profile_expired", "订阅档案已过期，请先更新档案有效期。", 409);
+    if (!state.settings.publicBaseUrl) fail("public_url_required", "请先设置 Komari HTTPS 公网地址。", 409);
+    if (!body.enabled) {
+      profile.tokenRequired = false;
+      audit(state, req, "profile.token.disabled", { profileId: profile.id });
+      save(state);
+      return json(res, 200, Object.assign({ ok: true, profileId: profile.id, tokenRequired: false }, buildProfileTokenLinks(state, profile, "", body.format)));
+    }
+    applyPendingTokenUsage(state);
+    let token = (profile.token || profile.tokenCiphertext) ? recoverProfileToken(profile) : "";
+    const currentRecord = token && profileTokenRecords(profile).find((item) => item && !item.revokedAt && (!item.expiresAt || Date.parse(item.expiresAt) > Date.now()) && secrets.verifyToken(token, item));
+    let record = currentRecord || null;
+    if (!record) {
+      token = secrets.createToken();
+      record = replaceProfileToken(profile, token, profile.expiresAt || "");
+      profile.rotatedAt = now();
+    } else {
+      profile.tokens = [record];
+      profile.tokenRequired = true;
+    }
+    profile.revokedAt = "";
+    audit(state, req, record === currentRecord ? "profile.token.enabled" : "profile.token.enabled_and_rotated", { profileId: profile.id, tokenId: record.id });
+    save(state);
+    pendingTokenUsage.clear();
+    res.setHeader("Cache-Control", "no-store");
+    return json(res, 200, Object.assign({ ok: true, profileId: profile.id, token, tokenId: record.id, tokenRequired: true }, buildProfileTokenLinks(state, profile, token, body.format)));
+  }
   if (action === "profile.create" || action === "profile.rotate" || action === "profile.token.create") {
     if (!state.settings.publicBaseUrl) fail("public_url_required", "请先设置 Komari HTTPS 公网地址。", 409);
     if (action === "profile.create") {
@@ -1709,45 +2207,38 @@ async function handleAction(req, res) {
       const name = safeText(body.name || "订阅档案", 80);
       const defaults = { instanceIds: null, machineUuids: null, excludeMachineUuids: [], protocols: null, includeTags: [], formats: ["mihomo-full", "uri"], excludeUnhealthy: true, addressMode: "auto", sortBy: "name", expiresAt: "" };
       const filters = profileFilterFields(body, defaults);
-      const token = secrets.createToken();
-      const profile = { id: profileId, name, createdAt: now(), tokens: [], ...filters, legacy: false };
-      const tokenRecord = createProfileToken(profile, token, profile.expiresAt || "");
+      const tokenRequired = body.tokenRequired !== false;
+      const profile = { id: profileId, name, createdAt: now(), tokens: [], tokenRequired, ...filters, legacy: false };
+      let token = ""; let tokenRecord = null;
+      if (tokenRequired) { token = secrets.createToken(); tokenRecord = replaceProfileToken(profile, token, profile.expiresAt || ""); }
       state.profiles.push(profile);
-      audit(state, req, "profile.created", { profileId, formats: filters.formats });
+      audit(state, req, "profile.created", { profileId, formats: filters.formats, tokenRequired });
       save(state);
-      return json(res, 201, Object.assign({ ok: true, profile: { id: profile.id, name: profile.name }, tokenId: tokenRecord.id }, buildProfileTokenLinks(state, profile, token)));
+      res.setHeader("Cache-Control", "no-store");
+      return json(res, 201, Object.assign({ ok: true, profile: { id: profile.id, name: profile.name, tokenRequired }, tokenId: tokenRecord && tokenRecord.id || "" }, buildProfileTokenLinks(state, profile, token, body.format)));
     }
 
     const profileId = String(body.profileId || "");
     const profile = state.profiles.find((item) => item.id === profileId);
     if (!profile) fail("profile_not_found", "订阅档案不存在。", 404);
     if (profile.expiresAt && Date.parse(profile.expiresAt) <= Date.now()) fail("profile_expired", "订阅档案已过期，请先更新档案有效期。", 409);
+    if (action === "profile.rotate" && body.graceSeconds != null && Number(body.graceSeconds) !== 0) fail("token_grace_unsupported", "每个订阅只保留一个令牌；轮换后旧令牌立即失效。", 400);
     if (action === "profile.token.create" && profile.revokedAt) fail("profile_revoked", "订阅档案已撤销，请先轮换令牌恢复。", 409);
-    const tokens = profileTokenRecords(profile);
-    if (tokens.length >= 50) fail("token_limit_reached", "每个档案最多保留 50 个令牌记录，请清理旧档案。", 409);
+    const active = profileTokenRecords(profile).filter((record) => record && !record.revokedAt && (!record.expiresAt || Date.parse(record.expiresAt) > Date.now()));
+    if (action === "profile.token.create" && active.length) fail("token_already_exists", "每个订阅只保留一个令牌；请使用轮换令牌。", 409);
+    applyPendingTokenUsage(state);
     const token = secrets.createToken();
     let tokenExpiresAt = body.expiresAt ? validateFutureDate(body.expiresAt) : (profile.expiresAt || "");
     if (profile.expiresAt && (!tokenExpiresAt || Date.parse(profile.expiresAt) < Date.parse(tokenExpiresAt))) tokenExpiresAt = profile.expiresAt;
-    if (action === "profile.rotate") {
-      const graceSeconds = body.graceSeconds == null ? 0 : Number(body.graceSeconds);
-      if (!Number.isInteger(graceSeconds) || graceSeconds < 0 || graceSeconds > 604800) fail("invalid_token_grace", "令牌轮换宽限秒数必须在 0 至 604800 之间。", 400);
-      const graceAt = Date.now() + graceSeconds * 1000;
-      for (const prior of ensureProfileTokens(profile)) {
-        if (prior.revokedAt || (prior.expiresAt && Date.parse(prior.expiresAt) <= Date.now())) continue;
-        let expiresAt = graceAt;
-        if (prior.expiresAt && Date.parse(prior.expiresAt) < expiresAt) expiresAt = Date.parse(prior.expiresAt);
-        if (profile.expiresAt && Date.parse(profile.expiresAt) < expiresAt) expiresAt = Date.parse(profile.expiresAt);
-        prior.expiresAt = new Date(expiresAt).toISOString();
-        prior.graceUntil = prior.expiresAt;
-      }
-      profile.revokedAt = "";
-      profile.rotatedAt = now();
-    }
-    const tokenRecord = createProfileToken(profile, token, tokenExpiresAt);
+    const tokenRecord = replaceProfileToken(profile, token, tokenExpiresAt);
+    profile.revokedAt = "";
+    if (action === "profile.rotate") profile.rotatedAt = now();
     const auditAction = action === "profile.rotate" ? "profile.rotated" : "profile.token.created";
-    audit(state, req, auditAction, { profileId, tokenId: tokenRecord.id, graceSeconds: action === "profile.rotate" ? Number(body.graceSeconds || 0) : 0 });
+    audit(state, req, auditAction, { profileId, tokenId: tokenRecord.id, replacedTokenCount: active.length });
     save(state);
-    return json(res, action === "profile.token.create" ? 201 : 200, Object.assign({ ok: true, profileId, tokenId: tokenRecord.id }, buildProfileTokenLinks(state, profile, token)));
+    pendingTokenUsage.clear();
+    res.setHeader("Cache-Control", "no-store");
+    return json(res, action === "profile.token.create" ? 201 : 200, Object.assign({ ok: true, profileId, tokenId: tokenRecord.id, tokenRequired: true }, buildProfileTokenLinks(state, profile, token, body.format)));
   }
   if (action === "profile.token.revoke") {
     const profile = state.profiles.find((item) => item.id === String(body.profileId || ""));
@@ -1785,8 +2276,8 @@ async function handleAction(req, res) {
     const keep = state.instances.find((item) => item.id === String(body.keepInstanceId || "") && !item.deletedAt);
     if (!keep) fail("instance_not_found", "需要选择保留的实例。", 404);
     if (body.confirm !== true) fail("confirmation_required", "去重需要确认。", 400);
-    const keepSecret = keep.credentialCiphertext ? secrets.decryptSecret(keep.credentialCiphertext, masterKey) : "";
-    const duplicates = state.instances.filter((item) => item.id !== keep.id && item.machineUuid === keep.machineUuid && !item.deletedAt && item.protocol === keep.protocol && item.listen.port === keep.listen.port && item.listen.transport === keep.listen.transport && item.endpoint && keep.endpoint && item.endpoint.host === keep.endpoint.host && item.credentialCiphertext && keepSecret && secrets.decryptSecret(item.credentialCiphertext, masterKey) === keepSecret);
+    const keepSecret = keep.credential ? JSON.stringify(keep.credential) : (keep.credentialCiphertext ? secrets.decryptSecret(keep.credentialCiphertext, currentMasterKey()) : "");
+    const duplicates = state.instances.filter((item) => item.id !== keep.id && item.machineUuid === keep.machineUuid && !item.deletedAt && item.protocol === keep.protocol && item.listen.port === keep.listen.port && item.listen.transport === keep.listen.transport && item.endpoint && keep.endpoint && item.endpoint.host === keep.endpoint.host && keepSecret && ((item.credential && JSON.stringify(item.credential) === keepSecret) || (item.credentialCiphertext && secrets.decryptSecret(item.credentialCiphertext, currentMasterKey()) === keepSecret)));
     duplicates.forEach((item) => { item.publish = false; item.updatedAt = now(); });
     audit(state, req, "instances.deduplicated", { keepInstanceId: keep.id, hiddenInstanceIds: duplicates.map((item) => item.id) });
     save(state); return json(res, 200, { ok: true, kept: keep.id, hidden: duplicates.map((item) => item.id) });
@@ -1828,18 +2319,46 @@ async function handleAction(req, res) {
     const machine = machineByUuid(state, String(body.machineUuid || "").toLowerCase());
     const instance = state.instances.find((item) => item.id === String(body.instanceId || "") && item.machineUuid === machine.uuid && !item.deletedAt);
     if (!instance) fail("instance_not_found", "实例不存在或不属于此探针。", 404);
-    if (instance.managedBy === "legacy_import") fail("legacy_instance_readonly", "导入的旧版节点不由 KNS 托管，不能执行远端生命周期操作。", 409);
     const key = safeText(body.idempotencyKey || "", 256);
     if (!key) fail("idempotency_key_required", "状态核查需要 idempotencyKey。", 400);
     const prior = state.jobs.find((item) => item.action === action && item.machineUuid === machine.uuid && item.instanceId === instance.id && item.idempotencyKey === key);
     if (prior) return json(res, 200, { ok: true, reused: true, job: safeJob(prior) });
     const conflict = state.jobs.find((item) => item.machineUuid === machine.uuid && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
     if (conflict) fail("runtime_busy", "该探针已有 OneBox 任务进行中，请等待完成后再核查状态。", 409);
+    const code = checkTwoFactor(body.twoFactorCode);
+    const params = { command: makeRemoteStatusCommand(instance), clients: [machine.uuid] };
+    if (code) params["2fa_code"] = code;
     const job = { id: randomId("job"), action, state: "authorized", machineUuid: machine.uuid, machineName: machine.name, instanceId: instance.id, protocol: instance.protocol, runtimeId: instance.runtimeId || "onebox-main", idempotencyKey: key, requestHash: crypto.createHash("sha256").update(machine.uuid + ":" + instance.id + ":status").digest("hex"), taskId: "", callback: null, createdAt: now(), updatedAt: now(), message: "正在提交只读状态核查。" };
     state.jobs.push(job); audit(state, req, "instance.status.requested", { jobId: job.id, instanceId: instance.id, machineUuid: machine.uuid }); save(state);
-    const params = { command: makeRemoteStatusCommand(instance), clients: [machine.uuid] };
-    const code = checkTwoFactor(body.twoFactorCode); if (code) params["2fa_code"] = code;
     const submitted = await finishDispatch(job, params); return json(res, 202, { ok: submitted.state !== "failed", job: safeJob(submitted) });
+  }
+  if (action === "runtime.script.update" || action === "runtime.kernel.update") {
+    const machine = machineByUuid(state, String(body.machineUuid || "").toLowerCase());
+    if (machine.online !== true) fail("machine_offline", "探针当前不在线，无法升级 OneBox。", 409);
+    requirePolicy(machine);
+    if (body.confirm !== true) fail("confirmation_required", "OneBox 运行时升级需要显式确认。", 400);
+    if (!state.settings.publicBaseUrl) fail("public_url_required", "请先设置 Komari HTTPS 公网地址，以接收 OneBox 升级结果。", 409);
+    const scanAt = Date.parse(machine.discoveredAt || "");
+    const hasOneBox = Array.isArray(machine.discoveredNodes) && machine.discoveredNodes.length > 0 || state.instances.some((item) => item.machineUuid === machine.uuid && !item.deletedAt);
+    if (!hasOneBox || !Number.isFinite(scanAt) || Date.now() - scanAt > 30 * 60 * 1000) fail("runtime_scan_stale", "请先在 30 分钟内完成该探针的 OneBox 只读扫描，再发起升级。", 409);
+    const version = String(body.version || "latest");
+    if (action === "runtime.kernel.update" && version !== "latest") fail("invalid_upgrade_version", "KNS 仅支持升级到最新稳定版 sing-box。", 400);
+    const idempotencyKey = safeText(body.idempotencyKey || "", 256);
+    if (!idempotencyKey) fail("idempotency_key_required", "每次 OneBox 运行时升级都必须提供 idempotencyKey。", 400);
+    const requestHash = crypto.createHash("sha256").update(JSON.stringify({ action, machineUuid: machine.uuid, target: action === "runtime.kernel.update" ? version : INSTALLER_SHA256 })).digest("hex");
+    const prior = state.jobs.find((item) => item.machineUuid === machine.uuid && item.action === action && item.idempotencyKey === idempotencyKey);
+    if (prior) {
+      if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于不同的 OneBox 升级目标。", 409);
+      return json(res, 200, { ok: prior.state !== "failed", reused: true, job: safeJob(prior) });
+    }
+    const conflict = state.jobs.find((item) => item.machineUuid === machine.uuid && item.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
+    if (conflict) fail("runtime_busy", "该探针的共享 OneBox Runtime 仍有未完成任务。", 409);
+    const spec = { idempotencyKey, requestHash, version, twoFactorCode: body.twoFactorCode };
+    const { job, params } = createRuntimeUpgradeJob(state, req, action, machine, spec);
+    audit(state, req, "runtime.upgrade.authorized", { jobId: job.id, action, machineUuid: machine.uuid, target: action === "runtime.kernel.update" ? "latest-stable" : INSTALLER_SHA256 });
+    save(state);
+    const submitted = await finishDispatch(job, params);
+    return json(res, 202, { ok: submitted.state !== "failed", job: safeJob(submitted) });
   }
   if (!installAction(body)) fail("unknown_action", "不支持的管理动作。", 400);
   if (typeof body.confirm !== "boolean" || body.confirm !== true) fail("confirmation_required", "此操作需要显式确认。", 400);
@@ -1857,6 +2376,8 @@ async function handleAction(req, res) {
     const proposedId = actionName === "install" ? (body.instanceId || randomId("kns")) : String(body.instanceId || "");
     if (!ID_RE.test(proposedId)) fail("invalid_instance_id", "实例 ID 格式无效。", 400);
     instance = state.instances.find((item) => item.id === proposedId && item.machineUuid === machineUuid);
+    const owner = (state.instances.find((item) => item.id === proposedId) || {}).machineUuid || reservedInstanceOwner(state, proposedId);
+    if (actionName === "install" && owner && owner !== machineUuid) fail("instance_id_conflict", "该实例 ID 已属于另一台探针。", 409);
     if (actionName === "install" && instance && !instance.deletedAt) fail("instance_exists", "该实例已经登记，请选择重配置、重装或新建实例。", 409);
     if (actionName !== "install" && (!instance || instance.deletedAt)) fail("instance_not_found", "重配置或重装需要选择已登记实例。", 404);
     if (instance && instance.managedBy === "legacy_import") fail("legacy_instance_readonly", "导入的旧版节点仅支持订阅发布设置；如需修改节点配置，请在 OneBox 中操作。", 409);
@@ -1926,34 +2447,62 @@ function validateFutureDate(value) {
 }
 
 function profileUrl(state, profileId, token, format) {
-  return state.settings.publicBaseUrl.replace(/\/$/, "") + API + "/sub?profile=" + encodeURIComponent(profileId) + "&format=" + encodeURIComponent(format || "mihomo-full") + "&token=" + encodeURIComponent(token);
+  const base = state.settings.publicBaseUrl.replace(/\/$/, "") + API + "/sub?profile=" + encodeURIComponent(profileId) + "&format=" + encodeURIComponent(format || "mihomo-full");
+  return token ? base + "&token=" + encodeURIComponent(token) : base;
 }
 
-function buildConverterUrl(state, sourceUrl, target) {
+function parseConverterUrl(value) {
   try {
-    const converter = new URLConstructor(state.settings.converterUrl || "http://23.146.156.234:25500/sub");
+    const converter = new URLConstructor(value);
+    if (converter.protocol !== "https:" || converter.username || converter.password || converter.hash || !converter.pathname.endsWith("/sub")) return null;
+    return converter;
+  } catch (_) { return null; }
+}
+
+function buildConverterUrl(state, sourceUrl, target, rulePreset) {
+  try {
+    // Revalidate persisted/imported settings as well as newly saved settings.
+    const converter = parseConverterUrl(state.settings.converterUrl);
+    if (!converter || new URLConstructor(sourceUrl).protocol !== "https:") return "";
     const selectedTarget = String(target || state.settings.converterTarget || "clash");
     if (!CONVERTER_TARGETS.has(selectedTarget)) return "";
     converter.searchParams.set("target", selectedTarget);
     converter.searchParams.set("url", sourceUrl);
+    converter.searchParams.delete("config");
+    if (rulePreset) {
+      if (selectedTarget !== "clash" || !Object.prototype.hasOwnProperty.call(CONVERTER_RULE_PRESETS, rulePreset)) return "";
+      converter.searchParams.set("config", CONVERTER_RULE_PRESETS[rulePreset]);
+    }
     return converter.toString();
   } catch (_) { return ""; }
 }
 
 function buildConverterUrls(state, sourceUrl) {
   const urls = {};
-  for (const target of CONVERTER_TARGETS) urls[target] = buildConverterUrl(state, sourceUrl, target);
+  for (const target of CONVERTER_TARGETS) {
+    const url = buildConverterUrl(state, sourceUrl, target);
+    if (url) urls[target] = url;
+  }
+  for (const preset of Object.keys(CONVERTER_RULE_PRESETS)) {
+    const url = buildConverterUrl(state, sourceUrl, "clash", preset);
+    if (url) urls["clash-" + preset] = url;
+  }
   return urls;
 }
 
-function buildProfileTokenLinks(state, profile, token) {
+function buildProfileTokenLinks(state, profile, token, extraFormat) {
   const subscriptionUrls = {};
-  for (const format of Array.isArray(profile.formats) ? profile.formats : []) {
-    if (FORMATS.has(format)) subscriptionUrls[format] = profileUrl(state, profile.id, token, format);
+  const effectiveToken = profile.tokenRequired === false ? "" : String(token || "");
+  const formats = new Set(Array.isArray(profile.formats) ? profile.formats : []);
+  if (extraFormat && FORMATS.has(String(extraFormat))) formats.add(String(extraFormat));
+  for (const format of formats) {
+    if (FORMATS.has(format)) subscriptionUrls[format] = profileUrl(state, profile.id, effectiveToken, format);
   }
   const tokenUrl = subscriptionUrls.uri || "";
   const nativeFormat = ["mihomo-full", "mihomo-provider", "singbox-full", "singbox-outbounds"].find((format) => subscriptionUrls[format]) || "";
   return {
+    token: effectiveToken,
+    tokenRequired: profile.tokenRequired !== false,
     subscriptionUrls,
     tokenUrl,
     nativeUrl: nativeFormat ? subscriptionUrls[nativeFormat] : "",
@@ -1983,16 +2532,45 @@ function serveSubscription(req, res, legacy) {
   const token = String(query.token || "");
   if (!profile) { res.statusCode = 404; res.setHeader("Cache-Control", "no-store"); res.end("Not found\n"); return; }
   if (profile.revokedAt || (profile.expiresAt && Date.parse(profile.expiresAt) <= Date.now())) { res.statusCode = 403; res.setHeader("Cache-Control", "no-store"); res.end("Subscription expired or revoked\n"); return; }
-  const tokenRecord = profileValid(profile, token);
-  if (!tokenRecord) { res.statusCode = 404; res.setHeader("Cache-Control", "no-store"); res.end("Not found\n"); return; }
-  recordTokenUsage(profile.id, tokenRecord.id || "legacy-token");
+  let tokenRecord = null;
+  if (profile.tokenRequired !== false) {
+    tokenRecord = profileValid(profile, token);
+    if (!tokenRecord) { res.statusCode = 404; res.setHeader("Cache-Control", "no-store"); res.end("Not found\n"); return; }
+    recordTokenUsage(profile.id, tokenRecord.id || "legacy-token");
+  }
   const format = legacy ? "uri" : String(query.format || "mihomo-full");
-  if (!FORMATS.has(format) || (Array.isArray(profile.formats) && !profile.formats.includes(format))) { res.statusCode = 400; res.setHeader("Cache-Control", "no-store"); res.end("Unsupported subscription format\n"); return; }
+  if (!FORMATS.has(format)) { res.statusCode = 400; res.setHeader("Cache-Control", "no-store"); res.end("Unsupported subscription format\n"); return; }
   let snapshot;
   try { snapshot = readSubscriptionSnapshot(profile.id, format); }
-  catch (_) { snapshot = null; }
-  if (!snapshot || snapshot.sourceHash !== subscriptionSourceHash(state, profile, format)) {
-    scheduleSubscriptionRefresh();
+  catch (error) { console.warn("[KNS] subscription snapshot read failed:", profile.id, format, String(error && error.message || error).slice(0, 160)); snapshot = null; }
+  const snapshotExpected = !Array.isArray(profile.formats) || profile.formats.includes(format);
+  if (!snapshot && snapshotExpected) console.warn("[KNS] subscription snapshot missing:", profile.id, format);
+  const currentSourceHash = subscriptionSourceHash(state, profile, format);
+  if (snapshot && snapshot.sourceHash !== currentSourceHash && snapshotExpected) console.warn("[KNS] subscription snapshot stale:", profile.id, format, String(snapshot.sourceHash).slice(0, 12), currentSourceHash.slice(0, 12));
+  if (!snapshot || snapshot.sourceHash !== currentSourceHash) {
+    if (snapshotExpected) scheduleSubscriptionRefresh();
+    // Snapshot cache miss or unreadable cache: build from state for this request
+    // instead of returning an endless 503. The background refresh still repairs
+    // the cache for later requests.
+    try {
+      const built = subscriptions.buildSubscription(state, profile, format, (box) => secrets.decryptSecret(box, currentMasterKey()));
+      const liveHash = crypto.createHash("sha256").update(built.body).digest("hex");
+      const liveEtag = '"' + liveHash + '"';
+      res.setHeader("Content-Type", built.contentType);
+      res.setHeader("Cache-Control", "private, no-store, max-age=0");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("ETag", liveEtag);
+      res.setHeader("X-KNS-Snapshot-Generated-At", now());
+      res.setHeader("X-KNS-Snapshot-Success", String(built.successCount));
+      res.setHeader("X-KNS-Snapshot-Skipped", String(built.skippedCount));
+      res.setHeader("Vary", "Authorization, Cookie");
+      if (String((req.headers || {})["if-none-match"] || "") === liveEtag) { res.statusCode = 304; res.end(); return; }
+      res.statusCode = 200;
+      res.end(built.body);
+      return;
+    } catch (error) {
+      console.warn("[KNS] subscription direct build failed:", profile.id, format, String(error && error.message || error).slice(0, 160));
+    }
     res.statusCode = 503;
     res.setHeader("Cache-Control", "private, no-store, max-age=0");
     res.setHeader("Retry-After", "2");
@@ -2028,13 +2606,14 @@ async function handleReport(req, res) {
   if (!validToken) { res.statusCode = 401; res.end("Unauthorized\n"); return; }
   if (job.callback || Date.now() - Date.parse(job.createdAt) > 15 * 60 * 1000) { res.statusCode = 409; res.end("Callback token consumed or expired\n"); return; }
   try {
-    const node = validateCallbackInstance(job, body);
+    const runtimeUpgrade = isRuntimeUpgradeAction(job.action);
+    const node = runtimeUpgrade ? null : validateCallbackInstance(job, body);
+    const operationResult = runtimeUpgrade ? validateRuntimeCallback(job, body) : null;
     job.artifactVersion = body.artifactVersion;
-    job.callback = { status: body.status, receivedAt: now(), payloadHash: bodyDigest, keyFingerprint: masterKeyFingerprint(masterKey), instance: node ? Object.assign({}, node, { credentialCiphertext: secrets.encryptSecret(JSON.stringify(node.credential), masterKey) }) : null };
-    if (job.callback.instance) delete job.callback.instance.credential;
+    job.callback = { status: body.status, receivedAt: now(), payloadHash: bodyDigest, keyFingerprint: masterKeyFingerprint(currentMasterKey()), instance: node ? Object.assign({}, node, { credential: node.credential }) : null, operationResult };
     delete job.callbackTokenHash;
     delete job.callbackTokenSalt;
-    job.state = "verifying"; job.updatedAt = now(); job.message = "回调已验签，正在核对 Agent 退出码与远程实例状态。";
+    job.state = "verifying"; job.updatedAt = now(); job.message = runtimeUpgrade ? "回调已验签，正在核对 Agent 退出码与 OneBox 版本/服务状态。" : "回调已验签，正在核对 Agent 退出码与远程实例状态。";
     save(state);
     res.statusCode = 204; res.end();
   } catch (error) {
@@ -2045,7 +2624,8 @@ async function handleReport(req, res) {
 function safeNodeFromCallback(job, state) {
   const callback = job.callback && job.callback.instance;
   if (!callback) return null;
-  const node = { ...callback, credential: JSON.parse(secrets.decryptSecret(callback.credentialCiphertext, masterKey)) };
+  const node = { ...callback };
+  if (!node.credential && node.credentialCiphertext) node.credential = JSON.parse(secrets.decryptSecret(node.credentialCiphertext, currentMasterKey()));
   delete node.credentialCiphertext;
   return node;
 }
@@ -2053,13 +2633,14 @@ function safeNodeFromCallback(job, state) {
 function resolveCallbackNode(job, state) {
   const node = job.callback && job.callback.instance;
   if (!node) return null;
-  if (job.callback.keyFingerprint && job.callback.keyFingerprint !== masterKeyFingerprint(masterKey)) {
+  if (job.callback.keyFingerprint && job.callback.keyFingerprint !== masterKeyFingerprint(currentMasterKey())) {
     const error = new Error("KNS 主密钥在回调接收后发生变化，无法解密回调凭据。");
     error.code = "callback_key_changed";
     throw error;
   }
   const result = Object.assign({}, node);
-  try { result.credential = JSON.parse(secrets.decryptSecret(node.credentialCiphertext, masterKey)); }
+  if (node.credential) { result.credential = node.credential; return result; }
+  try { result.credential = JSON.parse(secrets.decryptSecret(node.credentialCiphertext, currentMasterKey())); }
   catch (_) {
     const error = new Error("回调凭据密文无法使用当前 KNS 主密钥解密。");
     error.code = "callback_decrypt_failed";
@@ -2069,13 +2650,13 @@ function resolveCallbackNode(job, state) {
 }
 
 function closeJob(job) {
-  if (job.callback && job.callback.instance) delete job.callback.instance.credentialCiphertext;
+  if (job.callback && job.callback.instance) { delete job.callback.instance.credential; delete job.callback.instance.credentialCiphertext; }
   delete job.callbackTokenHash; delete job.callbackTokenSalt; delete job._callbackToken;
 }
 
 function callbackCiphertextMatchesCurrentKey(job) {
   const fingerprint = job && job.callback && job.callback.keyFingerprint;
-  return !!fingerprint && fingerprint === masterKeyFingerprint(masterKey);
+  return !!fingerprint && fingerprint === masterKeyFingerprint(currentMasterKey());
 }
 
 async function resolveDoh(host) {
@@ -2136,8 +2717,14 @@ async function refreshHealth() {
         const endpoint = instance.endpoint || {};
         const sni = instance.tls && (instance.tls.sni || instance.tls.server_name) || "";
         const standardTls = instance.tls && instance.tls.security === "tls";
-        const check = endpoint.host && endpoint.port ? await endpointReachable(endpoint.host, endpoint.port, standardTls ? sni || endpoint.host : "") : { ok: false, level: "L1-TCP", reason: "endpoint_missing" };
-        return { id: instance.id, endpoint: instance.endpoint, check };
+        const hosts = Array.from(new Set((Array.isArray(endpoint.hosts) && endpoint.hosts.length ? endpoint.hosts : [endpoint.host]).filter(Boolean)));
+        const checks = [];
+        for (const host of hosts) {
+          const check = endpoint.port ? await endpointReachable(host, endpoint.port, standardTls ? sni || host : "") : { ok: false, level: "L1-TCP", reason: "endpoint_missing" };
+          checks.push({ host, check });
+        }
+        if (!checks.length) checks.push({ host: endpoint.host || "", check: { ok: false, level: "L1-TCP", reason: "endpoint_missing" } });
+        return { id: instance.id, endpoint: instance.endpoint, checks };
       })));
     }
     const state = getState();
@@ -2147,20 +2734,42 @@ async function refreshHealth() {
       if (!instance) continue;
       if (JSON.stringify(instance.endpoint || {}) !== JSON.stringify(result.endpoint || {})) continue;
       if (result.udp) {
-        instance.health = Object.assign({}, instance.health, { state: "unverified", level: "L1-UDP", reason: "agent_listener_only", lastCheckedAt: now() });
+        const current = instance.health || {};
+        if (current.state === "unverified" && current.reason === "agent_listener_only") continue;
+        instance.health = Object.assign({}, current, { state: "unverified", level: "L1-UDP", reason: "agent_listener_only", lastCheckedAt: now(), hosts: {} });
         changed = true; continue;
       }
-      const check = result.check;
-      const health = Object.assign({ consecutiveFailures: 0, consecutiveSuccesses: 0 }, instance.health || {});
-      if (check.ok) {
-          health.consecutiveSuccesses += 1; health.consecutiveFailures = 0;
-          if (health.consecutiveSuccesses >= 2) health.state = "healthy"; else if (health.state !== "healthy") health.state = "suspect";
-          health.level = check.level; health.reason = check.reason;
-      } else {
-          health.consecutiveFailures += 1; health.consecutiveSuccesses = 0;
-          if (health.consecutiveFailures >= 3) health.state = "unhealthy"; else health.state = "suspect";
-          health.level = check.level; health.reason = check.reason;
+      const previousHosts = (instance.health && instance.health.hosts) || {};
+      const hostHealth = {};
+      for (const { host, check } of result.checks || []) {
+        const prior = Object.assign({ consecutiveFailures: 0, consecutiveSuccesses: 0 }, previousHosts[host] || {});
+        if (check.ok) {
+          prior.consecutiveSuccesses = Math.min((Number(prior.consecutiveSuccesses) || 0) + 1, 2);
+          prior.consecutiveFailures = 0;
+          prior.state = prior.consecutiveSuccesses >= 2 ? "healthy" : (prior.state === "healthy" ? "healthy" : "suspect");
+        } else {
+          prior.consecutiveFailures = Math.min((Number(prior.consecutiveFailures) || 0) + 1, 3);
+          prior.consecutiveSuccesses = 0;
+          prior.state = prior.consecutiveFailures >= 3 ? "unhealthy" : "suspect";
+        }
+        prior.level = check.level; prior.reason = check.reason;
+        hostHealth[host] = prior;
       }
+      const states = Object.values(hostHealth);
+      const allUnhealthy = states.length && states.every((item) => item.state === "unhealthy");
+      const anyHealthy = states.some((item) => item.state === "healthy");
+      const health = Object.assign({ consecutiveFailures: 0, consecutiveSuccesses: 0 }, instance.health || {}, { hosts: hostHealth });
+      health.state = allUnhealthy ? "unhealthy" : anyHealthy ? "healthy" : "suspect";
+      health.level = allUnhealthy ? (states[0] && states[0].level || "L1-TCP") : (states.find((item) => item.state !== "unhealthy") || states[0] || {}).level || "L1-TCP";
+      health.reason = allUnhealthy ? "all_addresses_failed" : anyHealthy ? "reachable" : "partial_or_unconfirmed";
+      health.consecutiveFailures = allUnhealthy ? Math.max(...states.map((item) => item.consecutiveFailures || 0), 0) : 0;
+      health.consecutiveSuccesses = anyHealthy ? Math.max(...states.map((item) => item.consecutiveSuccesses || 0), 0) : 0;
+      const previous = instance.health || {};
+      const hostSummary = (hosts) => Object.fromEntries(Object.entries(hosts || {}).sort().map(([host, item]) => [host, {
+        state: item && item.state || "", consecutiveFailures: Number(item && item.consecutiveFailures) || 0,
+        consecutiveSuccesses: Number(item && item.consecutiveSuccesses) || 0, level: item && item.level || "", reason: item && item.reason || "",
+      }]));
+      if ((previous.state || "") === health.state && (previous.level || health.level) === health.level && (previous.reason || health.reason) === health.reason && JSON.stringify(hostSummary(previous.hosts)) === JSON.stringify(hostSummary(hostHealth))) continue;
       health.lastCheckedAt = now(); instance.health = health; instance.updatedAt = now(); changed = true;
     }
     if (changed) save(state);
@@ -2186,11 +2795,19 @@ async function refreshEndpoints() {
       const previous = (current.addresses || []).slice().sort();
       const nextAddresses = result.addresses.slice().sort();
       const same = JSON.stringify(nextAddresses) === JSON.stringify(previous);
-      machine.ddnsObservation = { addresses: result.addresses, count: same ? current.count + 1 : 1, observedAt: now() };
-      changed = true;
-      if (result.addresses.length && machine.ddnsObservation.count >= 2) resolvedByMachine.set(machine.uuid, result.addresses);
+      const count = same ? Number(current.count || 0) + 1 : 1;
+      // Keep counting through the first two matching observations, then stop
+      // rewriting state just to bump count/observedAt on an unchanged answer.
+      if (!(same && Number(current.count || 0) >= 2)) {
+        machine.ddnsObservation = { addresses: result.addresses, count, observedAt: now() };
+        changed = true;
+      }
+      if (result.addresses.length && (machine.ddnsObservation && machine.ddnsObservation.count >= 2 || same && Number(current.count || 0) >= 2)) {
+        resolvedByMachine.set(machine.uuid, result.addresses);
+      }
     }
     if (changed) save(state);
+    changed = false;
 
     const candidates = [];
     for (const machine of state.machines) {
@@ -2216,36 +2833,53 @@ async function refreshEndpoints() {
         if ((instance.nat && instance.nat.mappingConflict) || !sameHost || !sameResolved) candidates.push({ id: instance.id, machineUuid: machine.uuid, endpoint, fingerprint: endpointConfigFingerprint(machine, instance, endpoint), listen: instance.listen, tls: instance.tls });
       }
     }
+    if (changed) save(state);
     const verified = [];
     for (let offset = 0; offset < candidates.length; offset += 5) {
       verified.push(...await Promise.all(candidates.slice(offset, offset + 5).map(async (candidate) => {
         const isUdp = candidate.listen && candidate.listen.transport === "udp";
-        if (isUdp) return { ...candidate, reachable: true };
-        for (const host of candidate.endpoint.hosts || [candidate.endpoint.host]) {
+        const hosts = Array.from(new Set((candidate.endpoint.hosts || [candidate.endpoint.host]).filter(Boolean)));
+        if (isUdp) return { ...candidate, reachableHosts: hosts };
+        const reachableHosts = [];
+        for (const host of hosts) {
           const sni = candidate.tls && (candidate.tls.sni || candidate.tls.server_name) || "";
           const check = await endpointReachable(host, candidate.endpoint.port, candidate.tls && candidate.tls.security === "tls" ? sni || host : "");
-          if (!check.ok) return { ...candidate, reachable: false };
+          if (check.ok) reachableHosts.push(host);
         }
-        return { ...candidate, reachable: true };
+        return { ...candidate, reachableHosts };
       })));
     }
     state = getState();
     changed = false;
     for (const result of verified) {
-      if (!result.reachable) continue;
+      if (!result.reachableHosts || !result.reachableHosts.length) continue;
       const machine = state.machines.find((item) => item.uuid === result.machineUuid);
       const instance = state.instances.find((item) => item.id === result.id && item.machineUuid === result.machineUuid && !item.deletedAt && item.enabled);
       if (!machine || !instance) continue;
       let currentCandidate;
       try { currentCandidate = candidateAddress(machine, state, instance); } catch (_) { continue; }
-      if (!currentCandidate || currentCandidate.host !== result.endpoint.host) continue;
+      const reachable = new Set(result.reachableHosts);
+      currentCandidate.hosts = (currentCandidate.hosts || [currentCandidate.host]).filter((host) => reachable.has(host));
+      if (!currentCandidate.hosts.length) continue;
+      if (currentCandidate.resolvedAddresses && currentCandidate.resolvedAddresses.length) {
+        currentCandidate.resolvedAddresses = currentCandidate.resolvedAddresses.filter((host) => reachable.has(host));
+      }
+      currentCandidate.host = currentCandidate.hosts.includes(currentCandidate.host) ? currentCandidate.host : currentCandidate.hosts[0];
+      currentCandidate.family = currentCandidate.hosts.length > 1 ? "dual" : (String(currentCandidate.host).includes(":") ? "ipv6" : "ipv4_or_domain");
       if (result.endpoint.source === "ddns") {
         const observation = machine.ddnsObservation;
         const addresses = observation && Array.isArray(observation.addresses) ? observation.addresses : [];
-        if (!observation || observation.count < 2 || JSON.stringify(addresses.slice().sort()) !== JSON.stringify((result.endpoint.resolvedAddresses || []).slice().sort())) continue;
-        currentCandidate.resolvedAddresses = addresses.slice();
-        if (machine.policy && machine.policy.addressMode === "dual") currentCandidate.hosts = addresses.slice();
+        if (!observation || observation.count < 2) continue;
+        currentCandidate.resolvedAddresses = addresses.filter((host) => reachable.has(host));
+        if (!currentCandidate.resolvedAddresses.length) continue;
       }
+      result.endpoint = Object.assign({}, result.endpoint, {
+        host: currentCandidate.host,
+        hosts: currentCandidate.hosts.slice(),
+        family: currentCandidate.family,
+        resolvedAddresses: currentCandidate.resolvedAddresses || [],
+      });
+      result.fingerprint = endpointConfigFingerprint(machine, instance, currentCandidate);
       if (endpointConfigFingerprint(machine, instance, currentCandidate) !== result.fingerprint) continue;
       if (instance.nat && natMappingConflicts(state, instance.nat.externalPort, (instance.listen || {}).transport, endpointPublicHosts(currentCandidate), instance.id)) {
         if (markNatMappingConflict(state, instance, currentCandidate)) changed = true;
@@ -2337,7 +2971,7 @@ function load() {
   server.cron("@every 5m", () => { scheduleSubscriptionRefresh(); });
   server.cron("0 3 * * *", () => { try { const state = getState(); store.write(state); } catch (error) { console.error("[KNS] daily backup failed:", safeText(error && error.message || error, 200)); } });
   scheduleSubscriptionRefresh();
-  try { syncMachines(); } catch (_) {}
+  syncMachines().catch((error) => console.error("[KNS] initial machine sync failed:", safeText(error.message || error, 200)));
 }
 
 function unload() {

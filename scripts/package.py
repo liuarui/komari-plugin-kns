@@ -14,6 +14,9 @@ RUNTIME_FILES = [
     "komari-plugin.json",
     "script.js",
     "pages/admin.html",
+    "pages/qrcode-generator.js",
+    "pages/qrcode-generator-utf8.js",
+    "pages/qrcode-generator-LICENSE.txt",
 ]
 MODULE_DIR = ROOT / "kns"
 DEPENDENCY_LOCK = ROOT / "requirements.lock"

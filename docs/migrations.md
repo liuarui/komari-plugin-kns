@@ -13,7 +13,7 @@
 
 ## OneBox 历史安装节点
 
-管理页可批量勾选在线探针并提交最多 100 台的只读扫描（最多 5 个同时提交请求），也可单机扫描。固定 SHA-256 的 OneBox 适配器只读解析其可识别的 `/etc/onebox/config.json`；发现结果仅含安全元数据，不含认证字段。它不枚举任意代理程序或 OneBox 自定义路径。支持的单用户 VLESS Reality、Hysteria2、TUIC、AnyTLS 和 Shadowsocks 可由管理员逐个确认导入；适配器经一次性 HTTPS 回调提交凭据，KNS 加密保存。导入只创建 KNS 外部只读实例记录，不修改 OneBox inbound、证书、防火墙或服务。多用户、VLESS WS/Argo、缺少凭据/Reality 公钥/SNI、非通配监听地址等节点保持未导入状态。
+管理页可批量勾选在线探针并提交最多 100 台的只读扫描（最多 5 个同时提交请求），也可单机扫描。固定 SHA-256 的 OneBox 适配器只读解析其可识别的 `/etc/onebox/config.json`；发现结果仅含安全元数据，不含认证字段。它不枚举任意代理程序或 OneBox 自定义路径。支持的单用户 VLESS Reality、Hysteria2、TUIC、AnyTLS 和 Shadowsocks 会在机器卡片中显示“纳入管理并加入订阅”操作；按钮点击即提交导入，适配器经一次性 HTTPS 回调提交凭据，KNS 加密保存。导入只创建 KNS 外部只读实例记录，不修改 OneBox inbound、证书、防火墙或服务。多用户、VLESS WS/Argo、缺少凭据/Reality 公钥/SNI、非通配监听地址等节点保持未导入状态。
 
 ## 插件升级备份
 
@@ -21,7 +21,7 @@
 
 ## Schema 版本
 
-当前 Schema 为 2。Schema 1 迁移在读取时为旧状态补齐 `setupComplete`、`autoProvisionNewProbes`、自动部署基线和默认节点模板：已有 `pluginVersion` 或 HTTPS 回调地址的旧安装视为已初始化；旧版没有自动部署字段时始终默认为关闭；既存机器与策略、订阅、令牌、任务、地址及审计数据保持不变。Schema 1 中若确有布尔自动部署值则保留该值。迁移只在成功写状态时持久化 Schema 2。读到更高版本或非法版本时会失败并保留原文件，不做破坏性重置。
+当前 Schema 为 2。Schema 1 迁移在读取时为旧状态补齐 `setupComplete`、`autoProvisionNewProbes`、自动部署基线和默认节点模板：已有 `pluginVersion` 或 HTTPS 回调地址的旧安装视为已初始化；旧版没有自动部署字段时始终默认为关闭。机器远程安装权限默认开启：升级时会先备份存储，再一次性为已有机器启用该权限；新同步的机器也默认开启，管理员之后仍可逐台关闭。该权限只允许管理员提交远程安装任务，不会自行安装；新探针自动部署仍默认关闭。Schema 1 中若确有布尔自动部署值则保留该值。读到更高版本或非法版本时会失败并保留原文件，不做破坏性重置。
 
 ## 升级和回退要求
 

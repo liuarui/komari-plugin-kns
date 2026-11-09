@@ -2,7 +2,14 @@
   "lockVersion": 1,
   "runtime": {
     "host": "komari-moejs",
-    "dependencies": []
+    "dependencies": [
+      {
+        "name": "qrcode-generator",
+        "version": "2.0.4",
+        "license": "MIT",
+        "source": "https://github.com/kazuhikoarase/qrcode-generator"
+      }
+    ]
   },
   "packaging": {
     "python": "standard-library-only",

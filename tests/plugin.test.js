@@ -6,11 +6,124 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const secrets = require("../kns/crypto");
 const Module = require("node:module");
 
 function response() {
   return { headers: {}, statusCode: 200, body: "", setHeader(name, value) { this.headers[name.toLowerCase()] = value; }, end(value) { this.body = value == null ? "" : String(value); } };
 }
+
+test("converter links reject unsafe persisted settings and require an HTTPS source", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../kns/index.js"), "utf8");
+  const context = { URLConstructor: URL, CONVERTER_TARGETS: new Set(["clash", "loon"]), CONVERTER_RULE_PRESETS: { "acl4ssr-mini": "config/ACL4SSR_Online_Mini.ini", "acl4ssr-full": "config/ACL4SSR_Online_Full.ini" } };
+  require("node:vm").runInNewContext(source.slice(source.indexOf("function parseConverterUrl("), source.indexOf("function buildProfileTokenLinks(")), context);
+  const sourceUrl = "https://monitor.example/api/kns/sub?token=test-token&format=uri";
+  for (const converterUrl of [undefined, "", "http://converter.example/sub", "http://localhost:25500/sub", "https://user:pass@converter.example/sub", "https://converter.example/sub#fragment", "invalid"]) {
+    const state = { settings: { converterUrl } };
+    assert.equal(context.buildConverterUrl(state, sourceUrl), "");
+    assert.deepEqual(Object.keys(context.buildConverterUrls(state, sourceUrl)), []);
+  }
+  const state = { settings: { converterUrl: "https://converter.example/sub?emoji=true" } };
+  const converted = new URL(context.buildConverterUrl(state, sourceUrl, "loon"));
+  assert.equal(converted.protocol, "https:");
+  assert.equal(converted.searchParams.get("url"), sourceUrl);
+  assert.equal(converted.searchParams.get("target"), "loon");
+  assert.equal(converted.searchParams.get("emoji"), "true");
+  assert.equal(context.buildConverterUrl(state, sourceUrl.replace("https:", "http:")), "");
+});
+
+test("onebox-bridge leftover migration keeps URI format and serves on-demand native formats", async () => {
+  const storage = fs.mkdtempSync(path.join(os.tmpdir(), "kns-legacy-formats-"));
+  const originalLoad = Module._load;
+  const routes = new Map();
+  const crons = [];
+  let plugin;
+  const machineUuid = "123e4567-e89b-42d3-a456-426614174000";
+  const mockServer = {
+    route(method, url, handler) { routes.set(method + " " + url, handler); },
+    cron(expression, handler) { crons.push({ expression, handler }); },
+    async call() { return []; },
+  };
+  Module._load = function (request, parent, isMain) {
+    if (request === "server") return mockServer;
+    return originalLoad.call(this, request, parent, isMain);
+  };
+  global.__storageDir__ = storage;
+  const target = require.resolve("../kns/index");
+  delete require.cache[target];
+  try {
+    fs.writeFileSync(path.join(storage, "onebox-bridge.json"), JSON.stringify({
+      token: "a".repeat(32),
+      records: [{ clientUuid: machineUuid, clientName: "legacy-node", link: "vless://example", state: "published" }],
+    }));
+    plugin = require(target);
+    plugin.load();
+    const admin = { context: { principal: { roles: ["admin"], username: "tester" } }, headers: { host: "monitor.example" } };
+    const stateRes = { headers: {}, statusCode: 200, body: "", setHeader(name, value) { this.headers[name.toLowerCase()] = value; }, end(value) { this.body = String(value || ""); } };
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, stateRes);
+    const profile = JSON.parse(stateRes.body).profiles.find((item) => item.id === "legacy-default");
+    assert.deepEqual(profile.formats, ["uri"]);
+    const nativeRes = response();
+    await routes.get("GET /api/kns/sub")({ query: { profile: "legacy-default", format: "mihomo-full", token: "a".repeat(32) }, headers: {} }, nativeRes);
+    assert.equal(nativeRes.statusCode, 200);
+    assert.match(nativeRes.body, /^proxies:/);
+    let uriRes;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      uriRes = response();
+      await routes.get("GET /api/kns/sub")({ query: { profile: "legacy-default", format: "uri", token: "a".repeat(32) }, headers: {} }, uriRes);
+      if (uriRes.statusCode === 200) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(uriRes.statusCode, 200, uriRes.body);
+    assert.match(uriRes.body, /^vless:\/\/example/);
+  } finally {
+    if (plugin) plugin.unload();
+    Module._load = originalLoad;
+    delete global.__storageDir__;
+    fs.rmSync(storage, { recursive: true, force: true });
+    delete require.cache[target];
+  }
+});
+
+test("existing leftover profiles drop empty native formats on load", async () => {
+  const storage = fs.mkdtempSync(path.join(os.tmpdir(), "kns-legacy-constrain-"));
+  const originalLoad = Module._load;
+  const routes = new Map();
+  let plugin;
+  const mockServer = { route(method, url, handler) { routes.set(method + " " + url, handler); }, cron() {}, async call() { return []; } };
+  Module._load = function (request, parent, isMain) {
+    if (request === "server") return mockServer;
+    return originalLoad.call(this, request, parent, isMain);
+  };
+  global.__storageDir__ = storage;
+  const target = require.resolve("../kns/index");
+  delete require.cache[target];
+  try {
+    const { createStore } = require("../kns/store");
+    const store = createStore(storage);
+    const state = store.initialState();
+    state.pluginVersion = require("../komari-plugin.json").version;
+    const token = secrets.tokenRecord("b".repeat(32));
+    state.profiles.push({ id: "legacy-default", name: "旧版默认订阅", ...token, createdAt: new Date().toISOString(), formats: ["uri", "mihomo-full", "singbox-full"], instanceIds: [], includeTags: [], excludeUnhealthy: false, legacy: true });
+    store.write(state);
+    plugin = require(target);
+    plugin.load();
+    const admin = { context: { principal: { roles: ["admin"], username: "tester" } }, headers: { host: "monitor.example" } };
+    const stateRes = { headers: {}, statusCode: 200, body: "", setHeader(name, value) { this.headers[name.toLowerCase()] = value; }, end(value) { this.body = String(value || ""); } };
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, stateRes);
+    assert.deepEqual(JSON.parse(stateRes.body).profiles.find((item) => item.id === "legacy-default").formats, ["uri"]);
+    const nativeRes = { headers: {}, statusCode: 200, body: "", setHeader(name, value) { this.headers[name.toLowerCase()] = value; }, end(value) { this.body = String(value || ""); } };
+    await routes.get("GET /api/kns/sub")({ query: { profile: "legacy-default", format: "singbox-full", token: "b".repeat(32) }, headers: {} }, nativeRes);
+    assert.equal(nativeRes.statusCode, 200);
+    assert.match(nativeRes.body, /"outbounds"/);
+  } finally {
+    if (plugin) plugin.unload();
+    Module._load = originalLoad;
+    delete global.__storageDir__;
+    fs.rmSync(storage, { recursive: true, force: true });
+    delete require.cache[target];
+  }
+});
 
 test("admin policy, task callback, remote status, and protected URI subscription work end to end", async () => {
   const storage = fs.mkdtempSync(path.join(os.tmpdir(), "kns-plugin-"));
@@ -53,9 +166,10 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, stateRes);
     const initial = JSON.parse(stateRes.body);
     assert.equal(initial.machines.length, 1);
-    assert.equal(initial.machines[0].policy.deployAllowed, false);
+    assert.equal(initial.machines[0].policy.deployAllowed, true);
     assert.equal(initial.machines[0].online, true, "live status should come from Komari presence RPC, not admin:listClients");
     assert.equal(initial.settings.setupComplete, false);
+    assert.equal(initial.settings.converterUrl, "");
 
     const setupGateRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.policy.update", machineUuid, policy: { deployAllowed: true } }) }, setupGateRes);
@@ -91,6 +205,8 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.equal(setupResult.baselineMachineCount, 1);
     assert.ok(setupResult.subscriptionUrls.uri);
     assert.ok(setupResult.subscriptionUrls["mihomo-full"]);
+    assert.equal(setupResult.converterUrl, "");
+    assert.deepEqual(setupResult.converterUrls, {});
     const completedSetupStateRes = response();
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, completedSetupStateRes);
     const completedSetupState = JSON.parse(completedSetupStateRes.body);
@@ -196,7 +312,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const report = {
       schema: 1, jobId: request.jobId, machineUuid, status: "succeeded", runtime: { id: "onebox-main", engine: "sing-box" },
       instances: [{ id: request.instance.id, protocol: "vless", listen: { port: 443, transport: "tcp" }, tls: { security: "reality", sni: "www.example.com", publicKey: "public-key", shortId: "01" }, credential: { type: "uuid", value: credentialUuid, flow: "xtls-rprx-vision" }, resources: [{ type: "configFragment", id: "kns-test", owned: true, shared: false }] }],
-      artifactVersion: "1.4.0",
+      artifactVersion: "1.8.0",
     };
     const reportRes = response();
     await routes.get("POST /api/kns/report")({ headers: { authorization: "Bearer " + request.report.oneTimeToken, "content-type": "application/json" }, body: JSON.stringify(report) }, reportRes);
@@ -230,9 +346,22 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.equal(renamedState.jobs.length, jobsBeforeRename);
 
     taskResult = { exit_code: 0, stdout: "KNS_STATUS=" + JSON.stringify({ schema: 1, runtime: { engine: "sing-box", id: "onebox-main" }, instance: { id: request.instance.id, machineUuid, installed: true, enabled: true, serviceState: "active", healthLevel: "L1", uninstallPreview: { complete: true, serviceImpact: "reload" }, resources: [{ type: "runtimeService", id: "onebox", owned: false, shared: true, present: true, referenceCount: 2, action: "reload" }] } }) };
+    const callsBeforeBadStatus = execCalls;
+    const invalidStatusRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "instance.status", machineUuid, instanceId: request.instance.id, twoFactorCode: "bad", idempotencyKey: "status-preview-1" }) }, invalidStatusRes);
+    assert.equal(invalidStatusRes.statusCode, 400);
+    assert.equal(JSON.parse(invalidStatusRes.body).error.code, "invalid_2fa");
+    assert.equal(execCalls, callsBeforeBadStatus);
+    const afterInvalidStatusRes = response();
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, afterInvalidStatusRes);
+    const afterInvalidStatus = JSON.parse(afterInvalidStatusRes.body);
+    assert.equal(afterInvalidStatus.jobs.length, renamedState.jobs.length);
+    assert.equal(afterInvalidStatus.audit.filter((event) => event.action === "instance.status.requested").length, renamedState.audit.filter((event) => event.action === "instance.status.requested").length);
     const statusJobRes = response();
-    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "instance.status", machineUuid, instanceId: request.instance.id, idempotencyKey: "status-preview-1" }) }, statusJobRes);
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "instance.status", machineUuid, instanceId: request.instance.id, twoFactorCode: "123456", idempotencyKey: "status-preview-1" }) }, statusJobRes);
     assert.equal(statusJobRes.statusCode, 202);
+    assert.equal(execParams["2fa_code"], "123456");
+    assert.equal(execCalls, callsBeforeBadStatus + 1);
     crons.find((item) => item.expression === "@every 15s").handler();
     await new Promise((resolve) => setTimeout(resolve, 20));
     const remoteStatusStateRes = response();
@@ -254,8 +383,10 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "instance.status", machineUuid, instanceId: request.instance.id, idempotencyKey: "status-during-discovery" }) }, overlappingStatusRes);
     assert.equal(overlappingStatusRes.statusCode, 409);
     assert.equal(JSON.parse(overlappingStatusRes.body).error.code, "runtime_busy");
-    const legacyDiscovery = { schema: 1, adapterVersion: "1.4.0", runtime: { engine: "sing-box", id: "onebox-main" }, instances: [{ tag: "old-vless", protocol: "vless", listen: { port: 8443, address: "::", transport: "tcp" }, managed: false, importable: true, options: { security: "reality", sni: "www.example.com", method: "" }, reason: "" }] };
-    taskResult = { exit_code: 0, stdout: "KNS_DISCOVERY=" + JSON.stringify(legacyDiscovery) };
+    const legacyDiscovery = { schema: 1, adapterVersion: "1.8.0", runtime: { engine: "sing-box", id: "onebox-main" }, instances: [{ tag: "old-vless", protocol: "vless", listen: { port: 8443, address: "::", transport: "tcp" }, managed: false, importable: true, options: { security: "reality", sni: "www.example.com", method: "" }, reason: "" }] };
+    const legacyRuntimeStatus = { schema: 1, adapterVersion: "1.8.0", runtime: { engine: "sing-box", id: "onebox-main", oneboxScriptVersion: "unversioned", oneboxScriptSha256: "a".repeat(64), singBoxVersion: "1.11.0", serviceState: "active" } };
+    const runtimeStatusMarker = "\nKNS_RUNTIME_STATUS=" + JSON.stringify(legacyRuntimeStatus);
+    taskResult = { exit_code: 0, stdout: "KNS_DISCOVERY=" + JSON.stringify(legacyDiscovery) + runtimeStatusMarker };
     await crons.find((item) => item.expression === "@every 15s").handler();
     await new Promise((resolve) => setTimeout(resolve, 20));
     const discoveredStateRes = response();
@@ -291,20 +422,22 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const legacyImportRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.import", machineUuid, legacyTag: "old-vless", name: "old-vless", tags: ["prod"], endpointHost: "2.3.4.5", externalPort: 30443, confirm: true, idempotencyKey: "legacy-import-1" }) }, legacyImportRes);
     assert.equal(legacyImportRes.statusCode, 202, legacyImportRes.body);
-    assert.match(execParams.command, /kns 'import'/);
+    assert.match(execParams.command, /kns 'claim'/);
     const legacyEncoded = execParams.command.match(/printf %s '([A-Za-z0-9+/=]+)' \| base64 -d/)[1];
     const legacyRequest = JSON.parse(Buffer.from(legacyEncoded, "base64").toString("utf8"));
     assert.equal(legacyRequest.instance.legacyTag, "old-vless");
     const legacyCredentialUuid = "4aaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const legacyExpectedTag = "kns-" + legacyRequest.instance.id;
+    const legacyClaimDiscovery = { schema: 1, adapterVersion: "1.8.0", runtime: { engine: "sing-box", id: "onebox-main" }, instances: [{ tag: legacyExpectedTag, protocol: "vless", listen: { port: 8443, address: "::", transport: "tcp" }, managed: true, importable: false, options: { security: "reality", sni: "www.example.com", method: "" }, reason: "" }] };
     const legacyReport = {
       schema: 1, jobId: legacyRequest.jobId, machineUuid, status: "succeeded", runtime: { id: "onebox-main", engine: "sing-box" },
-      instances: [{ id: legacyRequest.instance.id, legacyTag: "old-vless", protocol: "vless", listen: { port: 8443, transport: "tcp" }, tls: { security: "reality", sni: "www.example.com", publicKey: "legacy-public-key", shortId: "01" }, credential: { type: "uuid", value: legacyCredentialUuid, flow: "xtls-rprx-vision" }, resources: [{ type: "legacyConfigFragment", id: "old-vless", owned: false, shared: true }] }],
-      artifactVersion: "1.4.0",
+      instances: [{ id: legacyRequest.instance.id, legacyTag: "old-vless", tag: legacyExpectedTag, protocol: "vless", listen: { port: 8443, transport: "tcp" }, tls: { security: "reality", sni: "www.example.com", publicKey: "legacy-public-key", shortId: "01" }, credential: { type: "uuid", value: legacyCredentialUuid, flow: "xtls-rprx-vision" }, resources: [{ type: "oneboxInbound", id: legacyExpectedTag, owned: true, shared: false }] }],
+      artifactVersion: "1.8.0",
     };
     const legacyReportRes = response();
     await routes.get("POST /api/kns/report")({ headers: { authorization: "Bearer " + legacyRequest.report.oneTimeToken, "content-type": "application/json" }, body: JSON.stringify(legacyReport) }, legacyReportRes);
     assert.equal(legacyReportRes.statusCode, 204);
-    taskResult = { exit_code: 0, stdout: "KNS_DISCOVERY=" + JSON.stringify(legacyDiscovery) };
+    taskResult = { exit_code: 0, stdout: "KNS_DISCOVERY=" + JSON.stringify(legacyClaimDiscovery) + runtimeStatusMarker };
     const cryptoModule = require("../kns/crypto");
     const decryptSecret = cryptoModule.decryptSecret;
     cryptoModule.decryptSecret = () => { throw new Error("legacy import should transfer its encrypted callback credential"); };
@@ -316,8 +449,9 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const afterLegacyImport = JSON.parse(afterLegacyImportRes.body);
     const importedLegacy = afterLegacyImport.instances.find((item) => item.legacyTag === "old-vless");
     assert.ok(importedLegacy);
-    assert.equal(importedLegacy.managedBy, "legacy_import");
-    assert.equal(importedLegacy.readOnly, true);
+    assert.equal(importedLegacy.managedBy, "onebox");
+    assert.equal(importedLegacy.oneboxTag, legacyExpectedTag);
+    assert.equal("readOnly" in importedLegacy, false);
     assert.equal(importedLegacy.endpoint.host, "2.3.4.5");
     assert.equal(importedLegacy.nat.externalPort, 30443);
     assert.equal("credential" in importedLegacy, false);
@@ -325,11 +459,62 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const importedJob = afterLegacyImport.jobs.find((job) => job.id === legacyRequest.jobId);
     assert.equal("keyFingerprint" in importedJob.callback, false);
     const persistedLegacy = JSON.parse(fs.readFileSync(path.join(storage, "kns", "state.json"), "utf8")).instances.find((item) => item.id === importedLegacy.id);
-    assert.equal(JSON.parse(decryptSecret(persistedLegacy.credentialCiphertext, cryptoModule.getMasterKey(storage))).value, legacyCredentialUuid);
-    const importedDisableRes = response();
-    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "disable", machineUuid, instanceId: importedLegacy.id, confirm: true, idempotencyKey: "legacy-disable-denied" }) }, importedDisableRes);
-    assert.equal(importedDisableRes.statusCode, 409);
-    assert.equal(JSON.parse(importedDisableRes.body).error.code, "legacy_instance_readonly");
+    assert.equal(persistedLegacy.credential.value, legacyCredentialUuid);
+    assert.equal("credentialCiphertext" in persistedLegacy, false);
+    const scriptUpdateRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "runtime.script.update", machineUuid, confirm: true, idempotencyKey: "runtime-script-update-1" }) }, scriptUpdateRes);
+    assert.equal(scriptUpdateRes.statusCode, 202, scriptUpdateRes.body);
+    assert.match(execParams.command, /kns 'update-script'/);
+    const scriptUpdateRequest = JSON.parse(Buffer.from(execParams.command.match(/printf %s '([A-Za-z0-9+/=]+)' \| base64 -d/)[1], "base64").toString("utf8"));
+    assert.equal(scriptUpdateRequest.instance, null);
+    assert.match(scriptUpdateRequest.upgrade.scriptSha256, /^[0-9a-f]{64}$/);
+    const scriptUpdateCallback = { schema: 1, jobId: scriptUpdateRequest.jobId, machineUuid, status: "succeeded", runtime: { id: "onebox-main", engine: "sing-box" }, instances: [], operationResult: { type: "script_update", version: "1.0.1", previousSha256: "b".repeat(64), scriptSha256: scriptUpdateRequest.upgrade.scriptSha256, changed: true }, artifactVersion: "1.8.0" };
+    const scriptUpdateReportRes = response();
+    await routes.get("POST /api/kns/report")({ headers: { authorization: "Bearer " + scriptUpdateRequest.report.oneTimeToken, "content-type": "application/json" }, body: JSON.stringify(scriptUpdateCallback) }, scriptUpdateReportRes);
+    assert.equal(scriptUpdateReportRes.statusCode, 204);
+    const scriptRuntimeStatus = { schema: 1, adapterVersion: "1.8.0", runtime: { engine: "sing-box", id: "onebox-main", oneboxScriptVersion: "1.0.1", oneboxScriptSha256: scriptUpdateRequest.upgrade.scriptSha256, singBoxVersion: "1.11.0", serviceState: "active" } };
+    taskResult = { exit_code: 0, stdout: "KNS_RUNTIME_STATUS=" + JSON.stringify(scriptRuntimeStatus) };
+    await crons.find((item) => item.expression === "@every 15s").handler();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    const scriptUpdateStateRes = response();
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, scriptUpdateStateRes);
+    const scriptUpdateState = JSON.parse(scriptUpdateStateRes.body);
+    assert.equal(scriptUpdateState.jobs.find((job) => job.id === scriptUpdateRequest.jobId).state, "succeeded");
+    assert.equal(scriptUpdateState.machines[0].runtimeStatus.oneboxScriptSha256, scriptUpdateRequest.upgrade.scriptSha256);
+
+    const kernelUpdateRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "runtime.kernel.update", machineUuid, version: "latest", confirm: true, idempotencyKey: "runtime-kernel-update-1" }) }, kernelUpdateRes);
+    assert.equal(kernelUpdateRes.statusCode, 202, kernelUpdateRes.body);
+    assert.match(execParams.command, /kns 'update-kernel'/);
+    const kernelUpdateRequest = JSON.parse(Buffer.from(execParams.command.match(/printf %s '([A-Za-z0-9+/=]+)' \| base64 -d/)[1], "base64").toString("utf8"));
+    assert.equal(kernelUpdateRequest.instance, null);
+    assert.equal(kernelUpdateRequest.upgrade.version, "latest");
+    const kernelUpdateCallback = { schema: 1, jobId: kernelUpdateRequest.jobId, machineUuid, status: "succeeded", runtime: { id: "onebox-main", engine: "sing-box" }, instances: [], operationResult: { type: "kernel_update", requestedVersion: "latest", previousVersion: "1.11.0", singBoxVersion: "1.12.0", serviceState: "active" }, artifactVersion: "1.8.0" };
+    const kernelUpdateReportRes = response();
+    await routes.get("POST /api/kns/report")({ headers: { authorization: "Bearer " + kernelUpdateRequest.report.oneTimeToken, "content-type": "application/json" }, body: JSON.stringify(kernelUpdateCallback) }, kernelUpdateReportRes);
+    assert.equal(kernelUpdateReportRes.statusCode, 204);
+    const kernelRuntimeStatus = { schema: 1, adapterVersion: "1.8.0", runtime: { engine: "sing-box", id: "onebox-main", oneboxScriptVersion: "1.0.1", oneboxScriptSha256: scriptUpdateRequest.upgrade.scriptSha256, singBoxVersion: "1.12.0", serviceState: "active" } };
+    taskResult = { exit_code: 0, stdout: "KNS_RUNTIME_STATUS=" + JSON.stringify(kernelRuntimeStatus) };
+    await crons.find((item) => item.expression === "@every 15s").handler();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    const kernelUpdateStateRes = response();
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, kernelUpdateStateRes);
+    const kernelUpdateState = JSON.parse(kernelUpdateStateRes.body);
+    assert.equal(kernelUpdateState.jobs.find((job) => job.id === kernelUpdateRequest.jobId).state, "succeeded");
+    assert.equal(kernelUpdateState.machines[0].runtimeStatus.singBoxVersion, "1.12.0");
+
+    const kernelCallbackMissingRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "runtime.kernel.update", machineUuid, version: "latest", confirm: true, idempotencyKey: "runtime-kernel-update-callback-missing" }) }, kernelCallbackMissingRes);
+    assert.equal(kernelCallbackMissingRes.statusCode, 202, kernelCallbackMissingRes.body);
+    const kernelCallbackMissingRequest = JSON.parse(Buffer.from(execParams.command.match(/printf %s '([A-Za-z0-9+/=]+)' \| base64 -d/)[1], "base64").toString("utf8"));
+    taskResult = { exit_code: 1, stdout: "KNS_RUNTIME_STATUS=" + JSON.stringify({ schema: 1, adapterVersion: "1.8.0", runtime: { engine: "sing-box", id: "onebox-main", oneboxScriptVersion: "1.0.1", oneboxScriptSha256: scriptUpdateRequest.upgrade.scriptSha256, singBoxVersion: "1.13.0", serviceState: "active" } }) };
+    await crons.find((item) => item.expression === "@every 15s").handler();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    const kernelCallbackMissingStateRes = response();
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, kernelCallbackMissingStateRes);
+    const kernelCallbackMissingState = JSON.parse(kernelCallbackMissingStateRes.body);
+    assert.equal(kernelCallbackMissingState.jobs.find((job) => job.id === kernelCallbackMissingRequest.jobId).state, "needs_reconcile", "a changed kernel without its callback must require status reconciliation");
+    assert.equal(kernelCallbackMissingState.machines[0].runtimeStatus.singBoxVersion, "1.13.0");
 
     const natCollisionRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({
@@ -355,7 +540,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.equal(clearExport.format, "KNS-ENCRYPTED-EXPORT");
     assert.ok(clearExport.masterKey);
     assert.equal(clearExport.state.instances[0].id, request.instance.id);
-    assert.equal(JSON.stringify(clearExport.state).includes(credentialUuid), false);
+    assert.equal(JSON.stringify(clearExport.state).includes(credentialUuid), true);
 
     const badExportRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "backup.export", passphrase: "short" }) }, badExportRes);
@@ -378,8 +563,14 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, importedStateRes);
     assert.equal(JSON.parse(importedStateRes.body).settings.converterTarget, "clash");
 
+    for (const converterUrl of ["http://converter.example/sub", "http://127.0.0.1:25500/sub", "https://user:pass@converter.example/sub", "https://converter.example/sub#fragment", "https://converter.example/not-sub", "invalid"]) {
+      const invalidConverterRes = response();
+      await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.update", publicBaseUrl: "https://monitor.example", converterUrl }) }, invalidConverterRes);
+      assert.equal(invalidConverterRes.statusCode, 400, converterUrl);
+      assert.equal(JSON.parse(invalidConverterRes.body).error.code, "invalid_converter_url");
+    }
     const postImportSettingsRes = response();
-    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.update", publicBaseUrl: "https://monitor.example", converterTarget: "loon" }) }, postImportSettingsRes);
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.update", publicBaseUrl: "https://monitor.example", converterUrl: "https://converter.example/sub", converterTarget: "loon" }) }, postImportSettingsRes);
     assert.equal(postImportSettingsRes.statusCode, 200);
 
     const profileRes = response();
@@ -391,7 +582,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.equal(new URL(created.converterUrl).searchParams.get("target"), "loon");
     assert.equal(new URL(created.converterUrls.clash).searchParams.get("target"), "clash");
     assert.equal(new URL(created.converterUrls.quanx).searchParams.get("url"), created.tokenUrl);
-    assert.equal(Object.keys(created.converterUrls).length, 22);
+    assert.equal(Object.keys(created.converterUrls).length, 24);
     const profileStateRes = response();
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, profileStateRes);
     const profileState = JSON.parse(profileStateRes.body).profiles.find((item) => item.name === "test");
@@ -415,7 +606,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.match(subRes.body, new RegExp(legacyCredentialUuid));
     assert.equal(subRes.headers["x-kns-snapshot-success"], "2");
     assert.ok(subRes.headers["x-kns-snapshot-generated-at"]);
-    assert.equal(subRes.headers.link, '<https://github.com/liuarui/komari-plugin-kns/tree/v1.2.3>; rel="source"');
+    assert.equal(subRes.headers.link, '<https://github.com/liuarui/komari-plugin-kns/tree/v' + require("../komari-plugin.json").version + '>; rel="source"');
     assert.equal(subRes.headers["x-kns-license"], "AGPL-3.0-only");
     const singboxOnlyProfileRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.create", name: "singbox-only", formats: ["singbox-full"] }) }, singboxOnlyProfileRes);
@@ -424,10 +615,21 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.equal(new URL(singboxOnly.nativeUrl).searchParams.get("format"), "singbox-full");
     assert.equal(singboxOnly.tokenUrl, "");
     assert.equal(singboxOnly.converterUrl, "");
+    const clearConverterRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "settings.update", publicBaseUrl: "https://monitor.example", converterUrl: "" }) }, clearConverterRes);
+    assert.equal(clearConverterRes.statusCode, 200, clearConverterRes.body);
+    assert.equal(JSON.parse(clearConverterRes.body).settings.converterUrl, "");
+    const latestBeforeRotateRes = response();
+    await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, latestBeforeRotateRes);
+    const latestBeforeRotate = JSON.parse(latestBeforeRotateRes.body);
     const addTokenRes = response();
-    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.token.create", profileId: profileState.id }) }, addTokenRes);
-    assert.equal(addTokenRes.statusCode, 201, addTokenRes.body);
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.rotate", profileId: profileState.id, expectedRevision: latestBeforeRotate.revision }) }, addTokenRes);
+    assert.equal(addTokenRes.statusCode, 200, addTokenRes.body);
     const addedToken = JSON.parse(addTokenRes.body);
+    assert.equal(addedToken.converterUrl, "");
+    assert.deepEqual(addedToken.converterUrls, {});
+    assert.ok(addedToken.subscriptionUrls.uri);
+    assert.ok(addedToken.subscriptionUrls["mihomo-full"]);
     const addedUrl = new URL(addedToken.tokenUrl);
     const addedGet = response();
     await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(addedUrl.searchParams), headers: {} }, addedGet);
@@ -436,7 +638,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const tokenStateRes = response();
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, tokenStateRes);
     const profileWithTokens = JSON.parse(tokenStateRes.body).profiles.find((item) => item.id === profileState.id);
-    assert.equal(profileWithTokens.tokens.length, 2);
+    assert.equal(profileWithTokens.tokens.length, 1);
     assert.ok(profileWithTokens.tokens.find((item) => item.id === addedToken.tokenId).accessCount >= 1);
     const newestAuditPageRes = response();
     await routes.get("GET /api/kns/admin/logs")({ ...admin, query: { limit: "2" } }, newestAuditPageRes);
@@ -459,22 +661,26 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const expiringRecord = JSON.parse(expiringStateRes.body).profiles.find((item) => item.id === expiringProfile.profile.id);
     assert.equal(expiringRecord.tokens[0].expiresAt, profileExpiry);
     const cappedTokenRes = response();
-    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.token.create", profileId: expiringProfile.profile.id, expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString() }) }, cappedTokenRes);
-    assert.equal(cappedTokenRes.statusCode, 201);
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.rotate", profileId: expiringProfile.profile.id, expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString() }) }, cappedTokenRes);
+    assert.equal(cappedTokenRes.statusCode, 200);
     const cappedStateRes = response();
     await routes.get("GET /api/kns/admin/state")({ ...admin, query: {} }, cappedStateRes);
     const cappedRecord = JSON.parse(cappedStateRes.body).profiles.find((item) => item.id === expiringProfile.profile.id);
     assert.ok(cappedRecord.tokens.every((item) => item.expiresAt === profileExpiry));
+    await crons.find((item) => item.expression === "@every 5m").handler();
+    await new Promise((resolve) => setTimeout(resolve, 150));
     const snapshotFiles = fs.readdirSync(path.join(storage, "kns", "subscriptions"));
     assert.ok(snapshotFiles.length >= 1);
-    for (const filename of snapshotFiles) assert.equal(fs.readFileSync(path.join(storage, "kns", "subscriptions", filename), "utf8").includes(credentialUuid), false);
-    for (const filename of snapshotFiles) assert.equal(fs.readFileSync(path.join(storage, "kns", "subscriptions", filename), "utf8").includes(legacyCredentialUuid), false);
+    for (const filename of snapshotFiles) {
+      const snapshotPath = path.join(storage, "kns", "subscriptions", filename);
+      assert.equal(fs.statSync(snapshotPath).mode & 0o077, 0, "plaintext snapshots must stay private");
+    }
     const subscriptionModule = require("../kns/subscription");
     const originalBuild = subscriptionModule.buildSubscription;
     subscriptionModule.buildSubscription = () => { throw new Error("GET must use the stored snapshot"); };
     try {
       const cachedRes = response();
-      await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(url.searchParams), headers: {} }, cachedRes);
+      await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(addedUrl.searchParams), headers: {} }, cachedRes);
       assert.equal(cachedRes.statusCode, 200);
       assert.equal(cachedRes.body, subRes.body);
     } finally { subscriptionModule.buildSubscription = originalBuild; }
@@ -485,13 +691,13 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(addedUrl.searchParams), headers: {} }, revokedTokenGet);
     assert.equal(revokedTokenGet.statusCode, 404);
     const rotateTokenRes = response();
-    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.rotate", profileId: profileState.id, graceSeconds: 60 }) }, rotateTokenRes);
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.rotate", profileId: profileState.id }) }, rotateTokenRes);
     assert.equal(rotateTokenRes.statusCode, 200, rotateTokenRes.body);
     const rotatedToken = JSON.parse(rotateTokenRes.body);
     const rotatedUrl = new URL(rotatedToken.tokenUrl);
-    const oldDuringGrace = response();
-    await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(url.searchParams), headers: {} }, oldDuringGrace);
-    assert.equal(oldDuringGrace.statusCode, 200);
+    const oldAfterRotation = response();
+    await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(url.searchParams), headers: {} }, oldAfterRotation);
+    assert.equal(oldAfterRotation.statusCode, 404, "rotation invalidates the old token immediately");
     const newAfterRotation = response();
     await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(rotatedUrl.searchParams), headers: {} }, newAfterRotation);
     assert.equal(newAfterRotation.statusCode, 200);
@@ -502,17 +708,10 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "instance.publish.update", instanceId: importedLegacy.id, publish: false }) }, hideImportedRes);
     assert.equal(hideImportedRes.statusCode, 200);
     const staleRes = response();
-    await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(url.searchParams), headers: {} }, staleRes);
-    assert.equal(staleRes.statusCode, 503);
-    assert.equal(staleRes.headers["retry-after"], "2");
-    let refreshedRes;
-    for (let attempt = 0; attempt < 100; attempt += 1) {
-      refreshedRes = response();
-      await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(url.searchParams), headers: {} }, refreshedRes);
-      if (refreshedRes.statusCode === 200) break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    assert.equal(refreshedRes.statusCode, 200);
+    await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(rotatedUrl.searchParams), headers: {} }, staleRes);
+    assert.equal(staleRes.statusCode, 200);
+    assert.equal(staleRes.body, "");
+    const refreshedRes = staleRes;
     assert.equal(refreshedRes.body, "");
     const updateProfileRes = response();
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "profile.update", profileId: profileState.id, machineUuids: [], excludeMachineUuids: [machineUuid], protocols: [], includeTags: [], addressMode: "dual", sortBy: "endpoint" }) }, updateProfileRes);
@@ -525,7 +724,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.equal(updatedProfile.addressMode, "dual");
     assert.equal(updatedProfile.sortBy, "endpoint");
     const persisted = fs.readFileSync(path.join(storage, "kns", "state.json"), "utf8");
-    assert.equal(persisted.includes(credentialUuid), false);
+    assert.equal(fs.statSync(path.join(storage, "kns", "state.json")).mode & 0o077, 0, "plaintext state must stay private");
     assert.equal(persisted.includes(request.report.oneTimeToken), false);
     assert.equal(persisted.includes("callbackTokenHash"), false);
     const badRes = response();

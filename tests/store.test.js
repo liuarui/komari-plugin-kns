@@ -118,6 +118,107 @@ test("startup recovery reverts a restore transaction interrupted between file co
   }
 });
 
+test("import interruption recovers the matching state/key pair after a process exits", () => {
+  const { spawnSync } = require("node:child_process");
+  const env = { ...process.env }; delete env.KNS_MASTER_KEY;
+  for (const stage of ["key", "state", "committed"]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-import-crash-"));
+    try {
+      const store = createStore(root);
+      const keyPath = path.join(store.root, "master.key");
+      const oldKey = Buffer.alloc(32, 11);
+      const newKey = Buffer.alloc(32, 12);
+      store.ensureDirectories();
+      fs.writeFileSync(keyPath, oldKey, { mode: 0o600 });
+      const state = store.initialState();
+      state.instances.push({ id: "old", credentialCiphertext: secrets.encryptSecret("old credential", oldKey) });
+      store.write(state);
+      const oldState = fs.readFileSync(store.stateFile);
+      const snapshotKey = "d".repeat(64);
+      store.writeSubscriptionSnapshot(snapshotKey, secrets.encryptSecret("old subscription", oldKey));
+      const child = spawnSync(process.execPath, ["-e", `
+        const fs = require("node:fs");
+        const path = require("node:path");
+        const { createStore } = require(process.argv[1]);
+        const secrets = require(process.argv[2]);
+        const store = createStore(process.argv[3]);
+        const stage = process.argv[4];
+        const keyPath = path.join(store.root, "master.key");
+        const journal = path.join(store.backupDir, "restore-transaction.json");
+        const rename = fs.renameSync;
+        const unlink = fs.unlinkSync;
+        fs.renameSync = function (source, destination) {
+          rename.call(this, source, destination);
+          if ((stage === "key" && destination === keyPath) || (stage === "state" && destination === store.stateFile)) process.exit(73);
+        };
+        fs.unlinkSync = function (filename) {
+          unlink.call(this, filename);
+          if (stage === "committed" && filename === journal) process.exit(73);
+        };
+        const key = Buffer.alloc(32, 12);
+        const imported = store.initialState();
+        imported.instances.push({ id: "new", credentialCiphertext: secrets.encryptSecret("new credential", key) });
+        store.importBackup(imported, key);
+      `, require.resolve("../kns/store"), require.resolve("../kns/crypto"), root, stage], { env, encoding: "utf8", timeout: 10000 });
+      assert.ifError(child.error);
+      assert.equal(child.status, 73, stage + ": " + child.stderr);
+      assert.deepEqual(fs.readFileSync(keyPath), newKey, "fault must occur after key replacement");
+      const restarted = createStore(root);
+      const rolledBack = stage !== "committed";
+      assert.equal(restarted.recoverInterruptedRestore(), rolledBack, stage);
+      assert.equal(restarted.recoverInterruptedRestore(), false, "recovery is idempotent");
+      const key = fs.readFileSync(keyPath);
+      const recovered = restarted.read();
+      assert.deepEqual(key, rolledBack ? oldKey : newKey);
+      assert.equal(secrets.decryptSecret(recovered.instances[0].credentialCiphertext, key), rolledBack ? "old credential" : "new credential");
+      if (rolledBack) {
+        assert.deepEqual(fs.readFileSync(store.stateFile), oldState);
+        assert.equal(secrets.decryptSecret(restarted.readSubscriptionSnapshot(snapshotKey), key), "old subscription");
+      }
+      assert.equal(fs.existsSync(path.join(store.backupDir, "restore-transaction.json")), false);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
+test("import rolls back a caught state write failure and commits a successful pair", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-import-rollback-"));
+  const priorEnvKey = process.env.KNS_MASTER_KEY;
+  delete process.env.KNS_MASTER_KEY;
+  const originalRename = fs.renameSync;
+  try {
+    const store = createStore(root);
+    store.ensureDirectories();
+    const keyPath = path.join(store.root, "master.key");
+    const oldKey = Buffer.alloc(32, 13);
+    const newKey = Buffer.alloc(32, 14);
+    fs.writeFileSync(keyPath, oldKey, { mode: 0o600 });
+    const state = store.initialState();
+    state.instances.push({ credentialCiphertext: secrets.encryptSecret("old", oldKey) });
+    store.write(state);
+    const oldState = fs.readFileSync(store.stateFile);
+    const imported = store.initialState();
+    imported.instances.push({ credentialCiphertext: secrets.encryptSecret("new", newKey) });
+    let failOnce = true;
+    fs.renameSync = function (source, destination) {
+      if (destination === store.stateFile && failOnce) { failOnce = false; throw new Error("simulated import state failure"); }
+      return originalRename.call(this, source, destination);
+    };
+    assert.throws(() => store.importBackup(imported, newKey), /simulated import state failure/);
+    assert.deepEqual(fs.readFileSync(store.stateFile), oldState);
+    assert.deepEqual(fs.readFileSync(keyPath), oldKey);
+    assert.equal(store.recoverInterruptedRestore(), false);
+    const result = store.importBackup(imported, newKey);
+    assert.equal(result.revision, state.revision + 1);
+    assert.equal(secrets.decryptSecret(store.read().instances[0].credentialCiphertext, fs.readFileSync(keyPath)), "new");
+    assert.equal(store.recoverInterruptedRestore(), false);
+  } finally {
+    fs.renameSync = originalRename;
+    if (priorEnvKey === undefined) delete process.env.KNS_MASTER_KEY;
+    else process.env.KNS_MASTER_KEY = priorEnvKey;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("master key creation tolerates Komari's lstat error for a missing key", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-master-key-"));
   const keyPath = path.join(root, "kns", "master.key");
@@ -246,7 +347,9 @@ test("plugin version updates snapshot state and refuse downgrades", () => {
     const oldState = JSON.parse(fs.readFileSync(path.join(store.backupDir, backupName, "kns", "state.json"), "utf8"));
     assert.equal(oldState.pluginVersion, "1.1.1");
     assert.equal(fs.statSync(path.join(store.backupDir, backupName)).mode & 0o777, 0o700);
-    assert.throws(() => store.preparePluginVersion(store.read(), "1.1.0"), /newer plugin version/);
+    const rebased = store.preparePluginVersion(store.read(), "1.0.0");
+    assert.equal(rebased.pluginVersion, "1.0.0");
+    assert.equal(rebased.schemaVersion, 2);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -332,4 +435,19 @@ test("subscription snapshots are replaceable private files and can be pruned", (
     assert.deepEqual(fs.readdirSync(store.subscriptionSnapshotDir).filter((name) => name.startsWith(blockedKey + ".json.")), []);
     fs.rmdirSync(path.join(store.subscriptionSnapshotDir, blockedKey + ".json"));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("partial settings retain defaults without sharing the caller's settings object", () => {
+  const { initialState, validateState } = require("../kns/store");
+  const input = { ...initialState(), settings: { defaultNode: { listenPort: 8443 } } };
+  const state = validateState(input);
+  assert.equal(state.settings.converterTarget, "clash");
+  assert.equal(state.settings.converterUrl, "");
+  assert.equal(state.settings.defaultNode.protocol, "vless");
+  assert.equal(state.settings.defaultNode.listenPort, 8443);
+  assert.deepEqual(input.settings, { defaultNode: { listenPort: 8443 } });
+  assert.throws(() => validateState({ ...initialState(), settings: [] }), /settings are invalid/);
+  assert.throws(() => validateState({ ...initialState(), settings: "invalid" }), /settings are invalid/);
+  assert.throws(() => validateState({ ...initialState(), settings: { defaultNode: [] } }), /default node settings are invalid/);
+  assert.throws(() => validateState({ ...initialState(), settings: { defaultNode: "invalid" } }), /default node settings are invalid/);
 });

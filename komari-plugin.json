@@ -5,11 +5,11 @@
   },
   "short": "onebox-bridge",
   "description": {
-    "zh_CN": "在 Komari 中管理 OneBox 节点、批量扫描旧版节点并同步地址，发布受令牌保护的 Mihomo、sing-box 与多客户端转换订阅。",
-    "en": "Manage OneBox nodes, batch-scan legacy nodes, sync endpoints, and publish token-protected Mihomo, sing-box, and multi-client converted subscriptions."
+    "zh_CN": "以机器为中心管理 OneBox 代理节点，通过三步向导安装协议，并发布受令牌保护的 Mihomo、sing-box 与多客户端订阅。",
+    "en": "Manage OneBox proxy nodes by machine, install protocols with a three-step wizard, and publish token-protected Mihomo, sing-box, and converted subscriptions."
   },
   "author": "ajax",
-  "version": "1.2.3",
+  "version": "1.0.0",
   "komari": ">=1.4.3",
   "entry": "script.js",
   "permissions": {
@@ -22,8 +22,8 @@
     {
       "file": "pages/admin.html",
       "title": {
-        "zh_CN": "OneBox 节点",
-        "en": "OneBox Nodes"
+        "zh_CN": "KNS 节点管理",
+        "en": "KNS Node Management"
       },
       "visibility": "admin"
     }

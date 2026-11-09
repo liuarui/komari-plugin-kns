@@ -17,9 +17,9 @@
 | `legacyNodes[]` | 从原 onebox-bridge 数据迁移的加密 URI |
 | `lastSnapshotAt`, `snapshotPending` | 周期/事件快照标记 |
 
-机器快照可包含最近一次管理员触发的 `discoveredAt` 与 `discoveredNodes[]`。该数组仅允许保存安全发现字段（tag、协议、监听地址/端口/传输、托管标记、可导入性、非敏感协议选项和原因）；不得保存凭据或原始 inbound。经明确导入的实例使用 `managedBy:"legacy_import"`、`ownership:"external"`、`readOnly:true` 和 `legacyTag` 标记；凭据仍使用 KNS AES-256-GCM 密文。外部只读实例可发布或隐藏，但不能通过 KNS 修改、停用或卸载 OneBox 配置。
+机器快照可包含最近一次管理员触发的 `discoveredAt` 与 `discoveredNodes[]`。该数组仅允许保存安全发现字段（tag、协议、监听地址/端口/传输、托管标记、可导入性、非敏感协议选项和原因）；不得保存凭据或原始 inbound。经明确导入的实例使用 `managedBy:"legacy_import"`、`ownership:"external"`、`readOnly:true` 和 `legacyTag` 标记；凭据以明文 `credential` 保存（state 文件权限 `0600`）；旧版 `credentialCiphertext` 仅作迁移兼容。外部只读实例可发布或隐藏，但不能通过 KNS 修改、停用或卸载 OneBox 配置。
 
-订阅正文缓存与 state 备份快照分开保存于 `kns/subscriptions/<sha256(profileId,format)>.json`。文件只包含 AES-256-GCM 密文 envelope；明文正文仅在构建/服务期间驻留内存。完整密文写入权限为 `0600` 的临时文件后原子替换，缓存记录包含内容 SHA-256、生成时间、规则版本、成功数、跳过数和来源哈希。成功数按输出条目计数（URI 行或配置节点），跳过数按未输出的已发布实例计数。档案/实例状态变化会触发事件刷新，每 5 分钟兜底；订阅 GET 不调用生成器，并会校验本地来源哈希。状态已变化而快照尚未更新时返回 `503 Retry-After: 2`，避免继续发布旧节点；档案撤销、过期或移除格式后缓存会清理。缓存丢失时可从 state 与匹配密钥重建；缓存或凭据因密钥不匹配无法解密时维持 `503`，需要恢复配对的 state/key 备份。state/密钥备份不备份派生订阅缓存。
+订阅正文缓存与 state 备份快照分开保存于 `kns/subscriptions/<sha256(profileId,format)>.json`。文件为 `0600` 的明文 JSON 记录（含正文、内容 SHA-256、生成时间、规则版本、成功数、跳过数和来源哈希）；正文不再使用 master key 加密。完整记录写入权限为 `0600` 的临时文件后原子替换；记录包含内容 SHA-256、生成时间、规则版本、成功数、跳过数和来源哈希。成功数按输出条目计数（URI 行或配置节点），跳过数按未输出的已发布实例计数。档案/实例状态变化会触发事件刷新，每 5 分钟兜底；订阅 GET 不调用生成器，并会校验本地来源哈希。状态已变化而快照尚未更新时，GET 会从 state 直接构建本次响应并触发后台刷新；只有直接构建也失败时才返回 `503 Retry-After: 2`。档案撤销、过期或移除格式后缓存会清理。state/密钥备份不备份派生订阅缓存。
 
 订阅档案的筛选字段包括 `instanceIds`、`machineUuids`、`excludeMachineUuids`、`protocols`、`includeTags`、`addressMode`、`sortBy` 和 `excludeUnhealthy`。机器/协议空列表按不限制处理；标签按任一实例标签命中。地址模式支持 `auto`、`ipv4`、`ipv6`、`dual`；IPv4/IPv6 只筛选 Endpoint 中的字面 IP，域名留给订阅客户端解析。排序支持节点名称、协议、Endpoint 和机器名称。
 
@@ -31,7 +31,7 @@ Schema 2 的 `setupComplete` 控制首次配置写操作门禁。首次配置同
 
 实例的 `remoteStatus.checkedAt`、`resources` 和 `uninstallPreview` 来自最近一次真实 OneBox 状态核查。`uninstallPreview.version` 是 KNS 对目标实例、资源清单和核查时刻生成的 SHA-256 摘要；卸载必须回传匹配摘要，且摘要不得超过五分钟。缺少、过期或不匹配的预览会被服务端拒绝。
 
-凭据不以内嵌明文字段保存。实例保存 `credentialCiphertext`（AES-256-GCM envelope）；密钥来自环境变量 `KNS_MASTER_KEY`（64 位十六进制）或 `kns/master.key`。每个订阅档案含 `tokens[]`；每条令牌记录有 `id`、创建/到期/撤销/轮换宽限时间、访问计数、最近使用时间及随机 `salt` 和 `hash`，不存原始 token。旧版档案的顶层 `salt`/`hash` 会在首次写入时迁移到 `tokens[]`。回调 token 的 hash/salt 仅在任务等待回调期间暂存，第一次有效回调后删除。
+实例保存明文 `credential` 对象；旧版 `credentialCiphertext` 在可解密时迁移为明文，无法解密时保留并跳过该节点。旧版 OneBox URI 保存为明文 `uri`。state 文件权限为 `0600`。`KNS_MASTER_KEY`/`kns/master.key` 仅用于兼容旧密文和口令加密导出。每个订阅档案含 `tokens[]`；每个档案只保留一个有效令牌；令牌记录有 `id`、创建/到期/撤销时间、访问计数、最近使用时间及随机 `salt` 和 `hash`；轮换后旧令牌立即失效。为支持管理员重复查看，档案还保存明文 `token`；state 权限为 `0600`。旧版档案的顶层 `salt`/`hash` 会在首次写入时迁移到 `tokens[]`。回调 token 的 hash/salt 仅在任务等待回调期间暂存，第一次有效回调后删除。
 
 管理 API 只返回令牌的非敏感生命周期字段，不返回 `salt`、`hash` 或 token 原文。访问计数按分钟批量写入，进程异常终止最多损失一个周期的未提交计数。令牌到期时间被档案到期时间限制。档案最多保留 50 条令牌记录，撤销记录不会被静默删除。
 
@@ -60,7 +60,7 @@ Schema 2 的 `setupComplete` 控制首次配置写操作门禁。首次配置同
 
 ## 备份策略
 
-- 每日首次状态更新前创建一份状态 JSON 备份；若存在 master key，同时复制当日 key。
+- 每日首次状态更新前创建一份状态 JSON 备份；若存在 master key，同时复制当日 key，但明文 state 的恢复不依赖该 key。
 - 只保留最近 7 天的 state/key 备份。
 - 每 5 分钟或审计事件后写一次状态快照，最多保留 288 份（约 24 小时）。
 - 审计事件追加写入独立日志，不随 state restore/import 覆盖；保留最近 365 天且总量上限 16 MiB、单段 256 KiB。超过期限或容量时先写清理检查点，再删除最旧日志段；管理 API/UI 显示清理数量与时间范围。若清理中断，下次读取/追加先完成带检查点的操作。

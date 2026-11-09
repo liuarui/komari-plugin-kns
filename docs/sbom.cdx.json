@@ -6,7 +6,7 @@
     "component": {
       "type": "application",
       "name": "Komari KNS",
-      "version": "1.2.3",
+      "version": "1.0.0",
       "licenses": [
         {
           "expression": "AGPL-3.0-only"
@@ -19,11 +19,11 @@
   "properties": [
     {
       "name": "runtime.dependencies",
-      "value": "[]"
+      "value": "[{\"name\": \"qrcode-generator\", \"version\": \"2.0.4\", \"license\": \"MIT\", \"source\": \"https://github.com/kazuhikoarase/qrcode-generator\"}]"
     },
     {
       "name": "dependency-lock.sha256",
-      "value": "686a543d76d31e2c66e7894ea18bf3833519265f6a28b2769286f9b304810c46"
+      "value": "c91e89e6729fb3ec38889dd17230541ded697f33d63f42b82b8c0ea4b99803cc"
     },
     {
       "name": "packaging.dependencies",

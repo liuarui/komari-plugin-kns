@@ -1,80 +1,81 @@
-# Komari KNS：OneBox 节点与订阅
+# Komari KNS
 
-Komari KNS 是运行在 Komari 插件宿主中的原生插件。它通过 Komari Agent 的 `admin:exec` 为探针部署 OneBox 节点、跟踪远程任务、检查节点端点，并发布受令牌保护的订阅。Komari 服务器上不新增守护进程、容器、数据库或监听端口。
+Komari KNS 是 Komari 的节点管理与订阅插件。你可以在一个页面里查看机器、管理 OneBox 节点、检查远程任务，并为不同客户端生成订阅链接。
 
-## 功能
+## OneBox 项目介绍
 
-- 首次配置可先只读浏览；初始化时同步既有探针并建立基线，新探针自动部署默认关闭且需明确授权。
-- 可批量只读扫描最多 100 台在线探针上的历史 OneBox 入站；管理员逐个确认后，通过一次性 HTTPS 回调加密导入支持的旧节点。导入不会改 OneBox 配置，导入实例保持外部只读归属。
-- 管理 VLESS Reality、Hysteria2、TUIC、AnyTLS、Shadowsocks、Trojan、VMess 实例，支持安装、重配置、重装、启用、停用、卸载和只读状态核查。
-- 通过 OneBox 一次性回调和 Agent 远程状态双重核验，避免只凭命令退出码登记节点。
-- 解析机器 IP、手动公网地址或 DDNS 域名；支持 IPv4、IPv6、双栈和 NAT 外部端口。地址变化后会重新核对公网映射；发现冲突时自动暂停该实例的订阅发布并在管理页提示。插件只读 DNS，不写 DNS 记录。
-- 发布 URI、Mihomo YAML 和 sing-box JSON 原生订阅；含 URI 的档案可切换 SubConverter-Extended 支持的 Clash、Loon、Surge、Quantumult X、Stash、sing-box 等 target。支持创建、筛选、隐藏、轮换和撤销订阅档案。
-- 采用原子状态写入、每日滚动备份、AES-256-GCM 凭据与订阅快照加密、订阅令牌哈希和审计记录。每个订阅档案可管理多个令牌，支持独立撤销、宽限轮换、到期时间和使用统计；管理员可导出带口令加密的状态/密钥包。订阅 GET 只读取已生成的快照。
-- 卸载前要求最近的 OneBox 状态核查，展示配置、证书、防火墙和共享服务资源影响；共享监听仍被引用时保留对应防火墙规则。
+OneBox 负责在 Linux 机器上安装和运行代理节点；KNS 通过 Komari 集中管理这些节点并生成订阅。请查看 [OneBox 项目介绍与使用文档](https://github.com/liuarui/onebox)。
+
+> 下方是操作示意图。订阅地址、机器地址和节点凭据请勿公开分享。
+
+## 工作台
+
+机器按 Komari 服务器列表排序。你可以按在线状态、OneBox、协议和机器标签筛选，也可以切换三列卡片、单列卡片或紧凑列表。Komari 已删除的机器默认隐藏；需要查看保留的节点记录时，打开“显示已从 Komari 删除”。
+
+![KNS 工作台和机器筛选示意](docs/images/workbench.svg)
+
+## 安装节点
+
+1. 在 Komari 插件管理中安装并启用 KNS，授予插件清单要求的权限。
+2. 首次打开时填写探针可访问的 Komari HTTPS 地址。
+3. 选择一台或多台在线机器，再选择协议、监听端口和连接入口。
+4. 检查公网地址、NAT 外部端口和协议映射后提交。
+
+远程安装授权默认开启；KNS 不会在你确认前自行部署。确认安装节点时，如果目标机是全新环境，KNS 会先安装所需依赖、sing-box 和初始配置，再继续安装所选节点。已有配置会先检查；配置路径异常或缺少必要结构时会停止，不会用空白配置覆盖已有文件。NAT 外部端口只用于生成订阅；还需要在路由器或云网络中配置公网端口到机器监听端口的转发。KNS 不会修改云安全组、路由器、DNS 或外部转发。
+
+![选择协议、监听端口和连接入口示意](docs/images/install-wizard.svg)
+
+## 接管已有 OneBox 节点
+
+在机器卡片上扫描已有节点。对受支持的旧节点选择“接管”，KNS 会保留节点协议、端口、凭据和 TLS 设置，将入站 tag 迁移为 KNS 管理的 tag，并登记实例清单。接管前会显示确认说明；操作会重载共享 sing-box 服务，同机其他节点可能短暂重连。配置校验、服务重载或回调失败时，OneBox 会尝试恢复原配置。
+
+接管完成后可以在 KNS 中重配置、启停、重装、核查和卸载节点。多用户节点、不完整配置和不受支持的入站会显示原因，不会被自动改写。
+
+## 任务状态
+
+“操作记录”和机器卡片会显示 Agent 执行、OneBox 回调与远端状态核验结果。任务显示“已提交”只表示 Komari 已接收请求；请等状态变为成功或失败后再继续操作。结果不确定时，先核查机器状态。
+
+![查看任务结果和需要处理的项目示意](docs/images/task-history.svg)
+
+## 订阅链接
+
+创建订阅档案后，可以设置包含或排除的机器、协议和节点标签，决定是否过滤不健康节点，并选择输出格式。插件原生生成 URI、Clash / Mihomo、sing-box、Loon、Surge / Surfboard、Quantumult X、Shadowrocket、Stash、Mellow、V2RayN / V2RayNG、Shadowsocks、SSD 等常用格式，不依赖外部 SubConverter。订阅节点名统一为“协议-机器名-端口”，例如 `VLESS-新加坡 · SG-01-443`。
+
+外部 SubConverter 仍可作为额外 target 使用；Clash 的默认、ACL4SSR 轻量和 ACL4SSR 完整规则模板由当前配置的 SubConverter 服务提供。
+
+订阅令牌可以关闭、重新开启或轮换。每个档案仅有一个有效令牌，轮换后旧链接立即失效。无需令牌的档案适合公开分发：任何持有链接的人都能读取订阅。
+
+![查看订阅并选择客户端与规则模板示意](docs/images/subscriptions.svg)
+
+外部 SubConverter 会收到原始订阅 URI 和节点凭据。请只配置自己信任的 HTTPS 转换服务；留空即可只使用 KNS 原生订阅。
+
+## 高级参数
+
+安装向导的协议卡片提供高级参数，按协议显示：
+
+- 通用：ALPN、跳过证书校验
+- VLESS Reality：可选 SNI、flow、客户端指纹、SpiderX、Reality 握手域名/端口
+- Hysteria2：上行/下行 Mbps、obfs、obfs 密码
+- VMess：alterId、加密方式
+- TUIC：拥塞控制、UDP Relay 模式
+- Trojan / AnyTLS：ALPN、跳过证书校验
+- Shadowsocks：加密方法
+
+高级参数区会显示当前非默认配置摘要，并提供“恢复默认”。OneBox 适配器会校验参数类型和范围，未知参数会被拒绝。当前固定的 OneBox 适配器版本为 `1.8.0`。
+
+## 数据与安全
+
+KNS 的 state 和订阅快照以明文保存节点凭据、订阅 token 和派生订阅正文，文件权限为 `0600`，目录权限为 `0700`。请把插件存储目录、每日备份和离线导出文件当作敏感数据保管；离线导出仍使用独立口令加密。不要把 state、备份或订阅链接提交到公开仓库或公开位置。
 
 ## 运行要求
 
-- Komari 插件 NodeJS 运行模式和下述权限：`node`、`allowRoutes`、`allowSystemRPC`。
-- 目标探针启用了 Komari Agent 远程控制，Agent 以 root 运行，并可访问 OneBox 固定安装器与软件源。
-- KNS 回调地址必须是公网可达的 HTTPS Komari URL。
-- SubConverter 使用初始 HTTP 配置；HTTP 会明文传输订阅令牌和节点凭据，公网使用前应换成受信 HTTPS 服务。插件本身的原生订阅也可直接交给客户端，不依赖 SubConverter。
-- OneBox 管理操作需要受支持的 Linux、systemd 或 OpenRC、`curl` 或 `wget`、`base64`、`sha256sum`、`jq` 和 sing-box 服务。
-- 低资源 LXC 会依据可见 PID/内存余量自动限制 OneBox 操作；具体发现/导入/安装门槛见 [兼容性矩阵](docs/compatibility-matrix.md) 与 OneBox README。门槛触发时任务会说明资源类型；未挂载或宿主隐藏的限制无法预先判断。
+- Komari Server 支持 Node.js 插件、管理路由和系统 RPC。
+- 目标机器启用了 Komari Agent 远程控制，Agent 以 root 运行。
+- KNS 回调地址必须是探针可访问的 HTTPS 地址。
+- OneBox 管理需要受支持的 Linux、systemd 或 OpenRC，以及 `jq`、`curl` 或 `wget` 等依赖。
 
-插件作者为 **ajax**。manifest 声明最低 Komari Server **1.4.3**（`komari: ">=1.4.3"`）；该下限根据固定 tag 的 API/Node 模块源码核对，尚未在 1.4.3 运行时验收。用户后台已观察到 Komari `1.6.1 (96cf0f7)`，这是当前目标环境版本；Agent、OneBox、sing-box 和 SubConverter 的具体版本及验证边界见 [兼容性矩阵](docs/compatibility-matrix.md)。
+## 项目与许可
 
-## 构建与安装
-
-```sh
-python3 scripts/package.py
-(cd dist && sha256sum -c onebox-bridge.zip.sha256)
-```
-
-在 Komari 插件管理器上传 `dist/onebox-bridge.zip`。核准插件声明的 `node`、`allowRoutes`、`allowSystemRPC` 权限后启用。ZIP 中包含 `komari-plugin.json`、入口脚本、管理页、本地 KNS 模块和 GNU AGPL v3.0-only 许可证文本。
-
-## 首次配置
-
-1. 打开 Komari 管理菜单中的 **OneBox 节点**。尚未初始化时可以浏览只读状态，选择“稍后配置”不会开放写操作。
-2. 运行分步引导，填写探针可访问的 Komari HTTPS 地址并检查 VLESS + Reality 默认模板。启用新探针自动部署需单独勾选授权；首次同步到的既有探针只建立基线，不会批量安装。
-3. 保存时 KNS 会同步探针、建立基线、创建默认订阅并显示一次性格式链接；同步失败会留在引导页且保留输入。链接关闭后原令牌明文无法找回，可新增或轮换令牌。
-4. 在探针策略中逐台明确允许部署。地址模式支持 `auto`、`ipv4`、`ipv6` 或 `dual`；手动地址、DDNS 与 NAT 端口按机器/节点实际范围设置。
-5. 部署批次会逐机显示受理、阻断与任务状态。受理不代表 Agent 已完成安装；最终结果在任务页查看。
-6. 创建额外订阅档案并保存一次性显示的订阅 URL。可直接使用 KNS 原生 URL，也可使用 SubConverter URL。
-
-插件不会配置反向代理、证书、端口转发、云安全组、NAT 或 DNS 记录。订阅里使用的域名必须由你自己的 DNS 与网络路由正确指向探针。
-
-## 本地验证
-
-```sh
-node --test tests/*.test.js
-node --check script.js
-node --check kns/index.js
-python3 -m py_compile scripts/package.py
-python3 scripts/package.py
-```
-
-这些命令覆盖本地模拟回调、权限策略、状态存储、令牌/凭据保护、订阅格式生成和 ZIP/SBOM 生成；它们不代替真实 Komari、Agent、OneBox 节点或客户端导入验证。状态见 [验收报告](docs/acceptance-report.md)。
-
-## 文档
-
-- [交付项追踪](docs/deliverables.md)
-- [数据模型和状态 Schema](docs/data-model.md)
-- [状态迁移](docs/migrations.md)
-- [管理 API 与错误码](docs/api.md)
-- [管理员操作手册](docs/user-guide.md)
-- [运维手册](docs/operations.md)
-- [安全评估](docs/security-report.md)
-- [兼容性矩阵](docs/compatibility-matrix.md)
-- [KNS 交互整改说明](docs/interaction-remediation.md)
-- [UX 1.0 四十项验收记录](docs/ux-acceptance-t40.md)
-- [验收测试报告](docs/acceptance-report.md)
-- [回滚演练步骤](docs/rollback-drill.md)
-- [依赖与许可证盘点](docs/license-report.md)
-- [协议样例](docs/protocol-samples/README.md)
-- [CycloneDX SBOM](docs/sbom.cdx.json)
-- [OneBox KNS 实施说明与验收交接](OneBox_KNS_适配改造说明_2026-11-08.docx)
-
-## 版本
-
-插件作者为 `ajax`，插件包版本为 `1.2.3`，项目许可证为 `AGPL-3.0-only`。manifest 声明最低 Komari Server `1.4.3`（源码核验下限，尚未在该版实机测试）。当前目标服务器为 `1.6.1`。OneBox KNS 适配器固定到已审查的源码提交和 SHA-256，见 [兼容性矩阵](docs/compatibility-matrix.md)。[v1.2.3 发布页面](https://github.com/liuarui/komari-plugin-kns/releases/tag/v1.2.3)提供[插件 ZIP](https://github.com/liuarui/komari-plugin-kns/releases/download/v1.2.3/onebox-bridge.zip)和[SHA-256 校验文件](https://github.com/liuarui/komari-plugin-kns/releases/download/v1.2.3/onebox-bridge.zip.sha256)。
+- 当前正式版本：**1.0.0**。变更记录见 [CHANGELOG](CHANGELOG.md)。
+- 许可： [GNU AGPL v3.0-only](LICENSE)。
+- 插件安装包可从 [GitHub Releases](https://github.com/liuarui/komari-plugin-kns/releases) 下载。

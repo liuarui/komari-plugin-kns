@@ -7,7 +7,7 @@
     "id": "onebox-main",
     "engine": "sing-box"
   },
-  "artifactVersion": "1.4.0",
+  "artifactVersion": "1.8.0",
   "instances": [
     {
       "id": "sample-vless",

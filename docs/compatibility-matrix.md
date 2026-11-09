@@ -4,16 +4,16 @@
 
 | 组件 | 本次识别/实现 | 验收状态 |
 | --- | --- | --- |
-| Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | 目标面板已运行 v1.2.3；在线状态映射、HTTPS 同源设置写入、只读旧节点发现及一次旧节点加密登记通过。节点检测仍未知；订阅客户端与完整 OneBox 生命周期未验收 |
-| Komari Agent | 目标 Agent 版本未提供；使用 `admin:exec` 与 `admin:getSpecificTaskResult` | 在线探针只读扫描成功；一次旧节点导入任务通过 Agent 退出码、OneBox 回调和登记核验，并在 KNS 加密登记。旧节点为只读托管；安装、重配置、启停和卸载未在目标探针执行 |
-| OneBox | adapter schema 1，版本 `1.4.0`；[提交 `a36b55c`](https://github.com/liuarui/onebox/commit/a36b55cd455053f66cdf18fe3045e306d06d3934)，分支 `codex/kns-adapter` | 安装脚本固定 SHA-256 `507801b3ce9b1226657420bd17a0601e7ac2fe4508ebf2dd440c5e0514b0477f`；Linux/LXC 真机未执行；低 PID/内存预检阈值见 OneBox README |
-| sing-box | OneBox 共享 `onebox-main` Runtime；实际 target 版本由 OneBox 安装过程决定，未锁定 | 结构通过本地生成/JSON 解析，未对目标二进制 `check` |
+| Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | 目标面板已运行 KNS v1.0.0。机器中心页、分开的 OneBox 脚本/内核维护操作、默认订阅档案及临时链接的复制/二维码显示经过目标 UI 操作；临时 token 已撤销。完整安装向导、订阅客户端、响应式/键盘与完整 OneBox 生命周期未验收 |
+| Komari Agent | 目标 Agent 版本未提供；使用 `admin:exec` 与 `admin:getSpecificTaskResult` | 一台在线探针只读扫描及两个 Runtime 维护 Job 成功；扫描仍发现一个 OneBox 入站并保留原节点。Agent 版本未知；安装新节点、重配置、启停和卸载未在目标探针执行 |
+| OneBox | adapter schema 1，版本 `1.8.0`；[提交 `66c18c3`](https://github.com/liuarui/onebox/commit/66c18c352dc591e58075b6c10468ff7bc3bba233)，脚本版本 `1.0.1`，固定 SHA-256 `9e83c464455d81162170c4e2d33a6b5d8c7e278c959959d86ad431c7ec55ec51` | 目标探针的管理脚本更新操作成功，既有节点配置保持；仅一台 Linux 探针实测，不代表完整 OS/LXC 矩阵；低 PID/内存预检阈值见 OneBox README |
+| sing-box | OneBox 共享 `onebox-main` Runtime | 目标探针的独立内核维护操作成功；之后观察到 `1.14.4` 且服务 `active`。未验证真实客户端导入或代理流量连通，也未对该目标二进制执行配置 `check` |
 | Mihomo | 输出 Mihomo full/provider YAML | 已检查生成文本片段；未用冻结客户端导入 |
-| SubConverter | 用户配置的 SubConverter-Extended `v1.9.7` 服务 `/sub` 错误响应列出 22 个 target；KNS 允许并生成对应链接：Clash、ClashR、Surge、Quantumult、Quantumult X、Loon、Surfboard、Stash、Mellow、sing-box、SS、SSD、SSR、SSSub、V2Ray、V2RayN、V2RayNG、Shadowrocket、Trojan、VLESS、Hysteria2、Mixed | 使用虚构 VLESS URI 对 `clash`、`loon`、`quanx` 发起只读 GET，均返回 HTTP 200 并包含唯一测试标记；没有发送真实 KNS token，也没有执行真实客户端导入。响应还含测试源地址以外的 IP/域名文本，暂不能判断是转换服务附加节点还是模板内容；投入生产前应检查服务端配置。客户端可能跳过无法表达的协议 |
+| SubConverter | 可选外部转换；KNS 默认关闭并只接受显式配置的 HTTPS `/sub` 地址。旧状态中的 HTTP 地址会在生成链接时重新校验并被忽略 | 历史上曾用虚构 VLESS URI 对 SubConverter-Extended `v1.9.7` 的 HTTP `/sub` 做只读 GET；这只说明服务接受过合成请求，不证明当前 KNS 会提供该 HTTP 链接、节点清单纯净或客户端兼容。没有向转换器发送真实 KNS token；当前 HTTPS 转换链路和客户端导入仍待验收 |
 | 操作系统 | installer 既有支持平台以 OneBox 的 Linux / systemd 或 OpenRC 检测为准；未实测架构清单 | 待目标系统矩阵验证 |
 | 客户端 | Mihomo、sing-box、其他客户端版本均未由用户指定 | URI/YAML/JSON 导出；客户端实际导入待验收 |
 
-`Server` 响应头标识 `SubConverter-Extended/v1.9.7`。向 `/sub` 发送虚构 URI 和三个 target 的请求均成功返回；这只验证服务端接受 target 并产生带测试标记的响应，不证明节点清单纯净、客户端兼容或生产访问控制。该服务当前使用 HTTP，订阅 token 和节点凭据会明文经过转换服务与网络链路。
+`Server` 响应头标识 `SubConverter-Extended/v1.9.7`。向其 HTTP `/sub` 发送虚构 URI 和三个 target 的请求均成功返回；该历史测试不证明生产安全或当前 KNS 链接可用。KNS 现在拒绝 HTTP 转换地址，包含旧持久化配置；若管理员显式配置可信 HTTPS 转换器，转换器仍会收到源订阅 URL 与凭据。
 
 ## 协议覆盖
 
