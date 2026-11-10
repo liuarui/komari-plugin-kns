@@ -2,6 +2,12 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.2] - 2026-11-10
+
+- Name newly claimed nodes consistently with subscription names, including NAT ports.
+- Reuse an in-flight claim when the same idempotency key is retried and report dispatch failures accurately.
+- Correct the legacy node takeover and batch operation documentation.
+
 ## [1.0.1] - 2026-11-10
 
 - Remove machines and their managed nodes from KNS and subscriptions when they are deleted from Komari.

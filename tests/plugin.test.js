@@ -424,8 +424,13 @@ test("admin policy, task callback, remote status, and protected URI subscription
     assert.equal(JSON.parse(invalidTwoFactorImportRes.body).error.code, "invalid_2fa");
 
     const legacyImportRes = response();
-    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "machine.import", machineUuid, legacyTag: "old-vless", name: "old-vless", tags: ["prod"], endpointHost: "2.3.4.5", externalPort: 30443, confirm: true, idempotencyKey: "legacy-import-1" }) }, legacyImportRes);
+    const legacyImportBody = { action: "machine.import", machineUuid, legacyTag: "old-vless", tags: ["prod"], endpointHost: "2.3.4.5", externalPort: 30443, confirm: true, idempotencyKey: "legacy-import-1" };
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify(legacyImportBody) }, legacyImportRes);
     assert.equal(legacyImportRes.statusCode, 202, legacyImportRes.body);
+    const legacyRetryRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify(legacyImportBody) }, legacyRetryRes);
+    assert.equal(legacyRetryRes.statusCode, 200, legacyRetryRes.body);
+    assert.equal(JSON.parse(legacyRetryRes.body).reused, true);
     assert.match(execParams.command, /kns 'claim'/);
     const legacyEncoded = execParams.command.match(/printf %s '([A-Za-z0-9+/=]+)' \| base64 -d/)[1];
     const legacyRequest = JSON.parse(Buffer.from(legacyEncoded, "base64").toString("utf8"));
@@ -453,6 +458,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const afterLegacyImport = JSON.parse(afterLegacyImportRes.body);
     const importedLegacy = afterLegacyImport.instances.find((item) => item.legacyTag === "old-vless");
     assert.ok(importedLegacy);
+    assert.equal(importedLegacy.name, "VLESS-test-node-30443");
     assert.equal(importedLegacy.managedBy, "onebox");
     assert.equal(importedLegacy.oneboxTag, legacyExpectedTag);
     assert.equal("readOnly" in importedLegacy, false);

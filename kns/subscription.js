@@ -594,4 +594,4 @@ function buildSubscriptions(state, profile, formats, decrypt) {
   return Object.fromEntries(formats.map((format) => [format, renderSubscription(prepared, format)]));
 }
 
-module.exports = { buildSubscriptions, buildSubscription, commonProxy, encodeUri, filterInstances, hostPort, mihomo, quoteYaml, singbox };
+module.exports = { buildSubscriptions, buildSubscription, commonProxy, encodeUri, filterInstances, hostPort, mihomo, quoteYaml, singbox, subscriptionNodeName };

@@ -691,6 +691,7 @@ test("scan and claim all waits for this scan and skips offline or failed machine
   assert.deepEqual(actions.map((item) => [item.action, item.machineUuid, item.legacyTag]), [
     ["machine.discover", "a", undefined], ["machine.import", "a", "first"], ["machine.import", "a", "second"], ["machine.discover", "b", undefined],
   ]);
+  assert.ok(actions.filter((item) => item.action === "machine.import").every((item) => !("name" in item)));
   assert.ok(rendered.some((text) => text.includes("已接管 2")));
   assert.ok(rendered.some((text) => text.includes("scan failed")));
   assert.match(status.at(-1), /已接管 2 个节点/);
@@ -707,6 +708,7 @@ test("a node's own endpoint draft can be submitted during takeover", async () =>
   await context.importLegacyNode({ uuid: "machine", policy: {}, discoveredAt: new Date().toISOString() }, { tag: "old-tag" }, { endpointHost: "2001:4860:4860::8888", externalPort: "" });
   assert.equal(sent.length, 1); assert.equal(sent[0].draftScope, scope);
   assert.equal(sent[0].body.endpointHost, "2001:4860:4860::8888");
+  assert.equal("name" in sent[0].body, false);
   context.draftScopes.set("settings:connection", 1);
   await context.importLegacyNode({ uuid: "machine", policy: {}, discoveredAt: new Date().toISOString() }, { tag: "old-tag" }, {});
   assert.equal(sent.length, 1, "a different unsaved draft blocks takeover");

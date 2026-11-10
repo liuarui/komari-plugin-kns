@@ -2137,9 +2137,10 @@ async function handleAction(req, res) {
     if (!candidate || candidate.managed || !candidate.importable || !PROTOCOLS[candidate.protocol] || !["tcp", "udp", "tcp+udp"].includes(candidate.listen.transport) || !Number.isInteger(candidate.listen.port) || candidate.listen.port < 1 || candidate.listen.port > 65535) fail("legacy_node_not_importable", "此历史节点不受安全导入支持，请查看扫描结果中的原因。", 409);
     const legacyExisting = (state.instances || []).find((instance) => instance.machineUuid === machine.uuid && instance.managedBy === "legacy_import" && instance.legacyTag === legacyTag && !instance.deletedAt) || null;
     if ((state.instances || []).some((instance) => instance.machineUuid === machine.uuid && instance.legacyTag === legacyTag && instance.managedBy !== "legacy_import" && !instance.deletedAt)) fail("legacy_node_already_managed", "该旧 tag 已被 KNS 节点记录占用，请重新扫描并核对配置。", 409);
-    const instanceId = legacyExisting ? legacyExisting.id : randomId("legacy");
     const idempotencyKey = safeText(body.idempotencyKey || "", 256);
     if (!idempotencyKey) fail("idempotency_key_required", "节点导入需要 idempotencyKey。", 400);
+    const prior = state.jobs.find((item) => item.machineUuid === machine.uuid && item.action === action && item.idempotencyKey === idempotencyKey);
+    const instanceId = prior ? prior.instanceId : legacyExisting ? legacyExisting.id : randomId("legacy");
     const endpointOverrideProvided = Object.prototype.hasOwnProperty.call(body, "endpointHost") || Object.prototype.hasOwnProperty.call(body, "endpointPort");
     const endpointOverride = endpointOverrideProvided ? makeEndpointOverride(body.endpointHost, body.endpointPort, !!state.settings.privateSite) : legacyExisting && legacyExisting.endpointOverride || null;
     const externalPortProvided = Object.prototype.hasOwnProperty.call(body, "externalPort");
@@ -2152,7 +2153,6 @@ async function handleAction(req, res) {
       if (natMappingConflicts(state, nat.externalPort, candidate.listen.transport, nat.publicHosts, instanceId)) fail("nat_mapping_conflict", "公网 IP、外部端口和 TCP/UDP 组合已被另一个 KNS 实例占用。", 409);
     }
     const requestHash = crypto.createHash("sha256").update(JSON.stringify({ action, machineUuid: machine.uuid, instanceId, legacyTag, protocol: candidate.protocol, port: candidate.listen.port, transport: candidate.listen.transport, endpointOverride, externalPort: nat && nat.externalPort || 0 })).digest("hex");
-    const prior = state.jobs.find((item) => item.machineUuid === machine.uuid && item.action === action && item.idempotencyKey === idempotencyKey);
     if (prior) {
       if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于其他导入请求。", 409);
       return json(res, 200, { ok: !["failed", "cancelled"].includes(prior.state), reused: true, job: safeJob(prior) });
@@ -2161,7 +2161,7 @@ async function handleAction(req, res) {
     if (conflict) fail("runtime_busy", "该探针已有 OneBox 任务进行中，请等待完成后再导入。", 409);
     const address = ["::", "0.0.0.0", "127.0.0.1", "::1"].includes(candidate.listen.address) ? candidate.listen.address : "::";
     const spec = {
-      id: instanceId, legacyTag, name: safeText(body.name || legacyExisting && legacyExisting.name || legacyTag, 80), tags: Array.isArray(body.tags) ? body.tags.map((tag) => safeText(tag, 32)).filter(Boolean) : legacyExisting && legacyExisting.tags || [],
+      id: instanceId, legacyTag, name: safeText(body.name || subscriptions.subscriptionNodeName(candidate.protocol, machine.name, importEndpoint.port || candidate.listen.port), 80), tags: Array.isArray(body.tags) ? body.tags.map((tag) => safeText(tag, 32)).filter(Boolean) : legacyExisting && legacyExisting.tags || [],
       protocol: candidate.protocol, port: candidate.listen.port, listenAddress: address, transport: candidate.listen.transport,
       options: candidate.options || {}, endpointOverride, nat, idempotencyKey, twoFactorCode: body.twoFactorCode, requestHash,
     };

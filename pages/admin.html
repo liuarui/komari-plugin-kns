@@ -1537,7 +1537,7 @@
           for(const node of candidates){
             if(draftScopes.size)throw new Error("发现未保存草稿，停止继续接管。");
             const existing=(snapshot.instances||[]).find((instance)=>instance.machineUuid===current.uuid&&!instance.deletedAt&&instance.managedBy==="legacy_import"&&instance.legacyTag===node.tag);
-            const body={action:"machine.import",machineUuid:current.uuid,legacyTag:node.tag,name:existing&&existing.name||node.tag,tags:existing&&existing.tags||(current.policy&&current.policy.tags||[]),confirm:true,idempotencyKey:idempotencyKey()};
+            const body={action:"machine.import",machineUuid:current.uuid,legacyTag:node.tag,tags:existing&&existing.tags||(current.policy&&current.policy.tags||[]),confirm:true,idempotencyKey:idempotencyKey()};
             let result;
             for(let attempt=0;attempt<3;attempt++){
               try{result=await postAction(body);break;}catch(error){if(error.code!=="state_revision_conflict"||attempt===2)throw error;}
@@ -1581,7 +1581,8 @@
     if(!confirmation)return;
     try {
       setMachineStatus(machine.uuid,"正在接管旧节点…");
-      const result=await postAction({ action:"machine.import", machineUuid:machine.uuid, legacyTag:node.tag, name:existing&&existing.name||node.tag, tags:existing&&existing.tags||(machine.policy&&machine.policy.tags||[]), endpointHost, externalPort, confirm:true, idempotencyKey:idempotencyKey() },scope);
+      const result=await postAction({ action:"machine.import", machineUuid:machine.uuid, legacyTag:node.tag, tags:existing&&existing.tags||(machine.policy&&machine.policy.tags||[]), endpointHost, externalPort, confirm:true, idempotencyKey:idempotencyKey() },scope);
+      if(!result.ok||!result.job||!result.job.id)throw new Error(result.job&&result.job.message||"接管未提交。");
       setMachineStatus(machine.uuid,"接管任务已提交；等待 OneBox 迁移配置并核验结果。"+(result.job&&result.job.id?" 任务编号 "+result.job.id:""),"muted"); await refresh();
     } catch (error) { setMachineStatus(machine.uuid,error.message,"error"); }
   }

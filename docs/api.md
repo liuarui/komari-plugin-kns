@@ -33,7 +33,7 @@ KNS 原生订阅格式为 `uri`、`mihomo-full`、`mihomo-provider`、`singbox-f
 | `machine.discover` | `machineUuid`, `idempotencyKey` | `202` 单机只读扫描任务；管理页不要求输入 2FA；结果和可纳入节点直接显示在机器卡片中，不含节点凭据 |
 | `runtime.script.update` | `machineUuid`, `confirm:true`, `idempotencyKey`, 可选 `twoFactorCode` | `202` 更新 OneBox 管理脚本；要求在线、已授权、30 分钟内扫描发现 OneBox、配置 HTTPS 回调并且共享 Runtime 空闲。以固定 SHA-256 核验产物，并检查 Agent、一次性回调和远端脚本版本/摘要 |
 | `runtime.kernel.update` | `machineUuid`, `version:"latest"`, `confirm:true`, `idempotencyKey`, 可选 `twoFactorCode` | `202` 独立升级 sing-box 稳定版内核；影响该机全部 KNS 节点，保持升级前运行/停止状态；以 Agent、一次性回调、内核版本和服务状态双重核验 |
-| `machine.import` | `machineUuid`, `legacyTag`, `confirm:true`, `idempotencyKey`, 可选 `endpointHost`, `externalPort` | `202` 纳入管理任务；管理员在扫描结果中点击纳入按钮即构成显式确认；HTTPS 回调后凭据加密登记为外部只读节点，不修改 OneBox 配置 |
+| `machine.import` | `machineUuid`, `legacyTag`, `confirm:true`, `idempotencyKey`, 可选 `name`, `endpointHost`, `externalPort` | `202` 接管任务；迁移入站 tag 并重载共享 sing-box 服务，通过一次性 HTTPS 回调登记节点和凭据；默认按协议、机器名和公网端口命名 |
 | `settings.update` | `publicBaseUrl`（HTTPS），可选 `converterUrl`（留空关闭或 HTTPS `/sub` URL）, `converterTarget`（见支持列表）, `privateSite` | 更新回调、订阅转换和私有地址设置；HTTP SubConverter 地址拒绝 |
 | `install` | `machineUuid`, `protocol`, `listenPort`, `listenAddress`, `options`, 可选 `name`, `tags`, `endpointHost`, `externalPort`, `idempotencyKey`, `confirm:true`, `twoFactorCode` | `202` job |
 | `reconfigure`, `reinstall` | 同上并带已有 `instanceId` | `202` job |
