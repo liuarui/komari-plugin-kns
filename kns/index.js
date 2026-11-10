@@ -2965,7 +2965,8 @@ function load() {
   getState();
   registerRoutes();
   server.cron("@every 15s", () => { cronTick(); });
-  server.cron("@every 1m", () => { syncMachines().then(refreshEndpoints).catch((error) => console.error("[KNS] machine sync failed:", safeText(error.message || error, 200))); });
+  server.cron("@every 15s", () => { syncMachines().catch((error) => console.error("[KNS] machine sync failed:", safeText(error.message || error, 200))); });
+  server.cron("@every 1m", () => { refreshEndpoints().catch((error) => console.error("[KNS] endpoint refresh failed:", safeText(error.message || error, 200))); });
   server.cron("@every 1m", () => { try { flushTokenUsage(); } catch (error) { console.error("[KNS] token usage save failed:", safeText(error.message || error, 200)); } });
   server.cron("@every 5m", () => { refreshHealth().catch((error) => console.error("[KNS] health check failed:", safeText(error.message || error, 200))); });
   server.cron("@every 5m", () => { scheduleSubscriptionRefresh(); });

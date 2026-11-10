@@ -125,3 +125,66 @@ test("machine-centered admin browser acceptance with isolated API fixtures", { s
   await page.getByText("没有匹配的机器。", { exact: true }).waitFor();
   assert.deepEqual(errors, []);
 });
+
+test("subscription drawer creates, edits and protects unsaved changes", { skip: !driver }, async (t) => {
+  const { chromium } = require(driver);
+  const root = path.resolve(__dirname, "../pages");
+  const server = http.createServer((req, res) => {
+    const file = ({ "/": "admin.html", "/qrcode-generator.js": "qrcode-generator.js", "/qrcode-generator-utf8.js": "qrcode-generator-utf8.js" })[req.url];
+    if (!file) { res.writeHead(404); res.end(); return; }
+    res.setHeader("Content-Type", file.endsWith(".js") ? "text/javascript" : "text/html;charset=utf-8");
+    res.end(fs.readFileSync(path.join(root, file)));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const browser = await chromium.launch({ channel: "chrome", headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  const errors = []; page.on("pageerror", (error) => errors.push(error.message));
+  const profile = { id: "p1", name: "已有订阅", formats: ["uri"], tokens: [], machineUuids: [], excludeMachineUuids: [], protocols: [], includeTags: [] };
+  const state = { revision: 1, settings: { setupComplete: true, defaultNode: {} }, machines: [], instances: [], jobs: [], profiles: [profile], audit: [], backups: [] };
+  const sent = [];
+  await page.route("**/api/kns/**", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: state });
+    const body = route.request().postDataJSON(); sent.push(body);
+    if (body.action === "profile.update") { Object.assign(profile, body); state.revision++; return route.fulfill({ json: { ok: true } }); }
+    if (body.action === "profile.create") return route.fulfill({ json: { profile: { id: "new" }, subscriptionUrls: { uri: "https://fixture.invalid/sub?token=synthetic" } } });
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.goto(`http://127.0.0.1:${server.address().port}/`);
+  await page.locator('[data-panel="subscriptions"]').click();
+  await page.locator('#openProfileDrawer').click();
+  assert.equal(await page.locator('#profileDrawer').isVisible(), true);
+  await page.locator('#profileName').fill('草稿');
+  await page.locator('#cancelProfileDrawer').click();
+  assert.equal(await page.locator('#operationDialog').isVisible(), true);
+  await page.locator('#operationCancel').click();
+  assert.equal(await page.locator('#profileName').inputValue(), '草稿');
+  await page.locator('#cancelProfileDrawer').click();
+  await page.locator('#operationConfirm').click();
+  assert.equal(await page.locator('#profileDrawer').isVisible(), false);
+  await page.locator('#openProfileDrawer').click();
+  assert.equal(await page.locator('#profileName').inputValue(), '');
+  await page.locator('#profileName').fill('新档案');
+  await page.locator('#createProfile').click();
+  await page.locator('#deliveryDialog').waitFor({ state: 'visible' });
+  assert.equal(sent.at(-1).action, 'profile.create');
+  assert.equal(sent.at(-1).name, '新档案');
+  await page.locator('#closeDelivery').click();
+  await page.getByRole('button', { name: '编辑订阅' }).click();
+  assert.equal(await page.locator('#profileName').inputValue(), '已有订阅');
+  await page.locator('#profileName').fill('修改后的订阅');
+  await page.locator('#createProfile').click();
+  await page.locator('#profileDrawer').waitFor({ state: 'hidden' });
+  assert.equal(sent.at(-1).action, 'profile.update');
+  assert.equal(sent.at(-1).profileId, 'p1');
+  assert.equal(sent.at(-1).name, '修改后的订阅');
+  await page.setViewportSize({ width: 360, height: 700 });
+  await page.locator('#openProfileDrawer').click();
+  const bounds = await page.locator('#profileDrawer').boundingBox();
+  assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 360 && bounds.height <= 700);
+  assert.equal(await page.locator('#createProfile').isVisible(), true);
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#profileDrawer').isVisible(), false);
+  assert.deepEqual(errors, []);
+});

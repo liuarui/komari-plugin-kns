@@ -263,6 +263,21 @@
     #profileRows .card { padding:18px 20px; }
     #profileRows .card h3 { font-size:15px; font-weight:820; }
 
+    /* Subscription editor stays visible beside the list on wide screens. */
+    dialog.profile-drawer { position:fixed; inset:0 0 0 auto; margin:0; width:min(620px, 100vw); max-width:100vw; height:100dvh; max-height:100dvh; padding:0; border:0; border-left:1px solid var(--line); border-radius:0; overflow:hidden; }
+    .profile-drawer-shell { display:flex; flex-direction:column; height:100%; min-height:0; }
+    .profile-drawer-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; padding:22px 24px 16px; border-bottom:1px solid var(--line); }
+    .profile-drawer-header h2,.profile-drawer-header p { margin:0; }
+    .profile-drawer-header p { margin-top:5px; }
+    .profile-drawer-header button { font-size:22px; line-height:1; }
+    .profile-drawer-body { flex:1; min-height:0; overflow:auto; padding:4px 24px 24px; }
+    .profile-drawer-body section { padding:16px 0; border-bottom:1px solid var(--line); }
+    .profile-drawer-body h3 { margin:0 0 10px; }
+    .profile-drawer-footer { flex:none; padding:12px 24px 18px; border-top:1px solid var(--line); background:var(--surface); text-align:left; }
+    .profile-drawer-footer .actions { margin-top:8px; }
+    .profile-drawer-footer p { margin:0; }
+    @media(max-width:560px) { dialog.profile-drawer { width:100vw; border:0; } .profile-drawer-header,.profile-drawer-footer { padding-left:16px; padding-right:16px; } .profile-drawer-body { padding-left:16px; padding-right:16px; } .profile-drawer-body .grid { grid-template-columns:1fr; } }
+
     /* ===== dialogs ===== */
     dialog { width:min(640px, calc(100vw - 28px)); max-height:calc(100vh - 28px); overflow:auto; border:1px solid var(--line); border-radius:16px; padding:22px; color:var(--ink); background:var(--surface); box-shadow:0 30px 80px rgba(10,20,40,.28); }
     dialog::backdrop { background:rgba(10,18,30,.5); }
@@ -542,7 +557,7 @@
         </div>
       </div>
       <p id="machineFilterSummary" class="small muted" aria-live="polite"></p>
-      <details class="machine-advanced"><summary>批量扫描与机器同步</summary><div class="actions"><button id="selectOnlineScans" class="secondary">全选在线机器</button><button id="clearScanSelection" class="secondary">清空选择</button><button id="scanLegacySelected" class="secondary">扫描所选机器已有节点</button><button id="reloadMachines" class="secondary">同步 Komari 机器</button></div><p id="scanBatchStatus" class="status small muted" role="status">只读扫描不会安装、修改或卸载节点；结果会直接显示在对应机器卡片中。</p></details>
+      <details class="machine-advanced"><summary>批量扫描与机器同步</summary><div class="actions"><button id="selectOnlineScans" class="secondary">全选在线机器</button><button id="clearScanSelection" class="secondary">清空选择</button><button id="scanLegacySelected" class="secondary">扫描所选机器已有节点</button><button id="reloadMachines" class="secondary">立即同步 Komari 机器</button></div><p id="scanBatchStatus" class="status small muted" role="status">KNS 每 15 秒自动同步 Komari 机器清单；删除或重新接入的机器会自动更新。此按钮可立即同步。只读扫描不会安装、修改或卸载节点。</p></details>
       <p class="small muted">“不纳管”机器默认隐藏。OneBox 检测状态来自最近 30 分钟的只读扫描；未扫描或结果过期不代表机器没有安装 OneBox。</p>
       <div id="machineRows" class="machine-list" data-layout="grid3"><p class="muted empty-state">正在读取机器…</p></div>
     </div>
@@ -565,20 +580,7 @@
   </section>
 
   <section id="subscriptions" class="panel">
-    <div class="card"><h2>订阅档案</h2><p class="muted">先管理已有档案的令牌、格式和筛选；需要新档案时再使用下方表单。</p><div id="profileRows"></div></div>
-    <div class="card">
-      <h2>新建订阅档案</h2>
-      <div class="grid"><label>档案名称<input id="profileName" maxlength="80" placeholder="新订阅" autocomplete="off"></label><label>过期时间（可选）<input id="profileExpiry" type="datetime-local"></label></div>
-      <label><input id="profileTokenRequired" type="checkbox" checked>访问订阅需要令牌</label><p class="small muted">关闭后链接无需令牌即可访问；任何拿到链接的人都能读取匹配的节点。</p>
-      <div id="createProfileFilters" class="profile-filters"></div>
-      <div class="format-list">
-        <label><input type="checkbox" value="uri" checked>URI 原始链接（用于转换）</label><label><input type="checkbox" value="mihomo-full" checked>Clash / Mihomo 完整配置</label><label><input type="checkbox" value="mihomo-provider">Mihomo Provider</label><label><input type="checkbox" value="singbox-full">sing-box 完整配置</label><label><input type="checkbox" value="singbox-outbounds">sing-box Outbounds</label><label><input type="checkbox" value="loon">Loon</label><label><input type="checkbox" value="surge">Surge</label><label><input type="checkbox" value="surfboard">Surfboard</label><label><input type="checkbox" value="quanx">Quantumult X</label><label><input type="checkbox" value="quan">Quantumult</label><label><input type="checkbox" value="shadowrocket">Shadowrocket</label><label><input type="checkbox" value="stash">Stash</label><label><input type="checkbox" value="mellow">Mellow</label><label><input type="checkbox" value="v2rayn">V2RayN</label><label><input type="checkbox" value="v2rayng">V2RayNG</label><label><input type="checkbox" value="ss">Shadowsocks URI</label><label><input type="checkbox" value="sssub">SSSub</label><label><input type="checkbox" value="ssd">SSD</label><label><input type="checkbox" value="trojan">Trojan URI</label><label><input type="checkbox" value="vless">VLESS URI</label><label><input type="checkbox" value="hysteria2">Hysteria2 URI</label>
-      </div>
-      <p class="small muted">默认选择 URI 和 Clash / Mihomo。Loon / Surge / Quantumult X / Shadowrocket / Stash / V2RayN 等由插件原生生成；外部 SubConverter 仅用于额外 target。没有服务端筛选预览接口；如筛选结果为空，创建后保留固定链接，节点数待状态核验。</p>
-      <p class="notice">每个档案只保留一个有效令牌。令牌会加密保存，之后可再次查看；轮换后旧链接立即失效。订阅 URL 含令牌，分享时请当作密码。</p>
-      <div class="actions"><button id="createProfile">创建订阅并生成访问链接</button></div>
-      <p id="profileCreateStatus" class="small muted" role="status">每种实际输出格式会在创建后单独提供复制，并可保存全部链接到本地文件。</p>
-    </div>
+    <div class="card"><div class="hero"><div><h2>订阅档案</h2><p class="muted">管理已有订阅，或创建新的订阅档案。</p></div><button id="openProfileDrawer" type="button">新建订阅</button></div><div id="profileRows"></div></div>
   </section>
 
   <section id="settings" class="panel">
@@ -591,6 +593,22 @@
     <footer class="muted small"><span id="pluginVersionLabel">Komari KNS</span> · <a id="pluginSourceLink" href="https://github.com/liuarui/komari-plugin-kns" target="_blank" rel="noopener">源码</a> · <button id="checkPluginUpdate" class="secondary" type="button">检查更新</button> · <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">GNU AGPL v3.0-only</a><p id="pluginUpdateStatus" class="status muted" role="status"></p></footer>
   </div>
 </main>
+<dialog id="profileDrawer" class="profile-drawer" aria-labelledby="profileDrawerTitle">
+  <div class="profile-drawer-shell">
+    <header class="profile-drawer-header"><div><h2 id="profileDrawerTitle">新建订阅</h2><p id="profileDrawerDescription" class="small muted"></p></div><button id="closeProfileDrawer" type="button" class="secondary" aria-label="关闭订阅编辑">×</button></header>
+    <div class="profile-drawer-body">
+      <section><h3>基本信息</h3><div class="grid"><label>档案名称<input id="profileName" maxlength="80" placeholder="新订阅" autocomplete="off"></label><label>过期时间（可选）<input id="profileExpiry" type="datetime-local"></label></div><p id="profileExpiryHint" class="small muted" hidden>修改档案有效期不会延长已签发令牌的有效期；需要时请轮换令牌。</p><div id="profileTokenOption"><label><input id="profileTokenRequired" type="checkbox" checked>访问订阅需要令牌</label><p class="small muted">关闭后，任何拿到链接的人都能读取匹配的节点。</p></div></section>
+      <section><h3>机器与节点筛选</h3><p class="small muted">留空表示不限制；排除机器优先于包含机器。</p><div id="createProfileFilters" class="profile-filters"></div><p id="profileSelectionSummary" class="small muted" aria-live="polite"></p></section>
+      <section><h3>输出格式</h3>
+      <div class="format-list">
+        <label><input type="checkbox" value="uri" checked>URI 原始链接（用于转换）</label><label><input type="checkbox" value="mihomo-full" checked>Clash / Mihomo 完整配置</label><label><input type="checkbox" value="mihomo-provider">Mihomo Provider</label><label><input type="checkbox" value="singbox-full">sing-box 完整配置</label><label><input type="checkbox" value="singbox-outbounds">sing-box Outbounds</label><label><input type="checkbox" value="loon">Loon</label><label><input type="checkbox" value="surge">Surge</label><label><input type="checkbox" value="surfboard">Surfboard</label><label><input type="checkbox" value="quanx">Quantumult X</label><label><input type="checkbox" value="quan">Quantumult</label><label><input type="checkbox" value="shadowrocket">Shadowrocket</label><label><input type="checkbox" value="stash">Stash</label><label><input type="checkbox" value="mellow">Mellow</label><label><input type="checkbox" value="v2rayn">V2RayN</label><label><input type="checkbox" value="v2rayng">V2RayNG</label><label><input type="checkbox" value="ss">Shadowsocks URI</label><label><input type="checkbox" value="sssub">SSSub</label><label><input type="checkbox" value="ssd">SSD</label><label><input type="checkbox" value="trojan">Trojan URI</label><label><input type="checkbox" value="vless">VLESS URI</label><label><input type="checkbox" value="hysteria2">Hysteria2 URI</label>
+      </div>
+      <p class="small muted">至少选择一种格式。外部 SubConverter 可用于额外客户端格式。</p></section>
+      <p class="notice small">订阅链接包含访问凭据，请像密码一样保管。</p>
+    </div>
+    <footer class="profile-drawer-footer"><p id="profileCreateStatus" class="status small muted" role="status"></p><div class="actions"><button id="profileConflict" type="button" class="secondary" hidden>核对冲突</button><button id="cancelProfileDrawer" type="button" class="secondary">取消</button><button id="createProfile" type="button">创建订阅</button></div></footer>
+  </div>
+</dialog>
 <dialog id="operationDialog" aria-labelledby="operationTitle"><form id="operationForm"><h2 id="operationTitle"></h2><p id="operationDescription" class="operation-copy muted"></p><div id="operationFields"></div><p id="operationStatus" class="status muted" role="status"></p><div class="actions"><button id="operationCancel" type="button" class="secondary">取消</button><button id="operationConfirm" type="submit">继续</button></div></form></dialog>
 <dialog id="deliveryDialog" aria-labelledby="deliveryTitle"><div><h2 id="deliveryTitle">订阅链接</h2><p class="notice">可重复查看、复制或扫码。关闭后页面会清除本次显示的链接；请保护屏幕和二维码。</p><section id="deliveryTokenSection" hidden><h3>访问令牌</h3><div id="deliveryTokenValue"></div></section><label>订阅格式<select id="deliveryFormat"></select></label><p id="deliveryFeedback" class="status small muted" role="status"></p><div id="deliveryLinks" class="delivery-grid"></div><section id="converterDeliverySection" hidden><h3>外部转换结果</h3><p class="notice small">以下链接会把原始订阅 URI 和节点凭据发送到所配置的外部 SubConverter；仅使用你信任的转换器。</p><div id="converterDeliveryLinks" class="delivery-grid"></div></section><div class="actions"><button id="saveLinkBundle" type="button" class="secondary">保存全部链接到文件</button><button id="closeDelivery" type="button">关闭</button></div></div></dialog>
 <script src="./qrcode-generator.js"></script>
@@ -726,7 +744,10 @@
   const localActionStatus = new Map();
   const operationJobs = new Map();
   const retryRequestKeys = new Map();
-  let createProfileFiltersReady = false;
+  let profileDrawerProfile = null;
+  let profileDrawerScope = "";
+  let profileDrawerExpiry = "";
+  let profileDrawerSaving = false;
   const legacyScanFailures = new Map();
   const legacyScanSelection = new Set();
 
@@ -796,6 +817,7 @@
     $("draftNotice").hidden = !dirty;
     $("discardDrafts").hidden = !dirty;
     $("compareConflict").hidden = !draftConflict;
+    $("profileConflict").hidden = !draftConflict || draftConflict.scope !== profileDrawerScope;
   }
   function draftScopeFor(target) {
     if (!target || target.matches('[type="search"],[data-no-draft]')) return "";
@@ -803,7 +825,7 @@
     if (row) return "machine:" + row.dataset.machineUuid;
     const profileCard = target.closest("[data-profile-id]");
     if (profileCard) return "profile:" + profileCard.dataset.profileId;
-    if (target.closest("#createProfileFilters,.format-list") || ["profileName","profileExpiry"].includes(target.id)) return "profile:create";
+    if (target.closest("#profileDrawer")) return profileDrawerScope;
     if (["publicBaseUrl","subconverterUrl","converterTarget","privateSite"].includes(target.id)) return "settings:connection";
     if (["defaultNodePort","defaultNodeAddress","autoProvisionEnabled"].includes(target.id)) return "settings:defaults";
     if (["setupPublicBaseUrl","setupDefaultPort","setupDefaultAddress","setupAutoProvision","setupAutoProvisionConfirm"].includes(target.id)) return "setup";
@@ -1916,7 +1938,7 @@
   }
 
   function profileFilterEditor(profile, prefix) {
-    const editor=el("div",null,"profile-filters"); const grid=el("div",null,"grid");
+    const editor=el("div",null,"profile-filters"); let grid=el("div",null,"grid");
     const addMulti=(title,suffix,options,selected,hint,searchable=false)=>{
       const root=el("div",null,"profile-choice-filter");root.dataset.profileChoiceFilter=suffix;
       const titleNode=el("span",title,"profile-choice-filter-title");root.append(titleNode);
@@ -1945,7 +1967,7 @@
         for(const value of chosen){
           const chip=el("span",null,"profile-choice-chip");chip.append(el("span",optionText(value,all)));
           const remove=document.createElement("button");remove.type="button";remove.textContent="×";remove.setAttribute("aria-label","移除 "+optionText(value,all));
-          remove.addEventListener("click",()=>{chosen.delete(value);syncSelection();renderChoices();});chip.append(remove);chips.append(chip);
+          remove.addEventListener("click",()=>{chosen.delete(value);syncSelection();renderChoices();valueInput.dispatchEvent(new Event("input",{bubbles:true}));});chip.append(remove);chips.append(chip);
         }
       };
       const renderChoices=()=>{
@@ -1964,8 +1986,8 @@
         }
       };
       if(search)search.addEventListener("input",renderChoices);
-      chooseMatches.addEventListener("click",()=>{const query=search?search.value.trim().toLowerCase():"";for(const [value,text] of getOptions())if(!query||String(text).toLowerCase().includes(query))chosen.add(value);syncSelection();renderChoices();});
-      clear.addEventListener("click",()=>{chosen.clear();syncSelection();renderChoices();});
+      chooseMatches.addEventListener("click",()=>{const query=search?search.value.trim().toLowerCase():"";for(const [value,text] of getOptions())if(!query||String(text).toLowerCase().includes(query))chosen.add(value);syncSelection();renderChoices();valueInput.dispatchEvent(new Event("input",{bubbles:true}));});
+      clear.addEventListener("click",()=>{chosen.clear();syncSelection();renderChoices();valueInput.dispatchEvent(new Event("input",{bubbles:true}));});
       root.refreshOptions=()=>{syncSelection();renderChoices();};
       syncSelection();renderChoices();grid.append(root);
       return root;
@@ -1975,13 +1997,14 @@
     const machineOptions=[];
     const protocolOptions=[["vless","VLESS"],["trojan","Trojan"],["vmess","VMess"],["shadowsocks","Shadowsocks"],["hysteria2","Hysteria2"],["tuic","TUIC"],["anytls","AnyTLS"]];
     addMulti("包含机器","-machines",machineOptions,profile.machineUuids,"留空表示全部；只发布选中机器的节点。",true);
-    addMulti("排除机器","-exclude-machines",machineOptions,profile.excludeMachineUuids,"排除规则优先于包含机器。",true);
     addMulti("协议","-protocols",protocolOptions,profile.protocols,"留空表示全部；可选择多种协议。");
+    editor.append(grid);const advanced=el("details",null,"operation-optional-fields");advanced.append(el("summary","高级筛选"));grid=el("div",null,"grid");
+    addMulti("排除机器","-exclude-machines",machineOptions,profile.excludeMachineUuids,"排除规则优先于包含机器。",true);
     addText("包含标签（任一匹配）","-tags",(profile.includeTags||[]).join(","),"与实例标签匹配。");
     addSelect("地址族","-address",[["auto","自动 / 保留全部"],["ipv4","IPv4 地址"],["ipv6","IPv6 地址"],["dual","双栈 / 保留全部"]],profile.addressMode||"auto");
     addSelect("排序方式","-sort",[["name","节点名称"],["protocol","协议"],["endpoint","Endpoint"],["machine","机器名称"]],profile.sortBy||"name");
     const healthLabel=el("label","健康状态");const health=document.createElement("select");health.id=prefix+"-health";[["exclude","排除不健康节点"],["include","包含所有已发布节点"]].forEach(([value,text])=>{const option=el("option",text);option.value=value;option.selected=(profile.excludeUnhealthy!==false)===(value==="exclude");health.append(option);});healthLabel.append(health);grid.append(healthLabel);
-    editor.append(grid);return editor;
+    advanced.append(grid);editor.append(advanced);return editor;
   }
 
   function readProfileFilters(prefix) {
@@ -2010,8 +2033,63 @@
     }
   }
 
+  function localDateTime(value) {
+    if(!value)return "";const date=new Date(value);if(!Number.isFinite(date.getTime()))return "";
+    const pad=(number)=>String(number).padStart(2,"0");
+    return date.getFullYear()+"-"+pad(date.getMonth()+1)+"-"+pad(date.getDate())+"T"+pad(date.getHours())+":"+pad(date.getMinutes());
+  }
+  function updateProfileSelectionSummary(){
+    if(!profileDrawerScope||!$("createProfileFilter-machines"))return;
+    const filters=readProfileFilters("createProfileFilter");
+    $("profileSelectionSummary").textContent="筛选范围："+(filters.machineUuids.length?"包含 "+filters.machineUuids.length+" 台指定机器":"全部机器")+(filters.excludeMachineUuids.length?"，排除 "+filters.excludeMachineUuids.length+" 台":"")+"；"+(filters.protocols.length?filters.protocols.join("、")+" 协议":"全部协议")+"。实际节点以订阅结果为准。";
+  }
+  function openProfileDrawer(profile=null){
+    if(draftScopes.size){setStatus("globalStatus","请先保存或放弃未保存的草稿。","error");return;}
+    profileDrawerProfile=profile;profileDrawerScope=profile?"profile:"+profile.id:"profile:create";
+    $("profileDrawerTitle").textContent=profile?"编辑订阅":"新建订阅";
+    $("profileDrawerDescription").textContent=profile?"修改 "+profile.name+" 的设置。":"选择订阅范围并生成访问链接。";
+    $("profileName").value=profile?profile.name:"";
+    profileDrawerExpiry=profile?localDateTime(profile.expiresAt):"";$("profileExpiry").value=profileDrawerExpiry;
+    $("profileExpiryHint").hidden=!profile;$("profileTokenOption").hidden=!!profile;$("profileTokenRequired").checked=true;
+    const formats=profile?(profile.formats||[]):["uri","mihomo-full"];
+    document.querySelectorAll(".format-list input").forEach((input)=>{input.checked=formats.includes(input.value);input.disabled=false;});
+    $("createProfileFilters").replaceChildren(profileFilterEditor(profile||{},"createProfileFilter"));
+    $("createProfile").textContent=profile?"保存修改":"创建订阅并生成链接";
+    setStatus("profileCreateStatus","","muted");updateDraftControls();updateProfileSelectionSummary();
+    $("profileDrawer").showModal();$("profileName").focus();
+  }
+  async function closeProfileDrawer(){
+    if(profileDrawerSaving)return;
+    if(profileDrawerScope&&draftScopes.has(profileDrawerScope)){
+      const confirmed=await askOperation({title:"放弃订阅草稿？",description:"尚未保存的订阅设置将被放弃。",confirmLabel:"放弃草稿",danger:true});
+      if(!confirmed)return;
+    }
+    draftScopes.delete(profileDrawerScope);if(draftConflict&&draftConflict.scope===profileDrawerScope)draftConflict=null;
+    profileDrawerScope="";profileDrawerProfile=null;$("profileDrawer").close();updateDraftControls();
+    if(latestServerSnapshot){state=latestServerSnapshot;render();}
+  }
+  async function saveProfileDrawer(){
+    if(profileDrawerSaving)return;
+    const formats=Array.from(document.querySelectorAll(".format-list input:checked")).map((input)=>input.value);
+    if(!formats.length){setStatus("profileCreateStatus","请至少选择一种输出格式。","error");return;}
+    const scope=profileDrawerScope,profile=profileDrawerProfile;
+    const body=Object.assign({action:profile?"profile.update":"profile.create",name:$("profileName").value.trim(),formats},readProfileFilters("createProfileFilter"));
+    if(profile)body.profileId=profile.id;else body.tokenRequired=$("profileTokenRequired").checked;
+    const expiry=$("profileExpiry").value;
+    if(!profile||expiry!==profileDrawerExpiry)body.expiresAt=expiry?new Date(expiry).toISOString():"";
+    profileDrawerSaving=true;$("createProfile").disabled=true;setStatus("profileCreateStatus","正在保存…","muted");
+    try{
+      const result=await postAction(body,scope);profileDrawerScope="";profileDrawerProfile=null;$("profileDrawer").close();
+      await refresh();
+      if(!profile)showSecret(result,result.profile&&result.profile.id||result.profileId||"");
+      else setStatus("globalStatus","订阅设置已保存。","success");
+    }catch(error){setStatus("profileCreateStatus",error.message,"error");}
+    finally{profileDrawerSaving=false;$("createProfile").disabled=false;}
+  }
+
   function renderProfiles(){
-    const body=$("profileRows");if(body.querySelector("[data-profile-editor]"))return;body.replaceChildren();
+    const body=$("profileRows");body.replaceChildren();
+    if(!state.profiles.length)body.append(el("p","还没有订阅档案。点击新建订阅开始。","muted"));
     for(const profile of state.profiles){
       const card=el("div",null,"card");card.dataset.profileId=profile.id;const title=el("h3",profile.name);
       const machineNames=new Map((state.machines||[]).map((machine)=>[machine.uuid,machine.name||machine.uuid]));
@@ -2032,7 +2110,7 @@
         try{const result=await postAction({action:"profile.token.configure",profileId:profile.id,enabled:enabling});showSecret(result,profile.id);await refresh();}
         catch(error){setStatus("globalStatus",error.message,"error");}
       });modeButton.disabled=!active;buttons.append(modeButton);
-      buttons.append(actionButton("编辑筛选",()=>{const existing=card.querySelector("[data-profile-editor]");if(existing){existing.remove();return;}const editor=profileFilterEditor(profile,"edit-"+profile.id);editor.dataset.profileEditor="true";const actions=el("div",null,"actions");actions.append(actionButton("保存筛选",async()=>{try{await postAction(Object.assign({action:"profile.update",profileId:profile.id},readProfileFilters("edit-"+profile.id)),"profile:"+profile.id);editor.remove();await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}}));actions.append(actionButton("取消",()=>editor.remove()));editor.append(actions);card.insertBefore(editor,buttons);refreshProfileMachineOptions(); }));
+      buttons.append(actionButton("编辑订阅",()=>openProfileDrawer(profile)));
       buttons.append(actionButton("轮换令牌",async()=>{const answer=await askOperation({title:"轮换订阅令牌",description:"会生成唯一新令牌，旧令牌和旧订阅链接立即失效。修改筛选不会轮换令牌。",confirmLabel:"轮换并显示新链接",danger:true});if(!answer)return;try{const result=await postAction({action:"profile.rotate",profileId:profile.id,graceSeconds:0});showSecret(result,profile.id);await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}}));
       buttons.append(actionButton("撤销档案",async()=>{const answer=await askOperation({title:"撤销订阅档案",description:"此操作会停止当前档案的订阅访问。",confirmLabel:"撤销档案",danger:true});if(!answer)return;try{await postAction({action:"profile.revoke",profileId:profile.id});await refresh();}catch(e){setStatus("globalStatus",e.message,"error");}} ,"danger"));card.append(buttons);body.append(card);
     }
@@ -2063,7 +2141,7 @@
   async function loadOlderAudit(){if(!state.auditCursor)return;try{const page=await request("/admin/logs?limit=200&before="+encodeURIComponent(state.auditCursor));state.audit=(page.audit||[]).slice().reverse().concat(state.audit||[]);state.auditCursor=page.nextCursor||"";state.auditHasMore=page.hasMore===true;renderAudit();}catch(error){setStatus("globalStatus",error.message,"error");}}
   function applySetupGate(){
     const ready=!!(state&&state.settings&&state.settings.setupComplete===true);
-    const disabledIds=["selectOnlineScans","clearScanSelection","scanLegacySelected","reloadMachines","createProfile","saveSettings","saveDefaultNode","restoreBackup","importBackup","startInstall"];
+    const disabledIds=["selectOnlineScans","clearScanSelection","scanLegacySelected","reloadMachines","openProfileDrawer","createProfile","saveSettings","saveDefaultNode","restoreBackup","importBackup","startInstall"];
     for(const id of disabledIds)if($(id))$(id).disabled=!ready;
     $("startInstall").disabled=!ready||installPlanRunning;
     $("installBatch").disabled=!ready||installPlanRunning;
@@ -2073,7 +2151,7 @@
   }
 
   let protocolCardsReady=false;
-  function render(){if(!state)return;if(!protocolCardsReady){buildProtocolCards();protocolCardsReady=true;}if(!createProfileFiltersReady){$("createProfileFilters").append(profileFilterEditor({machineUuids:[],excludeMachineUuids:[],protocols:[],includeTags:[],addressMode:"auto",sortBy:"name",excludeUnhealthy:true},"createProfileFilter"));createProfileFiltersReady=true;}renderOverview();renderMachines();renderJobs();renderProfiles();renderSettings();renderAudit();renderDeploymentResults();refreshProfileMachineOptions();applySetupGate();}
+  function render(){if(!state)return;if(!protocolCardsReady){buildProtocolCards();protocolCardsReady=true;}renderOverview();renderMachines();renderJobs();renderProfiles();renderSettings();renderAudit();renderDeploymentResults();refreshProfileMachineOptions();applySetupGate();}
 
   let refreshPromise = null;
   let refreshPending = false;
@@ -2228,7 +2306,15 @@
     if(!showInstallPreflight())return;
     await runInstallPlan(machineIds,protocols);
   });
-  $("createProfile").addEventListener("click",async()=>{try{const formats=Array.from(document.querySelectorAll(".format-list input:checked")).map((x)=>x.value);const expiry=$("profileExpiry").value?new Date($("profileExpiry").value).toISOString():"";const result=await postAction(Object.assign({action:"profile.create",name:$("profileName").value.trim(),formats,expiresAt:expiry||undefined,tokenRequired:$("profileTokenRequired").checked},readProfileFilters("createProfileFilter")),"profile:create");showSecret(result,result.profile&&result.profile.id||result.profileId||"");await refresh();}catch(error){setStatus("globalStatus",error.message,"error");}});
+  $("openProfileDrawer").addEventListener("click",()=>openProfileDrawer());
+  $("closeProfileDrawer").addEventListener("click",closeProfileDrawer);
+  $("cancelProfileDrawer").addEventListener("click",closeProfileDrawer);
+  $("profileDrawer").addEventListener("cancel",(event)=>{event.preventDefault();closeProfileDrawer();});
+  $("profileDrawer").addEventListener("click",(event)=>{if(event.target!==event.currentTarget)return;const rect=event.currentTarget.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)closeProfileDrawer();});
+  $("profileDrawer").addEventListener("input",updateProfileSelectionSummary);
+  $("profileDrawer").addEventListener("change",updateProfileSelectionSummary);
+  $("profileConflict").addEventListener("click",async()=>{await safeRevisionConflictAction();setStatus("profileCreateStatus",draftConflict?"请核对服务器状态后重试。":"已保留草稿，请核对后再次保存。","muted");});
+  $("createProfile").addEventListener("click",saveProfileDrawer);
   $("saveSettings").addEventListener("click",async()=>{try{await postAction({action:"settings.update",publicBaseUrl:$("publicBaseUrl").value.trim(),converterUrl:$("subconverterUrl").value.trim(),converterTarget:$("converterTarget").value,privateSite:$("privateSite").checked},"settings:connection");setStatus("settingsStatus","连接与转换设置已保存。","success");await refresh();}catch(error){setStatus("settingsStatus",error.message,"error");}});
   $("saveDefaultNode").addEventListener("click",async()=>{const enable=$("autoProvisionEnabled").checked;let confirmAutoProvision=false;if(enable&&state.settings.autoProvisionNewProbes!==true){const answer=await askOperation({title:"授权新探针自动部署",description:"之后首次发现的新探针会运行 OneBox 安装任务，可能修改代理配置和防火墙。当前已知探针不会批量安装；已派发任务不会被关闭开关撤回。",confirmLabel:"授权后续新探针",danger:true});if(!answer)return;confirmAutoProvision=true;}try{await postAction({action:"settings.defaults.update",defaultNode:{protocol:"vless",listenPort:Number($("defaultNodePort").value),listenAddress:$("defaultNodeAddress").value},autoProvisionNewProbes:enable,confirmAutoProvision},"settings:defaults");setStatus("autoProvisionStatus",enable?"已授权后续新探针自动部署。":"已关闭新自动部署；已派发任务继续执行。","success");await refresh();}catch(error){setStatus("autoProvisionStatus",error.message,"error");}});
   function pluginUpdateStatusMessage(result){

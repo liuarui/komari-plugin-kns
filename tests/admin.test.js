@@ -460,13 +460,15 @@ test("attention todos render above the machine list and the metric can jump to t
 });
 
 
-test("subscription tab lists existing profiles before the create form", () => {
+test("subscription tab keeps the profile list and opens a separate editor", () => {
   const start = source.indexOf('id="subscriptions"');
   const end = source.indexOf('id="settings"');
   const section = source.slice(start, end);
-  assert.ok(section.indexOf('id="profileRows"') < section.indexOf('id="profileName"'), "existing profiles must appear before the create form");
-  assert.doesNotMatch(section, /id="profileName"[^>]*value="默认订阅"/);
-  assert.match(section, /id="profileName"[^>]*placeholder="新订阅"/);
+  assert.match(section, /id="profileRows"/);
+  assert.match(section, /id="openProfileDrawer"/);
+  assert.doesNotMatch(section, /id="profileName"/);
+  assert.match(source, /id="profileDrawer"/);
+  assert.match(source, /id="profileName"[^>]*placeholder="新订阅"/);
   assert.match(source, /包含机器/);
   assert.match(source, /排除机器/);
   assert.match(source, /搜索机器名称或 UUID/);
@@ -512,7 +514,8 @@ test("reconcile job details offer a check action and info dialogs hide cancel", 
 
   assert.match(source, /hideCancel: true/);
   const section = source.slice(source.indexOf('id="subscriptions"'), source.indexOf('id="settings"'));
-  assert.ok(section.indexOf('id="profileRows"') < section.indexOf('id="profileName"'), "subscription order from UX-0003 must remain");
+  assert.match(section, /id="profileRows"/);
+  assert.match(section, /id="openProfileDrawer"/);
 });
 
 
