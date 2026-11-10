@@ -390,13 +390,21 @@ function prepareSubscription(state, profile, decrypt) {
     }
   }
   const selection = profileSelection(profile);
+  const legacyProtocols = Array.isArray(profile.protocols) && profile.protocols.length ? new Set(profile.protocols) : null;
+  const legacyTags = Array.isArray(profile.includeTags) && profile.includeTags.length ? new Set(profile.includeTags) : null;
   for (const legacy of profile.legacy ? (state.legacyNodes || []) : []) {
     if (legacy.enabled === false || !matchesProfileSelection(legacy, selection)) continue;
-    if (legacy.uri) { uris.push(legacy.uri); continue; }
-    if (!legacy.ciphertext) continue;
+    if (legacyTags && !(Array.isArray(legacy.tags) && legacy.tags.some((tag) => legacyTags.has(tag)))) continue;
     try {
-      const uri = decrypt(legacy.ciphertext);
-      if (uri) uris.push(uri);
+      const uri = legacy.uri || (legacy.ciphertext && decrypt(legacy.ciphertext));
+      if (!uri) continue;
+      if (legacyProtocols) {
+        const match = String(uri).match(/^([a-z][a-z0-9+.-]*):\/\//i);
+        const scheme = match && match[1].toLowerCase();
+        const protocol = ({ ss: "shadowsocks", hy2: "hysteria2", hysteria: "hysteria2" })[scheme] || scheme;
+        if (!legacyProtocols.has(protocol)) continue;
+      }
+      uris.push(uri);
     } catch (_) {}
   }
   const skippedCount = Math.max(0, candidateCount - representedInstanceIds.size);
@@ -417,34 +425,44 @@ function loonLine(proxy) {
   const port = proxy.port;
   const sni = proxy.servername || proxy.sni || "";
   const insecure = proxy["skip-cert-verify"] ? "true" : "false";
-  const alpn = Array.isArray(proxy.alpn) && proxy.alpn.length ? "alpn=" + proxy.alpn.join(",") : "";
+  const alpn = Array.isArray(proxy.alpn) && proxy.alpn.length ? "alpn=" + JSON.stringify(proxy.alpn.join(",")) : "";
   switch (proxy.type) {
     case "vless": {
-      const parts = ["VLESS", server, String(port), JSON.stringify(proxy.uuid || ""), "transport=" + (proxy.network || "tcp"), "tls=true"];
+      const parts = ["VLESS", server, String(port), JSON.stringify(proxy.uuid || ""), "transport=" + (proxy.network || "tcp"), "over-tls=" + (proxy.tls ? "true" : "false")];
       if (sni) parts.push("sni=" + sni);
       if (proxy.flow) parts.push("flow=" + proxy.flow);
       if (proxy["reality-opts"]) {
-        parts.push("public-key=" + (proxy["reality-opts"]["public-key"] || ""));
+        parts.push("public-key=" + JSON.stringify(proxy["reality-opts"]["public-key"] || ""));
         parts.push("short-id=" + (proxy["reality-opts"]["short-id"] || ""));
+        const fingerprint = proxy["client-fingerprint"] || "chrome";
+        parts.push("tls-profile=" + (["global", "default", "safari-ios18", "safari-ios-26", "chrome", "chrome147"].includes(fingerprint) ? fingerprint : "chrome"));
       }
       if (alpn) parts.push(alpn);
       parts.push("skip-cert-verify=" + insecure);
       return name + " = " + parts.join(", ");
     }
     case "trojan":
-      return name + " = Trojan, " + server + ", " + port + ", " + JSON.stringify(proxy.password || "") + (sni ? ", sni=" + sni : "") + ", skip-cert-verify=" + insecure;
+    case "anytls":
+      return name + " = " + (proxy.type === "anytls" ? "AnyTLS" : "Trojan") + ", " + server + ", " + port + ", " + JSON.stringify(proxy.password || "") + (sni ? ", sni=" + sni : "") + (alpn ? ", " + alpn : "") + ", skip-cert-verify=" + insecure;
     case "vmess": {
-      const parts = ["VMess", server, String(port), "username=" + (proxy.uuid || ""), "transport=" + (proxy.network || "tcp"), "tls=true"];
+      const parts = ["VMess", server, String(port), proxy.cipher || "auto", JSON.stringify(proxy.uuid || ""), "transport=" + (proxy.network || "tcp"), "over-tls=" + (proxy.tls ? "true" : "false")];
       if (sni) parts.push("sni=" + sni);
       if (proxy.alterId != null) parts.push("alterId=" + proxy.alterId);
-      if (proxy.cipher) parts.push("encrypt-method=" + proxy.cipher);
+      if (alpn) parts.push(alpn);
       parts.push("skip-cert-verify=" + insecure);
       return name + " = " + parts.join(", ");
     }
     case "ss":
-      return name + " = Shadowsocks, " + server + ", " + port + ", encrypt-method=" + (proxy.cipher || "aes-128-gcm") + ", password=" + JSON.stringify(proxy.password || "") + ", udp-relay=true";
-    case "hysteria2":
-      return name + " = Hysteria2, " + server + ", " + port + ", " + JSON.stringify(proxy.password || "") + (sni ? ", sni=" + sni : "") + ", skip-cert-verify=" + insecure;
+      return name + " = Shadowsocks, " + server + ", " + port + ", " + (proxy.cipher || "aes-128-gcm") + ", " + JSON.stringify(proxy.password || "") + ", udp=true";
+    case "hysteria2": {
+      const parts = ["Hysteria2", server, String(port), JSON.stringify(proxy.password || "")];
+      if (sni) parts.push("sni=" + sni);
+      if (alpn) parts.push(alpn);
+      if (proxy.obfs === "salamander" && proxy["obfs-password"]) parts.push("salamander-password=" + JSON.stringify(proxy["obfs-password"]));
+      if (proxy.down) parts.push("download-bandwidth=" + parseInt(proxy.down, 10));
+      parts.push("skip-cert-verify=" + insecure);
+      return name + " = " + parts.join(", ");
+    }
     case "tuic":
       return name + " = TUIC, " + server + ", " + port + ", " + JSON.stringify(proxy.uuid || "") + ", " + JSON.stringify(proxy.password || "") + (sni ? ", sni=" + sni : "") + ", skip-cert-verify=" + insecure;
     default:
@@ -453,16 +471,16 @@ function loonLine(proxy) {
 }
 
 function loon(proxies) {
-  const supported = new Set(["vless", "trojan", "vmess", "ss", "hysteria2", "tuic"]);
+  const supported = new Set(["vless", "trojan", "anytls", "vmess", "ss", "hysteria2"]);
   const included = proxies.filter((proxy) => supported.has(proxy.type));
   const lines = included.map(loonLine).filter(Boolean);
   const names = included.map(clientName);
   const group = "KNS = select, " + (names.length ? names.join(", ") + ", " : "") + "DIRECT";
   const body = ["[Proxy]", ...lines, "", "[Proxy Group]", group, "", "[Rule]", "FINAL,KNS", ""].join("\n");
-  return { body, contentType: "text/plain; charset=utf-8", successCount: lines.length, skipped: clientSkipped(proxies, included) };
+  return { body, contentType: "text/plain; charset=utf-8", successCount: lines.length, skipped: clientSkipped(proxies, lines) };
 }
 
-function surgeLine(proxy) {
+function surgeLine(proxy, advancedHysteria2) {
   const name = clientName(proxy);
   const server = proxy.server;
   const port = proxy.port;
@@ -476,20 +494,20 @@ function surgeLine(proxy) {
     case "ss":
       return name + " = ss, " + server + ", " + port + ", encrypt-method=" + (proxy.cipher || "aes-128-gcm") + ", password=" + (proxy.password || "") + ", udp-relay=true";
     case "hysteria2":
-      return name + " = hysteria2, " + server + ", " + port + ", password=" + (proxy.password || "") + (sni ? ", sni=" + sni : "") + ", skip-cert-verify=" + insecure;
+      return name + " = hysteria2, " + server + ", " + port + ", password=" + (proxy.password || "") + (sni ? ", sni=" + sni : "") + (advancedHysteria2 && proxy.alpn && proxy.alpn.length ? ", alpn=" + JSON.stringify(proxy.alpn.join(",")) : "") + (advancedHysteria2 && proxy.down ? ", download-bandwidth=" + parseInt(proxy.down, 10) : "") + (advancedHysteria2 && proxy.obfs === "salamander" && proxy["obfs-password"] ? ", salamander-password=" + JSON.stringify(proxy["obfs-password"]) : "") + ", skip-cert-verify=" + insecure;
     default:
       return "";
   }
 }
 
-function surge(proxies) {
+function surge(proxies, advancedHysteria2) {
   const supported = new Set(["trojan", "vmess", "ss", "hysteria2"]);
   const included = proxies.filter((proxy) => supported.has(proxy.type));
-  const lines = included.map(surgeLine).filter(Boolean);
+  const lines = included.map((proxy) => surgeLine(proxy, advancedHysteria2)).filter(Boolean);
   const names = included.map(clientName);
   const group = "KNS = select, " + (names.length ? names.join(", ") + ", " : "") + "DIRECT";
   const body = ["[Proxy]", ...lines, "", "[Proxy Group]", group, "", "[Rule]", "FINAL,KNS", ""].join("\n");
-  return { body, contentType: "text/plain; charset=utf-8", successCount: lines.length, skipped: clientSkipped(proxies, included) };
+  return { body, contentType: "text/plain; charset=utf-8", successCount: lines.length, skipped: clientSkipped(proxies, lines) };
 }
 
 function quanxLine(proxy) {
@@ -499,28 +517,28 @@ function quanxLine(proxy) {
   const sni = proxy.servername || proxy.sni || "";
   const insecure = proxy["skip-cert-verify"] ? "false" : "true";
   switch (proxy.type) {
-    case "vless":
-      return "vless=" + server + ":" + port + ", method=none, password=" + (proxy.uuid || "") + ", obfs=over-tls" + (sni ? ", obfs-host=" + sni + ", tls-host=" + sni : "") + ", tls-verification=" + insecure + ", fast-open=false, udp-relay=true, tag=" + name;
+    case "vless": {
+      const reality = proxy["reality-opts"];
+      return "vless=" + hostPort(server, port) + ", method=none, password=" + (proxy.uuid || "") + ", obfs=over-tls" + (sni ? ", obfs-host=" + sni + ", tls-host=" + sni : "") + (reality ? ", reality-base64-pubkey=" + (reality["public-key"] || "") + ", reality-hex-shortid=" + (reality["short-id"] || "") : "") + (proxy.flow ? ", vless-flow=" + proxy.flow : "") + ", tls-verification=" + insecure + ", fast-open=false, udp-relay=true, tag=" + name;
+    }
     case "trojan":
       return "trojan=" + server + ":" + port + ", password=" + (proxy.password || "") + ", over-tls=true" + (sni ? ", tls-host=" + sni : "") + ", tls-verification=" + insecure + ", tag=" + name;
     case "vmess":
       return "vmess=" + server + ":" + port + ", method=chacha20-poly1305, password=" + (proxy.uuid || "") + ", obfs=over-tls" + (sni ? ", obfs-host=" + sni + ", tls-host=" + sni : "") + ", tls-verification=" + insecure + ", tag=" + name;
     case "ss":
       return "shadowsocks=" + server + ":" + port + ", method=" + (proxy.cipher || "aes-128-gcm") + ", password=" + (proxy.password || "") + ", tag=" + name;
-    case "hysteria2":
-      return "hysteria2=" + server + ":" + port + ", password=" + (proxy.password || "") + ", obfs=" + (proxy.obfs || "none") + (proxy["obfs-password"] ? ", obfs-password=" + proxy["obfs-password"] : "") + ", tag=" + name;
     default:
       return "";
   }
 }
 
 function quanx(proxies) {
-  const supported = new Set(["vless", "trojan", "vmess", "ss", "hysteria2"]);
+  const supported = new Set(["vless", "trojan", "vmess", "ss"]);
   const included = proxies.filter((proxy) => supported.has(proxy.type));
   const lines = included.map(quanxLine).filter(Boolean);
   const names = included.map(clientName);
   const body = ["[server_local]", ...lines, "", "[policy]", "static=KNS, " + (names.length ? names.join(", ") + ", " : "") + "direct", "", "[filter_local]", "final, KNS", ""].join("\n");
-  return { body, contentType: "text/plain; charset=utf-8", successCount: lines.length, skipped: clientSkipped(proxies, included) };
+  return { body, contentType: "text/plain; charset=utf-8", successCount: lines.length, skipped: clientSkipped(proxies, lines) };
 }
 
 function quan(proxies) {
@@ -566,8 +584,8 @@ function renderSubscription(prepared, format) {
     case "singbox-outbounds": return { body: JSON.stringify(singbox(proxies, false), null, 2) + "\n", contentType: "application/json; charset=utf-8", successCount: proxies.length, skippedCount };
     case "singbox-full": return { body: JSON.stringify(singbox(proxies, true), null, 2) + "\n", contentType: "application/json; charset=utf-8", successCount: proxies.length, skippedCount };
     case "loon": return clientResult(loon(proxies));
-    case "surge":
-    case "surfboard": return clientResult(surge(proxies));
+    case "surge": return clientResult(surge(proxies, true));
+    case "surfboard": return clientResult(surge(proxies, false));
     case "quanx": return clientResult(quanx(proxies));
     case "quan": return clientResult(quan(proxies));
     case "stash":

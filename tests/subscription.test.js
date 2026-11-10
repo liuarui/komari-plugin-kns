@@ -98,9 +98,11 @@ test("native client formats generate Loon, Surge, Quantumult X, Shadowrocket, St
   const build = (format) => buildSubscription(state, { instanceIds: null }, format, decrypt);
   const loon = build("loon").body;
   assert.match(loon, /^\[Proxy\]/);
-  assert.match(loon, /VLESS, vless\.example\.com/);
+  assert.match(loon, /VLESS, vless\.example\.com, 443, "123e4567-e89b-42d3-a456-426614174000", transport=tcp, over-tls=true/);
+  assert.match(loon, /public-key="pk", short-id=sid, tls-profile=chrome/);
   assert.match(loon, /Trojan, trojan\.example\.com/);
   assert.match(loon, /Shadowsocks, ss\.example\.com/);
+  assert.match(loon, /Shadowsocks, ss\.example\.com, 443, aes-128-gcm, "ss-pass", udp=true/);
   const surge = build("surge").body;
   assert.match(surge, /^\[Proxy\]/);
   assert.match(surge, /trojan, trojan\.example\.com/);
@@ -108,7 +110,7 @@ test("native client formats generate Loon, Surge, Quantumult X, Shadowrocket, St
   assert.doesNotMatch(surge, /vless, vless\.example\.com/);
   const quanx = build("quanx").body;
   assert.match(quanx, /^\[server_local\]/);
-  assert.match(quanx, /vless=vless\.example\.com:443/);
+  assert.match(quanx, /vless=vless\.example\.com:443, method=none, password=123e4567-e89b-42d3-a456-426614174000, obfs=over-tls, obfs-host=vless\.example\.com, tls-host=vless\.example\.com, reality-base64-pubkey=pk, reality-hex-shortid=sid, vless-flow=xtls-rprx-vision/);
   assert.match(quanx, /trojan=trojan\.example\.com:443/);
   const quan = build("quan").body;
   assert.match(quan, /^\[server\]/);
@@ -131,6 +133,8 @@ test("native client formats generate Loon, Surge, Quantumult X, Shadowrocket, St
   const ssdJson = JSON.parse(Buffer.from(ssd.slice("ssd://".length), "base64").toString("utf8"));
   assert.equal(ssdJson.servers.length, 1);
   assert.equal(ssdJson.servers[0].server, "ss.example.com");
+  assert.equal(build("loon").skippedCount, 0);
+  assert.equal(build("quanx").skippedCount, 1, "Quantumult X must count unsupported Hysteria2 as skipped");
 });
 
 test("protocol tuning options render in URI, Mihomo and sing-box outputs", () => {
@@ -161,6 +165,12 @@ test("protocol tuning options render in URI, Mihomo and sing-box outputs", () =>
   assert.equal(outbound.down_mbps, 200);
   assert.deepEqual(outbound.obfs, { type: "salamander", password: "op" });
   assert.equal(outbound.tls.insecure, true);
+  const loon = buildSubscription(state, profile, "loon", decrypt).body;
+  assert.match(loon, /alpn="h3", salamander-password="op", download-bandwidth=200/);
+  const surge = buildSubscription(state, profile, "surge", decrypt).body;
+  assert.match(surge, /alpn="h3", download-bandwidth=200, salamander-password="op"/);
+  const surfboard = buildSubscription(state, profile, "surfboard", decrypt).body;
+  assert.doesNotMatch(surfboard, /alpn=|download-bandwidth|salamander-password/);
 });
 
 test("plaintext instance credentials render without invoking decryption", () => {
@@ -287,6 +297,18 @@ test("legacy leftover URIs obey profile machine and instance filters", () => {
   assert.equal(result({ instanceIds: ["legacy-b"] }).body, "vless://legacy-b\n");
   assert.equal(result({ machineUuids: ["machine-a"], excludeMachineUuids: ["machine-a"] }).successCount, 0);
   assert.equal(result({}).successCount, 3, "unrestricted leftover profiles keep unowned URIs");
+});
+
+test("legacy URI nodes obey protocol and tag filters", () => {
+  const state = { instances: [], legacyNodes: [
+    { id: "legacy-a", machineUuid: "machine-a", tags: ["alpha"], ciphertext: "vless://legacy-a", enabled: true },
+    { id: "legacy-b", machineUuid: "machine-b", tags: ["beta"], uri: "ss://legacy-b", enabled: true },
+    { id: "legacy-c", machineUuid: "machine-c", tags: ["beta"], uri: "hy2://legacy-c", enabled: true },
+  ] };
+  const build = (profile) => buildSubscription(state, Object.assign({ legacy: true }, profile), "uri", (value) => value);
+  assert.equal(build({ protocols: ["vless"] }).body, "vless://legacy-a\n");
+  assert.equal(build({ protocols: ["shadowsocks"], includeTags: ["beta"] }).body, "ss://legacy-b\n");
+  assert.equal(build({ protocols: ["hysteria2"] }).body, "hy2://legacy-c\n");
 });
 
 test("legacy leftover nodes remain URI-only and do not generate empty native configs", () => {

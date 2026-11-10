@@ -2,6 +2,15 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.6] - 2026-11-10
+
+- Correct Loon node syntax and include VLESS Reality, Hysteria2 obfuscation, bandwidth, ALPN, and AnyTLS settings.
+- Include Quantumult X Reality public key, short ID, and VLESS flow; bracket IPv6 endpoints and report unsupported node types as skipped.
+- Include documented Hysteria2 ALPN, bandwidth, and Salamander settings in Surge subscriptions.
+- Apply protocol and tag filters to legacy subscription nodes and include their matching fields in snapshot invalidation.
+- Mark ambiguous Komari dispatch responses for reconciliation and block further remote mutations until the machine has been checked and the alert handled.
+- Explain blocked machine install targets and uncertain remote tasks in the workspace.
+
 ## [1.0.5] - 2026-11-10
 
 - Show every supported native client format in existing subscription link dialogs, including Loon and Quantumult X.

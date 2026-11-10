@@ -155,10 +155,10 @@ test("a superseded conflict cannot rebase an unrelated or already saved draft", 
 });
 
 function installContext() {
-  const context = vm.createContext({ URL, Set });
+  const context = vm.createContext({ URL, Set, state: { jobs: [] }, latestServerSnapshot: null });
   vm.runInContext(between("  const protocolCatalog =", "  function selectedProtocolIds("), context);
   vm.runInContext(between("  function formatEndpointHost(", "  function currentInstallNetwork("), context);
-  vm.runInContext(between("  function machineInstallAllowed(", "  function runtimeStateLabel("), context);
+  vm.runInContext(between("  function machineHasUnconfirmedDispatch(", "  function runtimeStateLabel("), context);
   return context;
 }
 const machineFixture = (uuid = "a") => ({ uuid, name: uuid, online: true, ipv4: "8.8.8.8", ipv6: "2606:4700:4700::1111", policy: { deployAllowed: true, addressMode: "auto" } });
@@ -227,12 +227,20 @@ test("preflight blocks missing family, IPv4-only listener, stale machine and act
   assert.match(api.installPreflight(state, ["a"], protocol, { ...networkFixture(), nat: true, endpointHost: "https://bad.example/path" }).join(), /不要包含协议/);
 });
 
+test("preflight blocks new installs while a remote dispatch needs reconciliation", () => {
+  const api = installContext(); const state = planFixture();
+  state.jobs.push({ machineUuid: "a", action: "install", state: "needs_reconcile", dispatchUncertain: true });
+  const errors = api.installPreflight(state, ["a"], [{ id: "vless", listenPort: 443 }], networkFixture());
+  assert.match(errors.join(), /上一条远程命令是否送达尚未确认/);
+});
+
 test("install review skips offline targets while checking online targets", () => {
   let checked = null; const statuses = [];
   const context = vm.createContext({
     state: { machines: [{ uuid: "online", online: true }, { uuid: "offline", online: false }] }, latestServerSnapshot: null,
     selectedMachineIds: () => ["online", "offline"], currentProtocolFields: () => [], currentInstallNetwork: () => ({}),
     machineInstallAllowed: (machine) => machine.online === true,
+    machineHasUnconfirmedDispatch: () => false,
     installPreflight: (_snapshot, ids) => { checked = Array.from(ids); return []; },
     setStatus: (_id, message) => statuses.push(message),
   });
@@ -602,6 +610,8 @@ test("install wizard defaults to authorized online machines and explains an empt
     document: { createElement(tag) { return { tag, type: "", value: "", checked: false, disabled: false, dataset: {}, addEventListener() {} }; } },
     installMachineSelection: new Set(),
     draftScopes: new Map(),
+    machineHasUnconfirmedDispatch: () => false,
+    machineInstallBlockReason(machine) { return machine.online !== true ? "机器离线或状态未知。" : machine.policy && machine.policy.deployAllowed ? "" : "此机器尚未授权远程安装。"; },
     machineInstallAllowed(machine) { return machine.online === true && !!(machine.policy && machine.policy.deployAllowed); },
     updateDraftControls() {},
     recomputeAutoPorts() {},
@@ -615,7 +625,7 @@ test("install wizard defaults to authorized online machines and explains an empt
   context.state.machines.forEach((machine) => { machine.online = false; });
   context.renderInstallMachineOptions();
   assert.equal(rows.length, 1);
-  assert.match(rows[0].text, /没有已授权且在线/);
+  assert.match(rows[0].text, /没有可安装机器/);
   checkbox.checked = false;
   search.value = "no-match";
   context.state.machines[0].online = true;

@@ -21,7 +21,7 @@ function runtime(t, server = {}) {
   };
   vm.runInNewContext(fs.readFileSync(filename, "utf8") + `
     masterKey = secrets.getMasterKey(__storageDir__);
-    module.exports = { publicState, ensureInstance, handleAction, makeRemoteCommand, downloadPluginUpdate, save, syncMachines, subscriptionSourceHash, refreshHealth, refreshEndpoints, refreshSubscriptionSnapshots, readSubscriptionSnapshot, subscriptionSnapshotKey, serveSubscription, recordTokenUsage, flushTokenUsage, pollPendingJobs, assertNoActiveJobs, jobRetryable, encryptedBackupEnvelope, decryptBackupEnvelope, handleAction, readBody, unload };
+    module.exports = { publicState, ensureInstance, handleAction, makeRemoteCommand, downloadPluginUpdate, save, syncMachines, subscriptionSourceHash, refreshHealth, refreshEndpoints, refreshSubscriptionSnapshots, readSubscriptionSnapshot, subscriptionSnapshotKey, serveSubscription, recordTokenUsage, flushTokenUsage, pollPendingJobs, assertNoActiveJobs, jobRetryable, dispatchJob, unconfirmedDispatch, encryptedBackupEnvelope, decryptBackupEnvelope, handleAction, readBody, unload };
   `, context, { filename });
   const api = context.module.exports;
   t.after(() => api.unload());
@@ -49,6 +49,40 @@ test("subscription fingerprints ignore observation metadata but include publishe
   instance.health.state = "healthy";
   instance.endpoint.host = "two.example";
   assert.notEqual(hash(), before);
+});
+
+test("subscription fingerprints include legacy filters and ownership inputs", (t) => {
+  const { api, store } = runtime(t);
+  const state = store.read();
+  state.legacyNodes.push({ id: "legacy", machineUuid: "machine-a", tags: ["alpha"], uri: "ss://example", enabled: true });
+  const profile = { id: "profile", legacy: true, protocols: ["shadowsocks"], includeTags: ["alpha"] };
+  const hash = api.subscriptionSourceHash;
+  const before = hash(state, profile, "uri");
+  state.legacyNodes[0].tags.push("beta");
+  assert.notEqual(hash(state, profile, "uri"), before);
+  const afterTags = hash(state, profile, "uri");
+  state.legacyNodes[0].machineUuid = "machine-b";
+  assert.notEqual(hash(state, profile, "uri"), afterTags);
+  const afterMachine = hash(state, profile, "uri");
+  state.legacyNodes[0].id = "legacy-renamed";
+  assert.notEqual(hash(state, profile, "uri"), afterMachine);
+});
+
+test("uncertain Komari dispatches require reconciliation, definite rejections remain retryable", async (t) => {
+  let response = {};
+  let failure = null;
+  const { api } = runtime(t, { async call() { if (failure) throw failure; return response; } });
+  const job = { id: "job", action: "install", machineUuid: "machine", state: "authorized" };
+  await api.dispatchJob(null, job, {});
+  assert.equal(job.state, "needs_reconcile");
+  assert.equal(job.dispatchUncertain, true);
+  assert.equal(api.unconfirmedDispatch({ jobs: [job] }, "machine"), job);
+  response = { task_id: "task-1" };
+  failure = Object.assign(new Error("permission denied"), { code: -32041 });
+  const rejected = { id: "rejected", action: "install", machineUuid: "machine", state: "authorized" };
+  await api.dispatchJob(null, rejected, {});
+  assert.equal(rejected.state, "failed");
+  assert.equal(rejected.dispatchUncertain, undefined);
 });
 
 test("endpoint refresh persists a NAT conflict even when no endpoint is probeable", async (t) => {

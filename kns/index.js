@@ -17,7 +17,7 @@ const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/66c18c35
 const INSTALLER_SHA256 = "9e83c464455d81162170c4e2d33a6b5d8c7e278c959959d86ad431c7ec55ec51";
 const ONEBOX_SCRIPT_VERSION = "1.0.1";
 const ONEBOX_ADAPTER_VERSION = "1.8.0";
-const SUBSCRIPTION_RULES_VERSION = "kns-subscription-v4";
+const SUBSCRIPTION_RULES_VERSION = "kns-subscription-v5";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PROTOCOLS = {
@@ -445,7 +445,7 @@ function subscriptionSourceHash(state, profile, format) {
       credential: instance.credential || null,
       credentialCiphertext: instance.credentialCiphertext,
     })),
-    legacyNodes: profile.legacy ? (state.legacyNodes || []).map((node) => ({ uri: node.uri || "", ciphertext: node.ciphertext, enabled: node.enabled })) : [],
+    legacyNodes: profile.legacy ? (state.legacyNodes || []).map((node) => ({ id: node.id, machineUuid: node.machineUuid, tags: node.tags, uri: node.uri || "", ciphertext: node.ciphertext, enabled: node.enabled })) : [],
   };
   return crypto.createHash("sha256").update(JSON.stringify(projection)).digest("hex");
 }
@@ -833,7 +833,7 @@ async function startAutoProvision(machineUuid) {
     save(state); return;
   }
   const conflictingJob = state.jobs.find((job) => job.machineUuid === machine.uuid && job.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(job.state));
-  if (conflictingJob) return;
+  if (conflictingJob || unconfirmedDispatch(state, machine.uuid)) return;
 
   const validated = validateProtocolSettings({ protocol: template.protocol, listenPort: template.listenPort, listenAddress: template.listenAddress, options: { security: "reality" } });
   if (portConflicts(state, machine.uuid, validated.port, validated.transport, instanceId, validated.listenAddress)) {
@@ -854,7 +854,7 @@ async function startAutoProvision(machineUuid) {
   state = getState();
   machine = state.machines.find((item) => item.uuid === machineUuid);
   if (machine && machine.autoProvision && machine.autoProvision.jobId === submitted.id) {
-    machine.autoProvision.state = submitted.state === "failed" ? "failed" : "installing";
+    machine.autoProvision.state = ["failed", "needs_reconcile", "cancelled"].includes(submitted.state) ? "failed" : "installing";
     machine.autoProvision.updatedAt = now();
     machine.autoProvision.message = submitted.message || "已发送到 Komari Agent，等待部署结果。";
     save(state);
@@ -1531,6 +1531,7 @@ async function pollPendingJobs() {
     for (const job of stateBeforePoll.jobs) {
       if (!job.taskId && ["authorized", "dispatched", "running", "verifying"].includes(job.state) && Date.parse(job.createdAt) < orphanCutoff) {
         job.state = "needs_reconcile";
+        job.dispatchUncertain = true;
         job.updatedAt = now();
         job.message = "任务派发结果未知且没有 Komari task ID；请核对探针状态后再操作。系统未自动重发远程命令。";
         closeJob(job);
@@ -1783,13 +1784,15 @@ async function dispatchJob(state, job, params) {
   try {
     const result = await server.call("admin:exec", params);
     job.taskId = String(result && (result.task_id || result.taskId) || "");
-    if (!job.taskId) { job.state = "failed"; job.message = "Komari 未返回远程任务编号。"; }
+    if (!job.taskId) { job.state = "needs_reconcile"; job.dispatchUncertain = true; job.message = "Komari 未返回任务编号，无法确认命令是否送达。请先核查机器状态，确认处理后再执行其他变更。"; }
     else { job.state = "dispatched"; job.message = "已发送到 Komari Agent，等待执行与回调验证。"; }
   } catch (error) {
-    job.state = "failed";
     const code = error && error.code != null ? safeText(error.code, 32) : "rpc_error";
     job.rpcErrorCode = code;
-    job.message = code === "-32040" ? "Komari 拒绝远程命令：需要管理员重新认证。" : code === "-32041" ? "Komari 拒绝远程命令：权限不足或远程控制未启用。" : "Komari admin:exec 调用失败（" + code + "）；远程输出未保存。";
+    const rejected = ["-32040", "-32041"].includes(code);
+    job.state = rejected ? "failed" : "needs_reconcile";
+    if (!rejected) job.dispatchUncertain = true;
+    job.message = code === "-32040" ? "Komari 拒绝远程命令：需要管理员重新认证。" : code === "-32041" ? "Komari 拒绝远程命令：权限不足或远程控制未启用。" : "Komari 未确认远程命令是否送达（" + code + "）。请先核查机器状态，确认处理后再执行其他变更。";
   }
   job.updatedAt = now();
 }
@@ -1820,9 +1823,23 @@ async function finishDispatch(job, params) {
   if (current.state === "cancelled") return current;
   if (current.callback) {
     current.taskId = job.taskId || current.taskId;
-  } else for (const field of ["taskId", "state", "updatedAt", "message", "rpcErrorCode"]) current[field] = job[field];
+    if (job.dispatchUncertain && !current.taskId) {
+      current.dispatchUncertain = true;
+      current.state = "needs_reconcile";
+      current.updatedAt = job.updatedAt;
+      current.message = "已收到回调，但 Komari 未返回任务编号，无法完成双重核验。请核查机器状态并确认处理。";
+    }
+  } else for (const field of ["taskId", "state", "updatedAt", "message", "rpcErrorCode", "dispatchUncertain"]) current[field] = job[field];
   save(latest);
   return current;
+}
+
+function unconfirmedDispatch(state, machineUuid) {
+  return state.jobs.find((job) => job.machineUuid === machineUuid && job.dispatchUncertain && !["machine.discover", "instance.status"].includes(job.action) && !["succeeded", "cancelled"].includes(job.state) && !(job.attentionAcknowledgedAt && job.attentionAcknowledgedState === job.state));
+}
+
+function requireConfirmedDispatch(state, machineUuid) {
+  if (unconfirmedDispatch(state, machineUuid)) fail("dispatch_unconfirmed", "之前的远程命令可能已经送达。请先只读核查机器，在工作台确认处理后再执行变更。", 409);
 }
 
 function machineByUuid(state, uuid) {
@@ -1998,6 +2015,7 @@ async function handleAction(req, res) {
     const reservedId = "autov1-" + machine.uuid.replace(/-/g, "");
     if (state.instances.some((instance) => instance.id === reservedId && instance.machineUuid === machine.uuid && !instance.deletedAt)) fail("auto_provision_instance_exists", "默认节点已登记，请从节点页执行状态核查。", 409);
     if (machine.online !== true) fail("machine_offline", "探针当前不在线，无法重新提交自动部署。", 409);
+    requireConfirmedDispatch(state, machine.uuid);
     if (state.jobs.some((job) => job.machineUuid === machine.uuid && ["authorized", "dispatched", "running", "verifying"].includes(job.state))) fail("runtime_busy", "该探针仍有远程任务进行中。", 409);
     machine.policy = Object.assign({}, machine.policy || {}, { deployAllowed: true });
     machine.autoProvision = Object.assign({}, machine.autoProvision, { state: "queued", updatedAt: now(), message: "管理员请求重新尝试默认部署。" });
@@ -2018,6 +2036,7 @@ async function handleAction(req, res) {
     }
     if (!jobRetryable(state, failed)) fail("job_not_retryable", "该任务可能已到达探针，不能安全自动重试；请先核对机器状态。", 409);
     const machine = machineByUuid(state, failed.machineUuid);
+    requireConfirmedDispatch(state, machine.uuid);
     if (machine.online !== true) fail("machine_offline", "探针当前不在线，无法重试。", 409);
     requirePolicy(machine);
     if (state.jobs.some((job) => job.machineUuid === machine.uuid && job.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(job.state))) fail("runtime_busy", "该探针的共享 OneBox Runtime 仍有未完成任务。", 409);
@@ -2091,6 +2110,7 @@ async function handleAction(req, res) {
           results.push({ machineUuid, reused: true, accepted: !["failed", "cancelled"].includes(prior.state), job: safeJob(prior) });
           continue;
         }
+        requireConfirmedDispatch(state, machineUuid);
         if (state.jobs.some((job) => job.machineUuid === machineUuid && job.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(job.state))) fail("runtime_busy", "该探针的共享 OneBox Runtime 仍有未完成任务。", 409);
         const instanceId = randomId("kns");
         if (portConflicts(state, machineUuid, validated.port, validated.transport, instanceId, validated.listenAddress)) fail("port_conflict", "该机器已有节点占用相同监听地址、端口和传输类型。", 409);
@@ -2216,6 +2236,7 @@ async function handleAction(req, res) {
       if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于其他导入请求。", 409);
       return json(res, 200, { ok: !["failed", "cancelled"].includes(prior.state), reused: true, job: safeJob(prior) });
     }
+    requireConfirmedDispatch(state, machine.uuid);
     const conflict = state.jobs.find((item) => item.machineUuid === machine.uuid && item.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
     if (conflict) fail("runtime_busy", "该探针已有 OneBox 任务进行中，请等待完成后再导入。", 409);
     const address = ["::", "0.0.0.0", "127.0.0.1", "::1"].includes(candidate.listen.address) ? candidate.listen.address : "::";
@@ -2475,6 +2496,7 @@ async function handleAction(req, res) {
       if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于不同的 OneBox 升级目标。", 409);
       return json(res, 200, { ok: !["failed", "cancelled"].includes(prior.state), reused: true, job: safeJob(prior) });
     }
+    requireConfirmedDispatch(state, machine.uuid);
     const conflict = state.jobs.find((item) => item.machineUuid === machine.uuid && item.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
     if (conflict) fail("runtime_busy", "该探针的共享 OneBox Runtime 仍有未完成任务。", 409);
     const spec = { idempotencyKey, requestHash, version, twoFactorCode: body.twoFactorCode };
@@ -2552,6 +2574,7 @@ async function handleAction(req, res) {
     if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于不同的远程动作。", 409);
     return json(res, 200, { ok: !["failed", "cancelled"].includes(prior.state), reused: true, job: safeJob(prior) });
   }
+  requireConfirmedDispatch(state, machineUuid);
   spec.idempotencyKey = suppliedIdempotencyKey;
   spec.requestHash = requestHash;
   const conflictingJob = state.jobs.find((item) => item.machineUuid === machineUuid && item.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
@@ -2740,7 +2763,7 @@ async function handleReport(req, res) {
     job.callback = { status: body.status, receivedAt: now(), payloadHash: bodyDigest, keyFingerprint: masterKeyFingerprint(currentMasterKey()), instance: node ? Object.assign({}, node, { credential: node.credential }) : null, operationResult };
     delete job.callbackTokenHash;
     delete job.callbackTokenSalt;
-    job.state = "verifying"; job.updatedAt = now(); job.message = runtimeUpgrade ? "回调已验签，正在核对 Agent 退出码与 OneBox 版本/服务状态。" : "回调已验签，正在核对 Agent 退出码与远程实例状态。";
+    job.state = job.dispatchUncertain && !job.taskId ? "needs_reconcile" : "verifying"; job.updatedAt = now(); job.message = job.dispatchUncertain && !job.taskId ? "已收到回调，但没有 Komari 任务编号，无法完成双重核验。请核查机器状态并确认处理。" : runtimeUpgrade ? "回调已验签，正在核对 Agent 退出码与 OneBox 版本/服务状态。" : "回调已验签，正在核对 Agent 退出码与远程实例状态。";
     save(state);
     res.statusCode = 204; res.end();
   } catch (error) {

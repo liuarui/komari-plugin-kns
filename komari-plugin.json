@@ -9,7 +9,7 @@
     "en": "Manage OneBox proxy nodes by machine, install protocols with a three-step wizard, and publish token-protected Mihomo, sing-box, and converted subscriptions."
   },
   "author": "ajax",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "komari": ">=1.4.3",
   "entry": "script.js",
   "permissions": {
