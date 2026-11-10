@@ -2616,18 +2616,21 @@ function buildConverterUrls(state, sourceUrl) {
 
 function buildProfileTokenLinks(state, profile, token, extraFormat) {
   const subscriptionUrls = {};
+  const availableSubscriptionUrls = {};
   const effectiveToken = profile.tokenRequired === false ? "" : String(token || "");
   const formats = new Set(Array.isArray(profile.formats) ? profile.formats : []);
   if (extraFormat && FORMATS.has(String(extraFormat))) formats.add(String(extraFormat));
   for (const format of formats) {
     if (FORMATS.has(format)) subscriptionUrls[format] = profileUrl(state, profile.id, effectiveToken, format);
   }
+  for (const format of FORMATS) availableSubscriptionUrls[format] = profileUrl(state, profile.id, effectiveToken, format);
   const tokenUrl = subscriptionUrls.uri || "";
   const nativeFormat = ["mihomo-full", "mihomo-provider", "singbox-full", "singbox-outbounds"].find((format) => subscriptionUrls[format]) || "";
   return {
     token: effectiveToken,
     tokenRequired: profile.tokenRequired !== false,
     subscriptionUrls,
+    availableSubscriptionUrls,
     tokenUrl,
     nativeUrl: nativeFormat ? subscriptionUrls[nativeFormat] : "",
     nativeFormat,

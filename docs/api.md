@@ -22,6 +22,8 @@ KNS 原生订阅格式为 `uri`、`mihomo-full`、`mihomo-provider`、`singbox-f
 
 请求头：`Content-Type: application/json`；正文上限 1 MiB。兼容调用方可附 `expectedRevision` 保护全局状态；订阅编辑、机器策略和两类设置编辑可改用状态快照的 `expectedEditVersion`，只在对应可编辑内容发生变化时返回 `409 state_revision_conflict`。管理页使用对象版本保护草稿；旧客户端不提供对象版本时仍使用全局 revision。只读扫描、新安装等动作按服务端当前机器、权限、资源和任务状态校验。持久化时仍检查状态版本，真正的并发写入冲突不会强行覆盖。
 
+订阅链接响应中的 `subscriptionUrls` 保持档案已选格式和单次请求格式的兼容语义；`availableSubscriptionUrls` 提供所有原生格式链接，未预生成的格式按需生成。
+
 | `action` | 常用字段 | 返回 |
 | --- | --- | --- |
 | `attention.acknowledge` | `kind:"job"`, `jobId`, `expectedState`；或 `kind:"health"`, `instanceId`, `incidentId` | 标记当前事件已处理，保留任务历史与实际健康状态；节点恢复后再次异常会产生新事件 |

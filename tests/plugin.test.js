@@ -621,6 +621,13 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const created = JSON.parse(profileRes.body);
     const url = new URL(created.tokenUrl);
     assert.deepEqual(Object.keys(created.subscriptionUrls).sort(), ["mihomo-full", "uri"]);
+    assert.equal(Object.keys(created.availableSubscriptionUrls).length, 21);
+    for (const format of ["loon", "surge", "quanx", "shadowrocket", "singbox-full"]) {
+      const available = new URL(created.availableSubscriptionUrls[format]);
+      assert.equal(available.searchParams.get("format"), format);
+      assert.equal(available.searchParams.get("token"), url.searchParams.get("token"));
+      assert.equal(available.searchParams.get("profile"), url.searchParams.get("profile"));
+    }
     assert.equal(new URL(created.converterUrl).searchParams.get("url"), created.tokenUrl);
     assert.equal(new URL(created.converterUrl).searchParams.get("target"), "loon");
     assert.equal(new URL(created.converterUrls.clash).searchParams.get("target"), "clash");
@@ -644,6 +651,10 @@ test("admin policy, task callback, remote status, and protected URI subscription
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     assert.equal(subRes.statusCode, 200);
+    const loonRes = response();
+    await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(new URL(created.availableSubscriptionUrls.loon).searchParams), headers: {} }, loonRes);
+    assert.equal(loonRes.statusCode, 200, loonRes.body);
+    assert.match(loonRes.body, /^\[Proxy\]/);
     assert.match(subRes.body, /^vless:\/\//);
     assert.match(subRes.body, new RegExp(credentialUuid));
     assert.match(subRes.body, new RegExp(legacyCredentialUuid));

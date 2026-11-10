@@ -2,6 +2,11 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.5] - 2026-11-10
+
+- Show every supported native client format in existing subscription link dialogs, including Loon and Quantumult X.
+- Keep the profile's configured pre-generated formats and token unchanged; generate other formats on demand.
+
 ## [1.0.4] - 2026-11-10
 
 - Allow resolved task failures and health incidents to be acknowledged without deleting their history; new incidents are shown again.

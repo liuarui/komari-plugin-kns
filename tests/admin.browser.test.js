@@ -36,7 +36,8 @@ test("machine-centered admin browser acceptance with isolated API fixtures", { s
     if (route.request().method() === "GET") { await route.fulfill({ json: state }); return; }
     const body = route.request().postDataJSON(); sent.push(body);
     if (body.action === "profile.token.show") {
-      await route.fulfill({ status: 201, json: { subscriptionUrls: { uri: "https://fixture.invalid/sub?token=synthetic-uri", "mihomo-full": "https://fixture.invalid/sub?token=synthetic-mihomo" } } }); return;
+      const subscriptionUrls = { uri: "https://fixture.invalid/sub?token=synthetic-uri", "mihomo-full": "https://fixture.invalid/sub?token=synthetic-mihomo" };
+      await route.fulfill({ status: 201, json: { subscriptionUrls, availableSubscriptionUrls: { ...subscriptionUrls, loon: "https://fixture.invalid/sub?format=loon&token=synthetic-loon", quanx: "https://fixture.invalid/sub?format=quanx&token=synthetic-quanx" } } }); return;
     }
     const job = { id: "job-" + sent.length, machineUuid: machine.uuid, instanceId: body.instanceId || "new-node", action: body.action, protocol: body.protocol, state: "dispatched", message: "fixture dispatch", batchId: body.batchId };
     state.jobs.unshift(job);
@@ -106,6 +107,9 @@ test("machine-centered admin browser acceptance with isolated API fixtures", { s
   await page.locator("#deliveryDialog").waitFor({ state: "visible" });
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "https://fixture.invalid/sub?token=synthetic-mihomo");
   assert.equal(await page.locator("#deliveryFormat").inputValue(), "mihomo-full");
+  await page.locator("#deliveryFormat").selectOption("loon");
+  assert.match(await page.locator('[data-delivery-format="loon"] textarea').inputValue(), /format=loon/);
+  assert.equal(await page.locator('[data-delivery-format="loon"]').isVisible(), true);
   await page.locator("#deliveryFormat").selectOption("uri");
   await page.locator('[data-delivery-format="uri"]').getByRole("button", { name: "显示二维码" }).click();
   assert.equal(await page.locator(".qr-panel svg").isVisible(), true);
