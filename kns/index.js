@@ -108,6 +108,32 @@ function assertExpectedRevision(actual, body) {
   }
 }
 
+// Drafts protect only the fields their editor can overwrite. Background job,
+// probe and token-usage updates must not invalidate an unrelated form.
+function editVersion(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+function profileEditVersion(profile) {
+  if (!profile) return "";
+  return editVersion([profile.id, profile.name, profile.formats, profile.instanceIds || null, profile.machineUuids || null,
+    profile.excludeMachineUuids || [], profile.protocols || null, profile.includeTags || [], profile.excludeUnhealthy !== false,
+    profile.addressMode || "auto", profile.sortBy || "name", profile.expiresAt || "", profile.revokedAt || ""]);
+}
+function machinePolicyVersion(machine) {
+  return machine ? editVersion([machine.uuid, machine.policy || {}, machine.removedFromKomariAt || ""]) : "";
+}
+function settingsEditVersion(settings, action) {
+  if (action === "settings.update") return editVersion([settings.publicBaseUrl || "", settings.converterUrl || "", settings.converterTarget || "", settings.privateSite === true]);
+  const node = settings.defaultNode || {};
+  return editVersion([node.protocol || "vless", node.listenPort || 443, node.listenAddress || "::", settings.autoProvisionNewProbes === true]);
+}
+function actionEditVersion(state, body) {
+  if (body.action === "profile.update") return profileEditVersion(state.profiles.find((item) => item.id === String(body.profileId || "")));
+  if (body.action === "machine.policy.update") return machinePolicyVersion(state.machines.find((item) => item.uuid === String(body.machineUuid || "").toLowerCase()));
+  if (["settings.update", "settings.defaults.update"].includes(body.action)) return settingsEditVersion(state.settings, body.action);
+  return "";
+}
+
 function assertNoActiveJobs(state, operation) {
   const active = state.jobs.filter((job) => ["authorized", "dispatched", "running", "verifying"].includes(job.state));
   if (active.length) fail("active_jobs_block_maintenance", operation + "已停止：还有 " + active.length + " 个远程任务未完成。请先核对任务结果。", 409);
@@ -845,6 +871,7 @@ function preferredObservedAddress(machine) {
 
 function safeMachine(machine) {
   return {
+    policyVersion: machinePolicyVersion(machine),
     uuid: machine.uuid, name: machine.name, region: machine.region, os: machine.os, arch: machine.arch,
      online: machine.online, lastSeen: machine.lastSeen, ipv4: machine.ipv4, ipv6: machine.ipv6, sourceIp: machine.sourceIp,
     removedFromKomariAt: machine.removedFromKomariAt || "",
@@ -902,7 +929,7 @@ function publicState(state) {
     sourceUrl: SOURCE_URL,
     revision: state.revision,
     updatedAt: state.updatedAt,
-    settings: Object.assign({}, settings, { oneboxScriptUrl: INSTALLER_URL, oneboxScriptSha256: INSTALLER_SHA256 }),
+    settings: Object.assign({}, settings, { oneboxScriptUrl: INSTALLER_URL, oneboxScriptSha256: INSTALLER_SHA256, connectionEditVersion: settingsEditVersion(state.settings, "settings.update"), defaultsEditVersion: settingsEditVersion(state.settings, "settings.defaults.update") }),
     machines: state.machines.map(safeMachine),
     runtimes: state.runtimes,
     instances: state.instances.map(safeInstance),
@@ -911,7 +938,7 @@ function publicState(state) {
     auditCursor: auditPage.nextCursor,
     auditHasMore: auditPage.hasMore,
     auditRetention: auditPage.retention,
-    profiles: state.profiles.map((profile) => ({ id: profile.id, name: profile.name, createdAt: profile.createdAt, expiresAt: profile.expiresAt || "", revokedAt: profile.revokedAt || "", tokenRequired: profile.tokenRequired !== false, hasRecoverableToken: !!(profile.token || profile.tokenCiphertext) && profileTokenRecords(profile).some((record) => record && !record.revokedAt && (!record.expiresAt || Date.parse(record.expiresAt) > Date.now())), tokens: profileTokenRecords(profile).map(safeProfileToken), formats: profile.formats, instanceIds: profile.instanceIds || null, machineUuids: profile.machineUuids || null, excludeMachineUuids: profile.excludeMachineUuids || [], protocols: profile.protocols || null, includeTags: profile.includeTags || [], excludeUnhealthy: profile.excludeUnhealthy !== false, addressMode: profile.addressMode || "auto", sortBy: profile.sortBy || "name", legacy: !!profile.legacy })),
+    profiles: state.profiles.map((profile) => ({ editVersion: profileEditVersion(profile), id: profile.id, name: profile.name, createdAt: profile.createdAt, expiresAt: profile.expiresAt || "", revokedAt: profile.revokedAt || "", tokenRequired: profile.tokenRequired !== false, hasRecoverableToken: !!(profile.token || profile.tokenCiphertext) && profileTokenRecords(profile).some((record) => record && !record.revokedAt && (!record.expiresAt || Date.parse(record.expiresAt) > Date.now())), tokens: profileTokenRecords(profile).map(safeProfileToken), formats: profile.formats, instanceIds: profile.instanceIds || null, machineUuids: profile.machineUuids || null, excludeMachineUuids: profile.excludeMachineUuids || [], protocols: profile.protocols || null, includeTags: profile.includeTags || [], excludeUnhealthy: profile.excludeUnhealthy !== false, addressMode: profile.addressMode || "auto", sortBy: profile.sortBy || "name", legacy: !!profile.legacy })),
     backups: store.listBackups(),
     subscriptionFormats: Array.from(FORMATS),
     endpointPrecedence: ["instance endpoint override", "machine manual public address", "DDNS domain", "Komari-reported address"],
@@ -1818,8 +1845,12 @@ async function handleAction(req, res) {
   if (action !== "backup.inspect" && Buffer.byteLength(String(req.body || ""), "utf8") > 1024 * 1024) fail("body_too_large", "请求正文超过允许大小。", 413);
   const state = getState();
   if (maintenanceLock && !(action === "plugin.update.unlock" && pluginUpdateLockToken)) fail("maintenance_in_progress", "KNS 正在执行互斥设置或数据维护；请稍后重试。", 409);
-  // Discovery reads the latest machine and task state below and does not edit a draft.
-  if (!["machine.discover", "plugin.update.check", "plugin.update.prepare", "plugin.update.unlock"].includes(action)) assertExpectedRevision(state.revision, body);
+  // Remote jobs validate current targets and resources; their request is not an edit of the whole state.
+  const currentStateActions = ["install", "install.batch", "uninstall", "enable", "disable", "instance.status", "machine.discover", "runtime.script.update", "runtime.kernel.update", "job.retry", "autoProvision.retry", "machine.sync", "profile.create", "profile.preview", "profile.token.show", "plugin.update.check", "plugin.update.prepare", "plugin.update.unlock"];
+  if (body.expectedEditVersion != null) {
+    const currentVersion = actionEditVersion(state, body);
+    if (!currentVersion || typeof body.expectedEditVersion !== "string" || body.expectedEditVersion !== currentVersion) fail("state_revision_conflict", "当前编辑的设置已被其他操作修改。草稿已保留，请核对后再保存。", 409);
+  } else if (!currentStateActions.includes(action)) assertExpectedRevision(state.revision, body);
   if (state.settings.setupComplete !== true && !["setup.complete", "backup.export", "backup.inspect", "backup.restore.preview", "profile.preview", "plugin.update.check", "plugin.update.prepare", "plugin.update.unlock"].includes(action)) {
     fail("setup_required", "请先完成连接设置；未初始化期间管理页面为只读。", 409);
   }

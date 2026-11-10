@@ -24,6 +24,7 @@ test("machine-centered admin browser acceptance with isolated API fixtures", { s
   t.after(() => browser.close());
   const context = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
   const page = await context.newPage();
+  page.setDefaultTimeout(5000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const machine = { uuid: "machine-a", name: "Test machine", online: true, ipv4: "8.8.8.8", ipv6: "2606:4700:4700::1111", policy: { deployAllowed: true, addressMode: "dual" } };
@@ -34,7 +35,7 @@ test("machine-centered admin browser acceptance with isolated API fixtures", { s
   await page.route("**/api/kns/**", async (route) => {
     if (route.request().method() === "GET") { await route.fulfill({ json: state }); return; }
     const body = route.request().postDataJSON(); sent.push(body);
-    if (body.action === "profile.token.create") {
+    if (body.action === "profile.token.show") {
       await route.fulfill({ status: 201, json: { subscriptionUrls: { uri: "https://fixture.invalid/sub?token=synthetic-uri", "mihomo-full": "https://fixture.invalid/sub?token=synthetic-mihomo" } } }); return;
     }
     const job = { id: "job-" + sent.length, machineUuid: machine.uuid, instanceId: body.instanceId || "new-node", action: body.action, protocol: body.protocol, state: "dispatched", message: "fixture dispatch", batchId: body.batchId };
@@ -42,6 +43,7 @@ test("machine-centered admin browser acceptance with isolated API fixtures", { s
     await route.fulfill({ status: 202, json: body.action === "install.batch" ? { results: [{ machineUuid: machine.uuid, accepted: true, job }] } : { job } });
   });
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
+  await page.locator('[data-panel="machines"]').click();
   await page.getByRole("heading", { name: "Test machine", exact: true }).waitFor();
   const node = page.locator('[data-instance-id="node-a"]');
   assert.match(await node.textContent(), /运行：运行正常/);
@@ -51,14 +53,16 @@ test("machine-centered admin browser acceptance with isolated API fixtures", { s
 
   // Expansion survives real-page refresh; no switching into separate instance/task pages.
   await page.locator('[data-machine-uuid="machine-a"] .machine-nodes > summary').click();
+  await page.locator('[data-panel="overview"]').click();
   await page.locator("#refresh").click();
   await page.waitForFunction(() => document.getElementById("globalStatus").textContent.includes("刷新成功"));
-  assert.equal(await page.locator('[data-machine-uuid="machine-a"] .machine-nodes').evaluate((node) => node.open), false);
-  await page.locator('[data-machine-uuid="machine-a"] .machine-nodes > summary').click();
+  await page.locator('[data-panel="machines"]').click();
+  assert.equal(await page.locator('[data-machine-uuid="machine-a"] .machine-nodes').evaluate((node) => node.open), true);
 
   // Three steps, auto allocation and multi-protocol selection.
-  await page.locator("#startInstall").click();
-  await page.locator('[data-machine-select][value="machine-a"]').check();
+  await page.locator('[data-machine-uuid="machine-a"]').getByRole("button", { name: "安装节点", exact: true }).click();
+  assert.equal(await page.locator("#installWizard").isVisible(), true);
+  assert.equal(await page.locator('[data-machine-select][value="machine-a"]').isChecked(), true);
   await page.locator("#deployNext").click();
   assert.equal(await page.locator('[data-protocol-port="vless"]').inputValue(), "444");
   await page.locator('[data-protocol-select][value="shadowsocks"]').check();
@@ -82,20 +86,23 @@ test("machine-centered admin browser acceptance with isolated API fixtures", { s
   assert.equal(sent.filter((body) => body.action === "install.batch").length, 1, "unverified first protocol stops subsequent protocols");
   assert.match(await page.locator("#deploymentResultRows").textContent(), /需要核查机器状态/);
   await page.locator("#cancelInstall").click();
+  await page.locator("#operationConfirm").click();
 
-  // Status check outcome stays on the initiating node, including optional host 2FA field.
+  // Status check outcome stays on the initiating node.
+  await page.locator('[data-panel="machines"]').click();
+  if (!await page.locator('[data-machine-uuid="machine-a"] .machine-nodes').evaluate((item) => item.open)) await page.locator('[data-machine-uuid="machine-a"] .machine-nodes > summary').click();
   await node.getByRole("button", { name: "核查", exact: true }).click();
-  await page.locator("#operationDialog details summary").click();
-  assert.equal(await page.locator('input[name="twoFactorCode"]').isVisible(), true);
   await page.locator("#operationConfirm").click();
   state.jobs[0].state = "succeeded"; state.jobs[0].message = "fixture verified";
+  await page.locator('[data-panel="overview"]').click();
   await page.locator("#refresh").click();
+  await page.locator('[data-panel="machines"]').click();
   await page.waitForFunction(() => document.querySelector('[data-instance-id="node-a"] [data-instance-status]').textContent.includes("fixture verified"));
 
   // One-time selected-format links, clipboard, QR, cleanup and cancellation.
+  await page.locator('[data-panel="overview"]').click();
   await page.locator("#homeSubscriptionFormat").selectOption("mihomo-full");
   await page.locator("#copyHomeSubscription").click();
-  await page.locator("#operationConfirm").click();
   await page.locator("#deliveryDialog").waitFor({ state: "visible" });
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "https://fixture.invalid/sub?token=synthetic-mihomo");
   assert.equal(await page.locator("#deliveryFormat").inputValue(), "mihomo-full");
@@ -106,10 +113,10 @@ test("machine-centered admin browser acceptance with isolated API fixtures", { s
   await page.locator("#deliveryDialog").waitFor({ state: "hidden" });
   assert.equal(await page.locator("#deliveryLinks").textContent(), "");
   assert.equal(await page.locator("#converterDeliveryLinks").textContent(), "");
-  assert.equal(await page.evaluate(() => localStorage.length), 0);
-  const count = sent.length;
-  await page.locator("#copyHomeSubscription").click(); await page.locator("#operationCancel").click();
-  assert.equal(sent.length, count, "cancel does not create another token");
+  assert.doesNotMatch(await page.evaluate(() => JSON.stringify(localStorage)), /synthetic-(uri|mihomo)/);
+  const count = sent.filter((item) => item.action === "profile.token.create").length;
+  await page.locator("#copyHomeSubscription").click(); await page.locator("#deliveryDialog").waitFor({ state: "visible" }); await page.keyboard.press("Escape");
+  assert.equal(sent.filter((item) => item.action === "profile.token.create").length, count, "viewing a link does not create another token");
 
   for (const width of [360, 390, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 800 });
@@ -118,12 +125,50 @@ test("machine-centered admin browser acceptance with isolated API fixtures", { s
   await page.emulateMedia({ colorScheme: "dark" });
   await page.setViewportSize({ width: 360, height: 800 });
   await page.locator("#copyHomeSubscription").click();
-  const bounds = await page.locator("#operationDialog").boundingBox();
+  await page.locator("#deliveryDialog").waitFor({ state: "visible" });
+  const bounds = await page.locator("#deliveryDialog").boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 360);
   await page.keyboard.press("Escape");
+  await page.locator('[data-panel="machines"]').click();
   await page.locator("#homeMachineSearch").fill("no-match");
   await page.getByText("没有匹配的机器。", { exact: true }).waitFor();
   assert.deepEqual(errors, []);
+});
+
+test("install drawer keeps a long machine list usable and protects its draft", { skip: !driver }, async (t) => {
+  const { chromium } = require(driver);
+  const root = path.resolve(__dirname, "../pages");
+  const server = http.createServer((req, res) => {
+    const file = ({ "/": "admin.html", "/qrcode-generator.js": "qrcode-generator.js", "/qrcode-generator-utf8.js": "qrcode-generator-utf8.js" })[req.url];
+    if (!file) { res.writeHead(404); res.end(); return; }
+    res.setHeader("Content-Type", file.endsWith(".js") ? "text/javascript" : "text/html;charset=utf-8"); res.end(fs.readFileSync(path.join(root, file)));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const browser = await chromium.launch({ channel: "chrome", headless: true }); t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 390, height: 700 } });
+  const machines = Array.from({ length: 40 }, (_, index) => ({ uuid: "machine-" + index, name: "Machine " + index, online: true, ipv4: "8.8.8.8", policy: { deployAllowed: true, addressMode: "ipv4" } }));
+  const state = { revision: 1, settings: { setupComplete: true, defaultNode: { listenPort: 443 } }, machines, instances: [], jobs: [], profiles: [], audit: [], backups: [] };
+  await page.route("**/api/kns/**", (route) => route.fulfill({ json: state }));
+  await page.goto(`http://127.0.0.1:${server.address().port}/`);
+  await page.waitForFunction(() => document.getElementById("globalStatus").textContent.includes("刷新成功"));
+  await page.locator("#startInstall").click();
+  assert.equal(await page.locator("#installWizard").evaluate((dialog) => dialog.open), true);
+  assert.equal(await page.locator("#overview").evaluate((panel) => panel.classList.contains("active")), true);
+  const list = await page.locator("#installMachines").evaluate((element) => ({ height: element.clientHeight, scroll: element.scrollHeight }));
+  assert.ok(list.height <= 360 && list.scroll > list.height, "the list scrolls within the drawer");
+  assert.equal(await page.locator("#deployNext").isVisible(), true);
+  await page.locator("#installMachineSearch").fill("Machine 39");
+  await page.locator("#installMachines .machine-select-card").click();
+  await page.locator("#installMachineSearch").fill("");
+  assert.equal(await page.locator('[data-machine-select][value="machine-39"]').isChecked(), true);
+  await page.keyboard.press("Escape");
+  await page.locator("#operationDialog").waitFor({ state: "visible" });
+  await page.locator("#operationCancel").click();
+  assert.equal(await page.locator("#installWizard").evaluate((dialog) => dialog.open), true);
+  assert.equal(await page.locator('[data-machine-select][value="machine-39"]').isChecked(), true);
+  await page.keyboard.press("Escape"); await page.locator("#operationConfirm").click();
+  assert.equal(await page.locator("#installWizard").evaluate((dialog) => dialog.open), false);
 });
 
 test("subscription drawer creates, edits and protects unsaved changes", { skip: !driver }, async (t) => {

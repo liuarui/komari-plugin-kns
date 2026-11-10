@@ -35,6 +35,13 @@ test("admin requests preserve structured server errors", async () => {
   await assert.rejects(context.request("/admin/action"), (error) => error.code === "state_revision_conflict" && error.currentRevision === 3 && error.expectedRevision === 2);
 });
 
+test("connection loss and unreadable responses are reported as an unknown submission", async () => {
+  for (const fetch of [async () => { throw new TypeError("connection lost"); }, async () => ({ ok: true, headers: { get: () => "application/json" }, json: async () => { throw new SyntaxError("truncated"); } })]) {
+    const context = requestContext(fetch);
+    await assert.rejects(context.request("/admin/action", { method: "POST" }), (error) => error.code === "request_response_unknown");
+  }
+});
+
 test("concurrent admin refreshes queue one fresh read without overlapping or losing drafts", async () => {
   const pending = [];
   const rendered = [];
@@ -220,6 +227,23 @@ test("preflight blocks missing family, IPv4-only listener, stale machine and act
   assert.match(api.installPreflight(state, ["a"], protocol, { ...networkFixture(), nat: true, endpointHost: "https://bad.example/path" }).join(), /不要包含协议/);
 });
 
+test("install review skips offline targets while checking online targets", () => {
+  let checked = null; const statuses = [];
+  const context = vm.createContext({
+    state: { machines: [{ uuid: "online", online: true }, { uuid: "offline", online: false }] }, latestServerSnapshot: null,
+    selectedMachineIds: () => ["online", "offline"], currentProtocolFields: () => [], currentInstallNetwork: () => ({}),
+    machineInstallAllowed: (machine) => machine.online === true,
+    installPreflight: (_snapshot, ids) => { checked = Array.from(ids); return []; },
+    setStatus: (_id, message) => statuses.push(message),
+  });
+  vm.runInContext(between("  function showInstallPreflight(", "  function updateConnectionPreview("), context);
+  assert.equal(context.showInstallPreflight(), true);
+  assert.deepEqual(checked, ["online"]);
+  context.state.machines[0].online = false;
+  assert.equal(context.showInstallPreflight(), false);
+  assert.match(statuses.at(-1), /都不能安装/);
+});
+
 test("inline results advance only with actual backend job states even without a deployment batch", () => {
   const statuses = new Map();
   const context = vm.createContext({ operationJobs: new Map(), deploymentBatch: [],
@@ -241,7 +265,7 @@ test("inline results advance only with actual backend job states even without a 
 
 test("setup gate never re-enables offline machine or stale maintenance buttons", () => {
   const controls = new Map(); const offline = { disabled: true }; const stale = { disabled: true };
-  const context = vm.createContext({ state: { settings: { setupComplete: true } }, installPlanRunning: true, batchClaimRunning: false,
+  const context = vm.createContext({ state: { settings: { setupComplete: true } }, installPlanRunning: true, batchClaimRunning: false, legacyScanRunning: false,
     $: (id) => { if (!controls.has(id)) controls.set(id, {}); return controls.get(id); },
     document: { querySelectorAll: (selector) => selector.includes("button") ? [offline, stale] : [] },
   });
@@ -270,6 +294,37 @@ test("install.batch uses the latest server revision instead of a frozen deploy d
   context.draftScopes.set("settings:connection", 1);
   await context.postAction({ action: "settings.update", publicBaseUrl: "https://monitor.example" }, "settings:connection");
   assert.equal(posts[1].expectedRevision, 1, "settings drafts still use the frozen revision");
+});
+
+test("profile edits send their own version despite unrelated global changes", async () => {
+  const sent = [];
+  const context = vm.createContext({
+    state: { revision: 1, profiles: [{ id: "p", editVersion: "original-profile" }] },
+    latestServerSnapshot: { revision: 7, profiles: [{ id: "p", editVersion: "original-profile" }] },
+    draftScopes: new Map([["profile:p", 1]]), draftConflict: null,
+    trackOperationResult() {}, updateDraftControls() {},
+    request: async (_url, options) => { sent.push(JSON.parse(options.body)); return { ok: true }; },
+  });
+  vm.runInContext(between("  const remoteTaskActions = new Set(", "  function idempotencyKey("), context);
+  await context.postAction({ action: "profile.update", profileId: "p", name: "edited" }, "profile:p");
+  assert.equal(sent[0].expectedEditVersion, "original-profile");
+  assert.equal(sent[0].expectedRevision, 1);
+});
+
+test("saving a draft temporarily locks its controls and restores their prior state", async () => {
+  let finish;
+  const fields = [{ disabled: false }, { disabled: true }, { disabled: false }];
+  const context = vm.createContext({
+    document: { querySelectorAll: () => fields },
+    state: { revision: 1, profiles: [{ id: "p", editVersion: "v1" }] }, latestServerSnapshot: null,
+    draftScopes: new Map([["profile:p", 1]]), draftConflict: null,
+    request: () => new Promise((resolve) => { finish = resolve; }), trackOperationResult() {}, updateDraftControls() {},
+  });
+  vm.runInContext(between("  const remoteTaskActions = new Set(", "  function idempotencyKey("), context);
+  const saving = context.postAction({ action: "profile.update", profileId: "p" }, "profile:p");
+  assert.deepEqual(fields.map((field) => field.disabled), [true, true, true]);
+  finish({ ok: true }); await saving;
+  assert.deepEqual(fields.map((field) => field.disabled), [false, true, false]);
 });
 
 
@@ -676,7 +731,7 @@ test("scan and claim all waits for this scan and skips offline or failed machine
   const snapshot = { machines, instances: [], jobs: [] };
   const elements = { batchClaimResults: { replaceChildren() {}, append(value) { rendered.push(value.text); } }, scanAndClaimAll: {}, scanLegacySelected: {} };
   const context = vm.createContext({
-    state: snapshot, latestServerSnapshot: null, lastSuccessfulRefreshAt: null, draftScopes: new Map(), installPlanRunning: false, batchClaimRunning: false,
+    state: snapshot, latestServerSnapshot: null, lastSuccessfulRefreshAt: null, draftScopes: new Map(), installPlanRunning: false, batchClaimRunning: false, legacyScanRunning: false,
     $: (id) => elements[id], el: (_tag, text) => ({ text }), setStatus: (_id, text) => status.push(text),
     askOperation: async () => ({}), request: async () => snapshot, wait: async () => {}, refresh: async () => {}, idempotencyKey: () => "fixture",
     postAction: async (body) => {

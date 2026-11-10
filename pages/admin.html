@@ -301,6 +301,8 @@
     .install-machine-toolbar .machine-unmanaged-toggle { padding-bottom:9px; }
     .install-selection-bar { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin:12px 0 10px; }
     .install-selection-bar .actions { margin-left:auto; }
+    dialog.install-drawer { width:min(720px, 100vw); }
+    #installMachines { max-height:min(42dvh, 360px); overflow-y:auto; overscroll-behavior:contain; padding:2px; align-content:start; }
     .machine-select-card { display:grid; grid-template-columns:auto minmax(0,1fr) auto; grid-template-rows:auto auto; column-gap:10px; row-gap:2px; align-items:center; padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:var(--surface); cursor:pointer; transition:border-color .15s,background .15s,box-shadow .15s; }
     .machine-select-card:hover { border-color:var(--blue); background:var(--hover); }
     .machine-select-card.selected { border-color:var(--blue); background:var(--blue-soft); box-shadow:0 0 0 1px var(--blue); }
@@ -501,8 +503,10 @@
       <div class="home-subscription"><label>格式<select id="homeSubscriptionFormat"></select></label><p id="homeSubscriptionHint" class="small muted">令牌加密保存，可重复查看；关闭弹窗后清除本页显示内容。</p><div class="actions"><button id="copyHomeSubscription" disabled>复制订阅链接</button><button id="qrHomeSubscription" class="secondary" disabled>扫码</button><button id="createHomeSubscriptionLink" class="secondary">查看链接</button></div></div>
     </div>
     <div id="setupCard" class="card" hidden><h2>先完成连接设置，再安装节点</h2><p class="muted">只读浏览不受影响。完成设置会同步探针、建立基线并创建默认订阅，不会批量安装现有机器。</p><button id="startSetup">开始设置</button></div>
-    <section id="installWizard" class="card" hidden aria-labelledby="installWizardTitle">
-      <div class="hero"><div><h2 id="installWizardTitle">安装节点</h2><p class="muted">选择机器 → 选择协议 → 核对并安装。每一步只显示完成操作所需的信息。</p></div><button id="cancelInstall" class="secondary" type="button">关闭</button></div>
+    <dialog id="installWizard" class="profile-drawer install-drawer" aria-labelledby="installWizardTitle">
+      <div class="profile-drawer-shell">
+      <header class="profile-drawer-header"><div><h2 id="installWizardTitle">安装节点</h2><p class="small muted">选择机器 → 选择协议 → 核对并安装。</p></div><button id="cancelInstall" class="secondary" type="button" aria-label="关闭安装向导">×</button></header>
+      <div class="profile-drawer-body install-drawer-body">
       <div class="wizard-progress"><span data-deploy-progress="1">1. 选择机器</span><span data-deploy-progress="2">2. 选择协议</span><span data-deploy-progress="3">3. 确认并下发</span></div>
       <section id="deployStep1" class="deploy-steps">
         <div class="install-machine-toolbar">
@@ -528,14 +532,15 @@
         </details>
       </section>
       <section id="deployStep3" class="deploy-steps" hidden><div id="deployReview" class="deploy-summary"></div><p class="notice small">任务进度和成功结果以 KNS 收到的 Agent、OneBox 回调与远端核查为准；“已提交”不代表安装完成。多协议按顺序执行，请保持此页打开直至结果显示；关闭后当前任务仍继续，但尚未提交的后续协议不会自动续跑。</p></section>
-      <div class="actions deploy-actions"><button id="deployBack" type="button" class="secondary" hidden>上一步</button><button id="deployNext" type="button">下一步</button><button id="installBatch" hidden>下发安装任务</button></div>
-      <p id="installStatus" class="status muted" role="status"></p>
       <section id="deploymentResults" class="deploy-task-panel" hidden aria-labelledby="deploymentResultsTitle">
         <div class="deploy-task-head"><div><span class="eyebrow">任务下发</span><h3 id="deploymentResultsTitle">本次安装结果</h3></div><div class="actions"><span id="deploymentSummary" class="pill">等待提交</span><button id="refreshDeployment" class="secondary" type="button">刷新状态</button></div></div>
         <p class="small muted">提交只代表任务已受理；完成状态以 Agent 执行、OneBox 回调和远端核查为准。</p>
         <div id="deploymentResultRows" class="result-list"></div>
       </section>
-    </section>
+      </div>
+      <footer class="profile-drawer-footer"><p id="installStatus" class="status muted" role="status"></p><div class="actions deploy-actions"><button id="deployBack" type="button" class="secondary" hidden>上一步</button><button id="deployNext" type="button">下一步</button><button id="installBatch" hidden>下发安装任务</button></div></footer>
+      </div>
+    </dialog>
     <div id="overviewTodosCard" class="card"><h2>需要处理</h2><p class="muted small">失败任务和异常检测会显示在这里，以免被机器列表挡住。</p><div id="overviewTodos" class="result-list"><p class="muted">正在读取任务和检测状态…</p></div></div>
     <p class="small muted">远程安装默认允许，但不会自动安装；只有管理员主动提交安装任务时才会执行。新探针自动部署另有独立开关且默认关闭。KNS 不修改云安全组、DNS 或外部 NAT。UDP 协议状态会明确标为未验证。</p>
   </section>
@@ -621,7 +626,7 @@
   const $ = (id) => document.getElementById(id);
   const NATIVE_FORMAT_LABELS={uri:"URI 原始链接","mihomo-full":"Clash / Mihomo","mihomo-provider":"Mihomo Provider","singbox-full":"sing-box 完整配置","singbox-outbounds":"sing-box Outbounds",loon:"Loon",surge:"Surge",surfboard:"Surfboard",quanx:"Quantumult X",quan:"Quantumult",shadowrocket:"Shadowrocket",stash:"Stash",mellow:"Mellow",v2rayn:"V2RayN",v2rayng:"V2RayNG",ss:"Shadowsocks URI",sssub:"SSSub",ssd:"SSD",trojan:"Trojan URI",vless:"VLESS URI","hysteria2":"Hysteria2 URI"};
   const nativeFormatLabel=(format)=>NATIVE_FORMAT_LABELS[format]||format;
-  if($("machines")&&$("installWizard"))$("machines").insertBefore($("installWizard"),$("machines").firstChild);
+  if($("installWizard"))document.body.appendChild($("installWizard"));
   function hostTheme(win) {
     win = win || window;
     try {
@@ -741,6 +746,7 @@
   let deploymentBatch = [];
   let installPlanRunning = false;
   let batchClaimRunning = false;
+  let legacyScanRunning = false;
   const draftScopes = new Map();
   const installMachineSelection = new Set();
   const localActionStatus = new Map();
@@ -774,6 +780,11 @@
       if (cause && cause.name === "AbortError") {
         const error = new Error("请求等待超过 " + Math.round(timeoutMs / 1000) + " 秒，提交结果待确认。先刷新任务与状态，确认服务端是否已受理，再决定是否重试。");
         error.code = "request_timeout";
+        throw error;
+      }
+      if (cause && !cause.code && !cause.status) {
+        const error = new Error("连接中断或响应无法读取，提交结果待确认。请先查看任务记录，避免重复操作。");
+        error.code = "request_response_unknown";
         throw error;
       }
       throw cause;
@@ -832,7 +843,7 @@
     if (["publicBaseUrl","subconverterUrl","converterTarget","privateSite"].includes(target.id)) return "settings:connection";
     if (["defaultNodePort","defaultNodeAddress","autoProvisionEnabled"].includes(target.id)) return "settings:defaults";
     if (["setupPublicBaseUrl","setupDefaultPort","setupDefaultAddress","setupAutoProvision","setupAutoProvisionConfirm"].includes(target.id)) return "setup";
-    if (["installMachines","installMachineSearch","onlyAllowedMachines","protocolOptions","instanceName","listenAddress","entryMode","endpointHost","instanceTags"].includes(target.id) || target.matches("[data-protocol-select],[data-protocol-port],[data-protocol-sni],[data-protocol-method],[data-protocol-external-port]")) return "deploy";
+    if (["installMachines","installMachineSearch","onlyAllowedMachines","protocolOptions","instanceName","listenAddress","entryMode","endpointHost","instanceTags"].includes(target.id) || target.matches("[data-protocol-select],[data-protocol-port],[data-protocol-sni],[data-protocol-method],[data-protocol-external-port],[data-protocol-option]")) return "deploy";
     return "";
   }
   document.addEventListener("input", (event) => {
@@ -846,16 +857,44 @@
     updateDraftControls();
   });
   const remoteTaskActions = new Set(["install","install.batch","reconfigure","reinstall","uninstall","enable","disable","instance.status","machine.discover","machine.import","runtime.script.update","runtime.kernel.update","job.retry","autoProvision.retry"]);
+  const draftEditVersions = new Map();
+  function editVersionFor(snapshot, body) {
+    if (!snapshot) return "";
+    if (body.action === "profile.update") return ((snapshot.profiles || []).find((item)=>item.id===body.profileId)||{}).editVersion || "";
+    if (body.action === "machine.policy.update") return ((snapshot.machines || []).find((item)=>item.uuid===body.machineUuid)||{}).policyVersion || "";
+    if (body.action === "settings.update") return (snapshot.settings||{}).connectionEditVersion || "";
+    if (body.action === "settings.defaults.update") return (snapshot.settings||{}).defaultsEditVersion || "";
+    return "";
+  }
+  function lockDraftControls(scope) {
+    if (typeof document === "undefined" || !document.querySelectorAll) return () => {};
+    let fields = [];
+    if (scope.startsWith("profile:")) fields = Array.from(document.querySelectorAll("#profileDrawer input,#profileDrawer select,#profileDrawer textarea,#profileDrawer button"));
+    else if (scope.startsWith("machine:")) {
+      const card = Array.from(document.querySelectorAll("[data-machine-uuid]")).find((node) => node.dataset.machineUuid === scope.slice(8));
+      if (card) fields = Array.from(card.querySelectorAll("input,select,textarea,button"));
+    } else {
+      const ids = scope === "settings:connection" ? ["publicBaseUrl","subconverterUrl","converterTarget","privateSite","saveSettings"] : scope === "settings:defaults" ? ["defaultNodePort","defaultNodeAddress","autoProvisionEnabled","saveDefaultNode"] : [];
+      fields = ids.map((id) => document.getElementById(id)).filter(Boolean);
+    }
+    const disabled = fields.map((field) => field.disabled);
+    fields.forEach((field) => { field.disabled = true; });
+    return () => fields.forEach((field, index) => { field.disabled = disabled[index]; });
+  }
   async function postAction(body, scope = "") {
     const latestRevision = latestServerSnapshot && Number.isSafeInteger(Number(latestServerSnapshot.revision)) ? Number(latestServerSnapshot.revision) : (state ? state.revision : 0);
     const expectedRevision = body.expectedRevision != null ? Number(body.expectedRevision) : ((body.action === "setup.complete" || remoteTaskActions.has(String(body.action || ""))) ? latestRevision : (scope && draftScopes.has(scope) ? draftScopes.get(scope) : latestRevision));
+    const unlock = lockDraftControls(scope);
     try {
-      const result = await request("/admin/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({}, body, { expectedRevision })) });
+      const version = body.expectedEditVersion || (body.expectedRevision == null ? (draftEditVersions.get(scope) || editVersionFor(state, body)) : "");
+      const payload = Object.assign({}, body, { expectedRevision });
+      if (version) payload.expectedEditVersion = version;
+      const result = await request("/admin/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       trackOperationResult(body,result);
       if (body.action !== "install.batch" && remoteTaskActions.has(String(body.action || "")) && result && result.ok === false && result.job) {
         const error = new Error(result.job.message || "远程任务未提交。"); error.code = "remote_not_dispatched"; throw error;
       }
-      if (scope) draftScopes.delete(scope);
+      if (scope) { draftScopes.delete(scope); draftEditVersions.delete(scope); }
       draftConflict = null;
       updateDraftControls();
       return result;
@@ -866,14 +905,14 @@
           latestServerSnapshot = latest;
           const machine = body.machineUuid && latest.machines.find((item) => item.uuid === body.machineUuid);
           const profile = body.profileId && latest.profiles.find((item) => item.id === body.profileId);
-          const relevant = Array.isArray(body.machineUuids) ? { machines: body.machineUuids, protocol: body.protocol, listenPort: body.listenPort, name: body.name, batchId: body.batchId } : machine ? { machine: machine.name, policy: machine.policy, updatedAt: machine.updatedAt } : profile ? { profile: profile.name, formats: profile.formats, filters: { machineUuids: profile.machineUuids, protocols: profile.protocols, includeTags: profile.includeTags } } : { settings: latest.settings };
+          const relevant = Array.isArray(body.machineUuids) ? { machines: body.machineUuids, protocol: body.protocol, listenPort: body.listenPort, name: body.name, batchId: body.batchId } : machine ? { machine: machine.name, policy: machine.policy, updatedAt: machine.updatedAt } : profile ? { profile: profile.name, formats: profile.formats, instanceIds: profile.instanceIds, machineUuids: profile.machineUuids, excludeMachineUuids: profile.excludeMachineUuids, protocols: profile.protocols, includeTags: profile.includeTags, excludeUnhealthy: profile.excludeUnhealthy, addressMode: profile.addressMode, sortBy: profile.sortBy, expiresAt: profile.expiresAt, revokedAt: profile.revokedAt } : { settings: latest.settings };
           const draft = Object.fromEntries(Object.entries(body).filter(([key]) => !/twoFactor|passphrase|envelope|token/i.test(key)));
-          draftConflict = { expectedRevision, currentRevision: latest.revision, serverUpdatedAt: latest.updatedAt, relevant, draft, scope };
+          draftConflict = { expectedRevision, currentRevision: latest.revision, currentEditVersion: editVersionFor(latest, body), serverUpdatedAt: latest.updatedAt, relevant, draft, scope };
           updateDraftControls();
         } catch (_) {}
       }
       throw error;
-    }
+    } finally { unlock(); }
   }
   function idempotencyKey() { return (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)); }
 
@@ -916,8 +955,17 @@
     setStatus("operationStatus", "", "muted");
     return new Promise((resolve) => {
       let settled = false;
-      const finish = (value) => { if (settled) return; settled = true; resolve(value); };
-      form.onsubmit = (event) => {
+      const finish = (value) => {
+        if (settled) return; settled = true;
+        dialog.removeEventListener("cancel", onCancel); dialog.removeEventListener("close", onClose);
+        if (form.onsubmit === onSubmit) form.onsubmit = null;
+        if ($("operationCancel").onclick === onCancelClick) $("operationCancel").onclick = null;
+        $("operationCancel").hidden = false;
+        dialog.querySelectorAll('input[type="password"]').forEach((field) => { field.value = ""; });
+        $("operationFields").replaceChildren();
+        resolve(value);
+      };
+      const onSubmit = (event) => {
         event.preventDefault();
         if (!form.reportValidity()) return;
         if (typeof spec.validate === "function") {
@@ -927,15 +975,11 @@
         const values = Object.fromEntries(new FormData(form).entries());
         finish(values); dialog.close();
       };
-      $("operationCancel").onclick = () => { finish(null); dialog.close(); };
+      const onCancelClick = () => { finish(null); dialog.close(); };
       const onCancel = (event) => { event.preventDefault(); finish(null); dialog.close(); };
-      dialog.addEventListener("cancel", onCancel, { once: true });
-      dialog.addEventListener("close", () => {
-        dialog.removeEventListener("cancel", onCancel);
-        dialog.querySelectorAll('input[type="password"]').forEach((field) => { field.value = ""; });
-        $("operationFields").replaceChildren(); form.onsubmit = null; $("operationCancel").onclick = null; $("operationCancel").hidden = false;
-        finish(null);
-      }, { once: true });
+      const onClose = () => { if (!dialog.open) finish(null); };
+      form.onsubmit = onSubmit; $("operationCancel").onclick = onCancelClick;
+      dialog.addEventListener("cancel", onCancel); dialog.addEventListener("close", onClose);
       dialog.showModal();
       const first = spec.focusConfirm || spec.hideCancel ? $("operationConfirm") : Array.from(dialog.querySelectorAll("input,select,textarea,button")).find((node)=>!node.hidden); if (first) first.focus();
     });
@@ -964,6 +1008,7 @@
     });
     if (!confirmed || draftConflict !== conflict || !draftScopes.has(conflict.scope)) return;
     draftScopes.set(conflict.scope, conflict.currentRevision);
+    if (conflict.currentEditVersion) draftEditVersions.set(conflict.scope, conflict.currentEditVersion);
     draftConflict = null;
     updateDraftControls();
     setStatus("globalStatus", "已保留草稿并更新保存基准；请核对表单后再次点击原保存按钮。", "muted");
@@ -1188,7 +1233,7 @@
     return Array.from(new Set(errors));
   }
   function currentInstallNetwork(){return {nat:$("entryMode").value==="nat",endpointHost:$("endpointHost").value.trim(),listenAddress:$("listenAddress").value||"::"};}
-  function showInstallPreflight(){const errors=installPreflight(latestServerSnapshot||state,selectedMachineIds(),currentProtocolFields(),currentInstallNetwork());if(errors.length){setStatus("installStatus","安装前检查未通过：\n"+errors.join("\n"),"error");return false;}return true;}
+  function showInstallPreflight(){const snapshot=latestServerSnapshot||state;const selected=selectedMachineIds();const eligible=selected.filter((uuid)=>{const machine=(snapshot.machines||[]).find((item)=>item.uuid===uuid);return machine&&machineInstallAllowed(machine);});if(selected.length&&!eligible.length){setStatus("installStatus","所选机器当前都不能安装；检查在线状态和机器授权。","error");return false;}const errors=installPreflight(snapshot,eligible,currentProtocolFields(),currentInstallNetwork());if(errors.length){setStatus("installStatus","安装前检查未通过：\n"+errors.join("\n"),"error");return false;}return true;}
   function updateConnectionPreview(){
     const selected=state&&state.machines.filter((machine)=>installMachineSelection.has(machine.uuid))||[];const override=String($("endpointHost").value||"").trim();const address=$("listenAddress").value||"::";const rows=currentProtocolFields();
     if(!selected.length||!rows.length){$("connectionPreview").textContent="选择机器和协议后显示连接地址预览。";return;}
@@ -1201,6 +1246,7 @@
     $("deployBack").hidden=deployStep===1;$("deployNext").hidden=deployStep===3;$("installBatch").hidden=deployStep!==3;
     if(deployStep===2){renderProtocolFields();}
     if(deployStep===3)renderDeployReview();
+    const body=document.querySelector(".install-drawer-body");if(body)body.scrollTop=0;
   }
 
   function renderDeployReview(){
@@ -1263,7 +1309,7 @@
       const result=await postAction({action:"setup.complete",publicBaseUrl:base,defaultNode:{protocol:"vless",listenPort:Number($("setupDefaultPort").value),listenAddress:$("setupDefaultAddress").value},autoProvisionNewProbes:autoProvision,confirmAutoProvision:$("setupAutoProvisionConfirm").checked},"setup");
       $("setupWizard").hidden=true;
       if(result.subscriptionUrls)showSecret(result,result.profile&&result.profile.id||result.profileId||"");else setStatus("globalStatus","初始化已完成；如上次响应丢失，可在订阅页再次查看默认档案链接。","success");
-      draftScopes.clear();updateDraftControls();await refresh();
+      draftScopes.clear();draftEditVersions.clear();setupDraftInitialized=false;updateDraftControls();await refresh();
     }catch(error){
       if(error.code==="request_timeout"){
         try{
@@ -1419,7 +1465,7 @@
         const answer=await askOperation({title:"机器设置已更新",description:"保存期间后台数据发生了变化。请核对服务器当前设置与本页设置；确认后会基于此处展示的版本重新应用本页的机器设置；期间再次变化时仍会拒绝保存。\n\n服务器当前值：\n"+describe(current)+"\n\n本页设置：\n"+describe(body.policy),confirmLabel:"重新应用本页设置",danger:deployAllowed&&!current.deployAllowed});
         if(answer){
           try{
-            await postAction(Object.assign({},body,{expectedRevision:confirmedRevision}),"machine:"+uuid);
+            await postAction(Object.assign({},body,latestMachine&&latestMachine.policyVersion?{expectedEditVersion:latestMachine.policyVersion}:{expectedRevision:confirmedRevision}),"machine:"+uuid);
             setMachineStatus(uuid,"机器设置已保存。","success");await refresh();return;
           }catch(retryError){error=retryError;}
         }
@@ -1439,10 +1485,26 @@
   function startInstallForMachine(uuid=""){
     if(installPlanRunning)return;
     if(draftScopes.size){setStatus("globalStatus","请先保存或放弃未保存的设置，再开始安装。","error");return;}
-    if(!$("machines").classList.contains("active"))document.querySelector('[data-panel="machines"]').click();
+    if($("installWizard").open)return;
+    $("installMachineSearch").value="";$("onlyAllowedMachines").checked=true;
+    $("instanceName").value="";$("instanceTags").value="";$("listenAddress").value="::";$("entryMode").value="machine";$("endpointHost").value="";buildProtocolCards();
     installMachineSelection.clear();if(uuid)installMachineSelection.add(uuid);
-    $("installWizard").hidden=false;deploymentBatch=[];renderInstallMachineOptions();renderDeployStep(1);setStatus("installStatus","","muted");
-    $("installWizard").scrollIntoView({behavior:"smooth",block:"start"});
+    deploymentBatch=[];renderInstallMachineOptions();renderDeployStep(1);setStatus("installStatus","","muted");
+    $("installWizard").showModal();$("installMachineSearch").focus();
+    const selected=$("installMachines").querySelector(".machine-select-card.selected");if(selected)selected.scrollIntoView({block:"nearest"});
+  }
+
+  let installClosePending=false;
+  async function closeInstallDrawer(){
+    if(installPlanRunning){setStatus("installStatus","当前协议任务仍在执行；请等待本组任务结束。","error");return;}
+    if(installClosePending)return;
+    if(draftScopes.has("deploy")){
+      installClosePending=true;let confirmed;
+      try{confirmed=await askOperation({title:"放弃安装设置？",description:"尚未提交的安装设置将被放弃。已提交的远程任务不会取消。",confirmLabel:"放弃设置并关闭",danger:true});}finally{installClosePending=false;}
+      if(!confirmed)return;
+    }
+    installMachineSelection.clear();draftScopes.delete("deploy");draftEditVersions.delete("deploy");if(draftConflict&&draftConflict.scope==="deploy")draftConflict=null;
+    $("installWizard").close();updateDraftControls();
   }
 
   async function retryAutoProvision(machine){
@@ -1454,6 +1516,7 @@
   }
 
   async function discoverLegacyNodesBatch() {
+    if(legacyScanRunning||batchClaimRunning)return;
     if(draftScopes.size)return setStatus("scanBatchStatus","请先保存或放弃草稿。","error");
     const selected = state.machines.filter((machine) => !machine.removedFromKomariAt && legacyScanSelection.has(machine.uuid));
     if (!selected.length) { setStatus("scanBatchStatus", "先勾选一台或多台在线探针。", "error"); return; }
@@ -1461,6 +1524,8 @@
     const online = selected.filter((machine) => machine.online === true);
     const offlineCount = selected.length - online.length;
     if (!online.length) { setStatus("scanBatchStatus", "所选探针当前都不在线，未提交扫描。", "error"); return; }
+    legacyScanRunning=true;$('scanLegacySelected').disabled=true;$('scanAndClaimAll').disabled=true;
+    try {
     const confirmation = await askOperation({ title:"确认只读扫描", description:"将对 "+online.length+" 台在线探针读取 OneBox 配置；不会安装、修改或卸载节点。"+(offlineCount?"\n"+offlineCount+" 台离线探针将跳过。":""), confirmLabel:"提交只读扫描" });
     if (!confirmation) return;
     legacyScanFailures.clear();
@@ -1488,6 +1553,7 @@
     const submitted = online.length - failed;
     const summary = "扫描任务已提交 " + submitted + "/" + online.length + " 台；提交失败 " + failed + " 台；离线跳过 " + offlineCount + " 台。远程扫描结果请查看对应机器的最近操作。";
     setStatus("scanBatchStatus", summary, failed ? "error" : "success");
+    } finally { legacyScanRunning=false;$('scanLegacySelected').disabled=false;$('scanAndClaimAll').disabled=false; }
   }
 
   async function waitForBatchClaimJob(jobId, machineName) {
@@ -1504,7 +1570,7 @@
     return {job:null,latest:null};
   }
   async function scanAndClaimAll(){
-    if(batchClaimRunning)return;
+    if(batchClaimRunning||legacyScanRunning)return;
     if(draftScopes.size||installPlanRunning){setStatus("batchClaimStatus","请先保存草稿并等待其他安装计划结束。","error");return;}
     const all=state.machines.filter((machine)=>!machine.removedFromKomariAt);
     const offlineCount=all.filter((machine)=>machine.online!==true).length;
@@ -1966,7 +2032,7 @@
   }
 
   async function runInstallPlan(machineIds,protocols){
-    const chosen=machineIds.map((uuid)=>state.machines.find((machine)=>machine.uuid===uuid)).filter(Boolean);
+    const chosen=machineIds.map((uuid)=>(latestServerSnapshot||state).machines.find((machine)=>machine.uuid===uuid)||Object.assign({},state.machines.find((machine)=>machine.uuid===uuid)||{uuid,name:uuid},{online:false}));
     const executable=chosen.filter(machineInstallAllowed);const blocked=chosen.filter((machine)=>!machineInstallAllowed(machine));
     if(!executable.length){renderDeploymentResults();setStatus("installStatus","所选机器当前都不能安装；检查在线状态和机器授权。","error");return;}
     deploymentBatch=blocked.flatMap((machine)=>protocols.map((protocol)=>({machineUuid:machine.uuid,protocol:protocol.id,accepted:false,error:{message:machine.online!==true?"机器离线或状态未知。":"此机器已关闭远程安装。"}})));
@@ -1985,7 +2051,7 @@
         let result;
         try{result=await postAction(requestBody,"deploy");}
         catch(error){
-          if(error.code==="request_timeout"){
+          if(error.code==="request_timeout"||error.code==="request_response_unknown"){
             try{const latest=await request("/admin/state");latestServerSnapshot=latest;if(!draftScopes.size){state=latest;render();}const existing=latest.jobs.filter((job)=>job.batchId===batchId);if(existing.length)result={ok:true,batchId,results:existing.map((job)=>({machineUuid:job.machineUuid,accepted:job.state!=="failed",job}))};else throw error;}
             catch(recoveryError){for(const machine of executable)deploymentBatch.push({machineUuid:machine.uuid,protocol:protocol.id,accepted:false,submissionUnknown:true,error:{message:"提交结果未知；刷新机器任务记录后再决定是否重试。"}});renderDeploymentResults();setStatus("installStatus",recoveryError.message,"error");break;}
           }else{for(const machine of executable)deploymentBatch.push({machineUuid:machine.uuid,protocol:protocol.id,accepted:false,error:{message:error.message,code:error.code}});renderDeploymentResults();setStatus("installStatus",error.message,"error");break;}
@@ -2000,6 +2066,7 @@
         if(!waitResult.continuePlan){if(!waitResult.timeout)setStatus("installStatus","本组任务未全部通过核验；为避免继续修改共享节点服务，后续协议暂未提交。请先查看上方结果。","error");break;}
       }
       for(const machine of executable)for(const protocol of protocols)if(!deploymentBatch.some((item)=>item.machineUuid===machine.uuid&&item.protocol===protocol.id))deploymentBatch.push({machineUuid:machine.uuid,protocol:protocol.id,accepted:false,error:{message:"前序任务未通过或结果未知，此协议尚未提交。"}});
+      if(deploymentBatch.some((item)=>!item.job)&&!draftScopes.has("deploy"))draftScopes.set("deploy",state.revision);
       const jobs=deploymentBatch.filter((item)=>item.job);const success=jobs.filter((item)=>item.job.state==="succeeded").length;const unresolved=jobs.filter((item)=>!["succeeded","failed","needs_reconcile","timed_out","cancelled"].includes(item.job.state)).length;const failed=deploymentBatch.filter((item)=>!item.accepted||item.job&&["failed","needs_reconcile","timed_out","cancelled"].includes(item.job.state)).length;
       if(!installPlanRunning)return;
       setStatus("installStatus","本轮提交与等待结束：核验完成 "+success+" 项；失败、未提交或提交待确认 "+failed+" 项"+(unresolved?"；另有 "+unresolved+" 项仍在处理中":""),unresolved||failed?"error":"success");
@@ -2044,7 +2111,7 @@
         const all=getOptions();const available=new Set(all.map((item)=>item[0]));
         for(const value of chosen)if(!available.has(value))all.push([value,value+" · 离线/未知"]);
         const query=search?search.value.trim().toLowerCase():"";
-        const filtered=all.filter(([,text])=>!query||String(text).toLowerCase().includes(query));
+        const filtered=all.filter(([value,text])=>!query||String(text).toLowerCase().includes(query)||String(value).toLowerCase().includes(query));
         list.replaceChildren();
         if(!filtered.length){list.append(el("p",searchable?"没有匹配的机器。":"没有可选项。","small muted empty-state"));return;}
         for(const [value,text] of filtered){
@@ -2056,7 +2123,7 @@
         }
       };
       if(search)search.addEventListener("input",renderChoices);
-      chooseMatches.addEventListener("click",()=>{const query=search?search.value.trim().toLowerCase():"";for(const [value,text] of getOptions())if(!query||String(text).toLowerCase().includes(query))chosen.add(value);syncSelection();renderChoices();valueInput.dispatchEvent(new Event("input",{bubbles:true}));});
+      chooseMatches.addEventListener("click",()=>{const query=search?search.value.trim().toLowerCase():"";for(const [value,text] of getOptions())if(!query||String(text).toLowerCase().includes(query)||String(value).toLowerCase().includes(query))chosen.add(value);syncSelection();renderChoices();valueInput.dispatchEvent(new Event("input",{bubbles:true}));});
       clear.addEventListener("click",()=>{chosen.clear();syncSelection();renderChoices();valueInput.dispatchEvent(new Event("input",{bubbles:true}));});
       root.refreshOptions=()=>{syncSelection();renderChoices();};
       syncSelection();renderChoices();grid.append(root);
@@ -2134,7 +2201,7 @@
       const confirmed=await askOperation({title:"放弃订阅草稿？",description:"尚未保存的订阅设置将被放弃。",confirmLabel:"放弃草稿",danger:true});
       if(!confirmed)return;
     }
-    draftScopes.delete(profileDrawerScope);if(draftConflict&&draftConflict.scope===profileDrawerScope)draftConflict=null;
+    draftScopes.delete(profileDrawerScope);draftEditVersions.delete(profileDrawerScope);if(draftConflict&&draftConflict.scope===profileDrawerScope)draftConflict=null;
     profileDrawerScope="";profileDrawerProfile=null;$("profileDrawer").close();updateDraftControls();
     if(latestServerSnapshot){state=latestServerSnapshot;render();}
   }
@@ -2213,8 +2280,8 @@
     const ready=!!(state&&state.settings&&state.settings.setupComplete===true);
     const disabledIds=["selectOnlineScans","clearScanSelection","scanLegacySelected","reloadMachines","scanAndClaimAll","openProfileDrawer","createProfile","saveSettings","saveDefaultNode","restoreBackup","importBackup","startInstall"];
     for(const id of disabledIds)if($(id))$(id).disabled=!ready;
-    $("scanAndClaimAll").disabled=!ready||batchClaimRunning;
-    $("scanLegacySelected").disabled=!ready||batchClaimRunning;
+    $("scanAndClaimAll").disabled=!ready||batchClaimRunning||legacyScanRunning;
+    $("scanLegacySelected").disabled=!ready||batchClaimRunning||legacyScanRunning;
     $("startInstall").disabled=!ready||installPlanRunning;
     $("installBatch").disabled=!ready||installPlanRunning;
     if(!ready)document.querySelectorAll("#machineRows button,#profileRows button,.format-list input,#createProfileFilters input,#createProfileFilters select").forEach((control)=>{control.disabled=true;});
@@ -2298,13 +2365,13 @@
       const confirmation=await askOperation({title:"确认导入范围",description:"将替换当前 KNS 状态与主密钥。\n备份版本："+(preview.backup.pluginVersion||"未知")+" · 更新时间："+(preview.backup.createdAt||"未知")+"\n探针："+(counts.machines||0)+" · 节点："+(counts.instances||0)+" · 订阅档案："+(counts.profiles||0)+" · 任务："+(counts.jobs||0)+"\n导入会拒绝活动任务；操作前会保留本地恢复副本。请输入“恢复”继续。",fields:[{name:"confirmPhrase",label:"输入“恢复”以确认",required:true}],confirmLabel:"替换 KNS 状态",danger:true,validate:(form)=>form.get("confirmPhrase")==="恢复"?"":"请输入“恢复”。"});
       if(!confirmation)return;
       const response=await request("/admin/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({envelope,passphrase:secret.passphrase,confirmPhrase:confirmation.confirmPhrase,expectedRevision:preview.currentRevision})});
-      $("importBackupFile").value="";draftScopes.clear();await refresh();setStatus("settingsStatus","加密备份已导入，修订号 "+response.revision+"。","success");
+      $("importBackupFile").value="";draftScopes.clear();draftEditVersions.clear();setupDraftInitialized=false;await refresh();setStatus("settingsStatus","加密备份已导入，修订号 "+response.revision+"。","success");
     }catch(error){setStatus("settingsStatus",error.message+" 当前状态未被前端清空。","error");}
     finally{secret.passphrase="";}
   }
 
   document.querySelectorAll(".tab").forEach((tab)=>tab.addEventListener("click",async()=>{
-    if(draftScopes.size){const answer=await askOperation({title:"尚有未保存更改",description:"离开当前页面会放弃尚未保存的草稿。已提交任务不会取消。保存后再离开，或明确放弃草稿。",confirmLabel:"放弃草稿并离开",danger:true});if(!answer)return;draftScopes.clear();draftConflict=null;updateDraftControls();if(latestServerSnapshot)state=latestServerSnapshot;render();}
+    if(draftScopes.size){const answer=await askOperation({title:"尚有未保存更改",description:"离开当前页面会放弃尚未保存的草稿。已提交任务不会取消。保存后再离开，或明确放弃草稿。",confirmLabel:"放弃草稿并离开",danger:true});if(!answer)return;draftScopes.clear();draftEditVersions.clear();setupDraftInitialized=false;draftConflict=null;updateDraftControls();if(latestServerSnapshot)state=latestServerSnapshot;render();}
     document.querySelectorAll(".tab").forEach((item)=>item.classList.toggle("active",item===tab));document.querySelectorAll("section.panel").forEach((panel)=>panel.classList.toggle("active",panel.id===tab.dataset.panel));
     const pageTitle=tab.dataset.title||tab.textContent.trim();if($("pageTitle"))$("pageTitle").textContent=pageTitle;if($("crumbCurrent"))$("crumbCurrent").textContent=pageTitle;try{window.scrollTo({top:0,behavior:"smooth"});}catch(_){}
   }));
@@ -2324,8 +2391,10 @@
   $("copyHomeSubscription").addEventListener("click",copyHomeSubscriptionLink);
   $("qrHomeSubscription").addEventListener("click",()=>{const format=$("homeSubscriptionFormat").value;const url=latestSubscriptionUrls[format];if(url)showSecret({subscriptionUrls:format.startsWith("converter:")?{}:{[format]:url},converterUrls:format.startsWith("converter:")?{[format.slice(10)]:url}:{}},latestSubscriptionProfileId);else createHomeSubscriptionLink();});
   $("homeSubscriptionFormat").addEventListener("change",()=>updateHomeSubscriptionActions(homeSubscriptionProfile()));
-  $("cancelInstall").addEventListener("click",()=>{if(installPlanRunning){setStatus("installStatus","当前协议任务仍在执行；请等待本组任务结束。","muted");return;}$("installWizard").hidden=true;installMachineSelection.clear();draftScopes.delete("deploy");updateDraftControls();});
-  $("discardDrafts").addEventListener("click",async()=>{const answer=await askOperation({title:"放弃未保存草稿",description:"服务器数据不会变化。表单会重新载入最近一次成功刷新的状态。",confirmLabel:"放弃草稿",danger:true});if(!answer)return;draftScopes.clear();draftConflict=null;updateDraftControls();if(latestServerSnapshot)state=latestServerSnapshot;render();await refresh();});
+  $("cancelInstall").addEventListener("click",closeInstallDrawer);
+  $("installWizard").addEventListener("cancel",(event)=>{event.preventDefault();closeInstallDrawer();});
+  $("installWizard").addEventListener("click",(event)=>{if(event.target!==event.currentTarget)return;const rect=event.currentTarget.getBoundingClientRect();if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)closeInstallDrawer();});
+  $("discardDrafts").addEventListener("click",async()=>{const answer=await askOperation({title:"放弃未保存草稿",description:"服务器数据不会变化。表单会重新载入最近一次成功刷新的状态。",confirmLabel:"放弃草稿",danger:true});if(!answer)return;draftScopes.clear();draftEditVersions.clear();setupDraftInitialized=false;draftConflict=null;updateDraftControls();if(latestServerSnapshot)state=latestServerSnapshot;render();await refresh();});
   $("compareConflict").addEventListener("click",safeRevisionConflictAction);
   $("auditOlder").addEventListener("click",loadOlderAudit);$("export").addEventListener("click",exportEncryptedBackup);$("exportState").addEventListener("click",exportEncryptedBackup);$("importBackup").addEventListener("click",importEncryptedBackup);
   $("installMachineSearch").addEventListener("input",renderInstallMachineOptions);$("onlyAllowedMachines").addEventListener("change",renderInstallMachineOptions);
@@ -2455,7 +2524,7 @@
       installPluginUpdate.disabled=false;checkPluginUpdate.disabled=false;
     }
   });
-  $("restoreBackup").addEventListener("click",async()=>{const name=$("backupSelect").value;if(!name)return;try{const preview=await postAction({action:"backup.restore.preview",name});const counts=preview.backup.counts||{};const values=await askOperation({title:"恢复备份范围确认",description:"备份："+name+"\n版本："+(preview.backup.pluginVersion||"未知")+" · 更新时间："+(preview.backup.createdAt||"未知")+"\n将替换：探针 "+(counts.machines||0)+"、节点 "+(counts.instances||0)+"、订阅档案 "+(counts.profiles||0)+"、任务历史 "+(counts.jobs||0)+"。\n恢复会保留本地事务副本；有活动任务时服务端会阻止。请输入“恢复”继续。",fields:[{name:"confirmPhrase",label:"输入“恢复”以确认",required:true}],confirmLabel:"替换 KNS 状态",danger:true,validate:(form)=>form.get("confirmPhrase")==="恢复"?"":"请输入“恢复”。"});if(!values)return;await postAction({action:"backup.restore",name,confirmPhrase:values.confirmPhrase,expectedRevision:preview.currentRevision});setStatus("settingsStatus","备份已恢复；请核对节点和订阅状态。","success");draftScopes.clear();await refresh();}catch(error){setStatus("settingsStatus",error.message,"error");}});
+  $("restoreBackup").addEventListener("click",async()=>{const name=$("backupSelect").value;if(!name)return;try{const preview=await postAction({action:"backup.restore.preview",name});const counts=preview.backup.counts||{};const values=await askOperation({title:"恢复备份范围确认",description:"备份："+name+"\n版本："+(preview.backup.pluginVersion||"未知")+" · 更新时间："+(preview.backup.createdAt||"未知")+"\n将替换：探针 "+(counts.machines||0)+"、节点 "+(counts.instances||0)+"、订阅档案 "+(counts.profiles||0)+"、任务历史 "+(counts.jobs||0)+"。\n恢复会保留本地事务副本；有活动任务时服务端会阻止。请输入“恢复”继续。",fields:[{name:"confirmPhrase",label:"输入“恢复”以确认",required:true}],confirmLabel:"替换 KNS 状态",danger:true,validate:(form)=>form.get("confirmPhrase")==="恢复"?"":"请输入“恢复”。"});if(!values)return;await postAction({action:"backup.restore",name,confirmPhrase:values.confirmPhrase,expectedRevision:preview.currentRevision});setStatus("settingsStatus","备份已恢复；请核对节点和订阅状态。","success");draftScopes.clear();draftEditVersions.clear();setupDraftInitialized=false;await refresh();}catch(error){setStatus("settingsStatus",error.message,"error");}});
   function syncMachineFilterDropdowns(){
     for(const root of document.querySelectorAll("[data-filter-for]")){
       const select=$(root.dataset.filterFor);if(!select)continue;

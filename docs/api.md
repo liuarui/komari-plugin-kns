@@ -20,7 +20,7 @@ KNS 原生订阅格式为 `uri`、`mihomo-full`、`mihomo-provider`、`singbox-f
 
 ## `POST /admin/action` 动作
 
-请求头：`Content-Type: application/json`；正文上限 1 MiB。管理写动作可附 `expectedRevision`（从状态快照读取）；版本不匹配时服务端返回 `409 state_revision_conflict` 与当前/期望 revision，调用方应保留草稿并重新核对。插件管理页对写动作自动附带此字段。只读 `machine.discover` 基于服务器当前机器和任务状态校验，不因旧 revision 拒绝扫描。
+请求头：`Content-Type: application/json`；正文上限 1 MiB。兼容调用方可附 `expectedRevision` 保护全局状态；订阅编辑、机器策略和两类设置编辑可改用状态快照的 `expectedEditVersion`，只在对应可编辑内容发生变化时返回 `409 state_revision_conflict`。管理页使用对象版本保护草稿；旧客户端不提供对象版本时仍使用全局 revision。只读扫描、新安装等动作按服务端当前机器、权限、资源和任务状态校验。持久化时仍检查状态版本，真正的并发写入冲突不会强行覆盖。
 
 | `action` | 常用字段 | 返回 |
 | --- | --- | --- |

@@ -2,6 +2,13 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.3] - 2026-11-10
+
+- Isolate subscription, machine and settings drafts from unrelated background state updates.
+- Validate current machine and task state when submitting new installs instead of rejecting unrelated revisions.
+- Protect forms while saving, avoid duplicate batch scans, and mark interrupted installation responses as unknown.
+- Move installation to a side drawer with a scrollable machine picker; improve offline-target handling, full UUID search and draft tracking.
+
 ## [1.0.2] - 2026-11-10
 
 - Name newly claimed nodes consistently with subscription names, including NAT ports.
