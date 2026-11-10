@@ -10,7 +10,7 @@ OneBox 负责在 Linux 机器上安装和运行代理节点；KNS 通过 Komari 
 
 ## 工作台
 
-机器按 Komari 服务器列表排序。你可以按在线状态、OneBox、协议和机器标签筛选，也可以切换三列卡片、单列卡片或紧凑列表。Komari 已删除的机器默认隐藏；需要查看保留的节点记录时，打开“显示已从 Komari 删除”。
+机器按 Komari 服务器列表排序。你可以按在线状态、OneBox、协议和机器标签筛选，也可以切换三列卡片、单列卡片或紧凑列表。机器从 Komari 删除后，KNS 同步清除其机器和节点记录，节点也会从订阅中移除；这不会卸载远程机器上的 OneBox。
 
 ![KNS 工作台和机器筛选示意](docs/images/workbench.svg)
 
@@ -76,6 +76,6 @@ KNS 的 state 和订阅快照以明文保存节点凭据、订阅 token 和派�
 
 ## 项目与许可
 
-- 当前正式版本：**1.0.0**。变更记录见 [CHANGELOG](CHANGELOG.md)。
+- 当前正式版本：**1.0.1**。变更记录见 [CHANGELOG](CHANGELOG.md)。
 - 许可： [GNU AGPL v3.0-only](LICENSE)。
 - 插件安装包可从 [GitHub Releases](https://github.com/liuarui/komari-plugin-kns/releases) 下载。

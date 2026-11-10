@@ -21,7 +21,7 @@ function runtime(t, server = {}) {
   };
   vm.runInNewContext(fs.readFileSync(filename, "utf8") + `
     masterKey = secrets.getMasterKey(__storageDir__);
-    module.exports = { publicState, ensureInstance, handleAction, save, syncMachines, subscriptionSourceHash, refreshHealth, refreshEndpoints, refreshSubscriptionSnapshots, readSubscriptionSnapshot, subscriptionSnapshotKey, serveSubscription, recordTokenUsage, flushTokenUsage, pollPendingJobs, assertNoActiveJobs, jobRetryable, encryptedBackupEnvelope, decryptBackupEnvelope, handleAction, readBody, unload };
+    module.exports = { publicState, ensureInstance, handleAction, downloadPluginUpdate, save, syncMachines, subscriptionSourceHash, refreshHealth, refreshEndpoints, refreshSubscriptionSnapshots, readSubscriptionSnapshot, subscriptionSnapshotKey, serveSubscription, recordTokenUsage, flushTokenUsage, pollPendingJobs, assertNoActiveJobs, jobRetryable, encryptedBackupEnvelope, decryptBackupEnvelope, handleAction, readBody, unload };
   `, context, { filename });
   const api = context.module.exports;
   t.after(() => api.unload());
@@ -595,6 +595,7 @@ test("legacy imported instances still accept a read-only status check", async (t
   const { api, store } = runtime(t, {
     call: async (method, params) => {
       calls.push([method, params]);
+      if (method === "common:getNodesLatestStatus") return Object.fromEntries(params.uuids.map((uuid) => [uuid, { online: true }]));
       if (method === "admin:exec") return { task_id: "task-status" };
       throw new Error("unexpected RPC " + method);
     },
@@ -622,7 +623,7 @@ test("legacy imported instances still accept a read-only status check", async (t
   assert.equal(statusRes.statusCode, 202, statusRes.body);
   assert.equal(payload.job.action, "instance.status");
   assert.equal(payload.job.instanceId, "legacy-node");
-  assert.equal(calls[0][0], "admin:exec");
+  assert.equal(calls[1][0], "admin:exec");
 });
 
 
@@ -720,4 +721,244 @@ test("finished job history is capped while active jobs are always kept", (t) => 
   const published = api.publicState(store.read());
   assert.equal(published.jobs.length, 202);
   assert.ok(published.jobs.some((job) => job.id === "live-authorized"));
+});
+
+test("machine sync removes deleted machines and their nodes from state and subscriptions", async (t) => {
+  const removed = "123e4567-e89b-42d3-a456-426614174000";
+  const kept = "123e4567-e89b-42d3-a456-426614174001";
+  let releasePoll, startedPoll;
+  const pollStarted = new Promise((resolve) => { startedPoll = resolve; });
+  const server = { call: async (method) => {
+    if (method === "admin:listClients") return [{ uuid: kept, name: "kept" }];
+    if (method === "common:getNodesLatestStatus") return { [kept]: { online: true } };
+    if (method === "admin:getSpecificTaskResult") { startedPoll(); return new Promise((resolve) => { releasePoll = resolve; }); }
+    throw new Error("unexpected RPC " + method);
+  } };
+  const { api, store } = runtime(t, server);
+  const state = store.read();
+  state.machines.push({ uuid: removed, name: "removed", removedFromKomariAt: new Date().toISOString() }, { uuid: kept, name: "kept" });
+  for (const uuid of [removed, kept]) {
+    state.instances.push({ id: "node-" + uuid, machineUuid: uuid, name: uuid, protocol: "shadowsocks", enabled: true, publish: true,
+      listen: { port: 443, transport: "tcp+udp" }, endpoint: { host: uuid === removed ? "8.8.8.8" : "1.1.1.1", port: 443 },
+      credential: { type: "shadowsocks", method: "aes-128-gcm", value: "test-secret" } });
+    state.runtimes.push({ machineUuid: uuid, id: "onebox-main" });
+    state.legacyNodes.push({ id: "old-" + uuid, machineUuid: uuid === removed ? uuid.toUpperCase() : uuid, enabled: true, uri: "ss://legacy-" + uuid });
+  }
+  state.profiles.push({ id: "legacy", name: "legacy", legacy: true, tokenRequired: false, formats: ["uri"], excludeUnhealthy: false, machineUuids: [] });
+  state.profiles.push({ id: "restricted", name: "restricted", formats: ["uri"], excludeUnhealthy: false, machineUuids: [removed] });
+  state.jobs.push({ id: "pending", action: "machine.discover", state: "dispatched", machineUuid: removed, taskId: "task", createdAt: new Date().toISOString(), callbackTokenHash: "hash", callbackTokenSalt: "salt" });
+  store.write(state);
+  await api.refreshSubscriptionSnapshots();
+  assert.ok(api.readSubscriptionSnapshot("legacy", "uri").body.includes("legacy-" + removed));
+  const poll = api.pollPendingJobs();
+  await pollStarted;
+  await api.syncMachines();
+  releasePoll({ exit_code: 0, stdout: "KNS_DISCOVERY={}\nKNS_RUNTIME_STATUS={}" });
+  await poll;
+  const updated = store.read();
+  assert.deepEqual(updated.machines.map((item) => item.uuid), [kept]);
+  assert.deepEqual(updated.instances.map((item) => item.machineUuid), [kept]);
+  assert.deepEqual(updated.runtimes.map((item) => item.machineUuid), [kept]);
+  assert.deepEqual(updated.legacyNodes.map((item) => item.machineUuid), [kept]);
+  assert.deepEqual(updated.profiles[0].machineUuids, []);
+  assert.deepEqual(updated.profiles[1].machineUuids, [removed], "do not broaden a restricted profile");
+  assert.equal(updated.jobs[0].state, "cancelled");
+  assert.equal(updated.jobs[0].callbackTokenHash, undefined);
+  const response = { statusCode: 0, body: "", setHeader() {}, end(value) { this.body = String(value || ""); } };
+  api.serveSubscription({ query: { profile: "legacy", format: "uri" }, headers: {} }, response);
+  assert.equal(response.statusCode, 200);
+  assert.ok(!response.body.includes("legacy-" + removed), "a stale cached snapshot must not publish the removed node");
+  await api.refreshSubscriptionSnapshots();
+  const snapshot = api.readSubscriptionSnapshot("legacy", "uri");
+  assert.ok(!snapshot.body.includes("legacy-" + removed));
+  assert.ok(snapshot.body.includes("legacy-" + kept));
+  assert.equal(snapshot.sourceHash, api.subscriptionSourceHash(updated, updated.profiles[0], "uri"));
+});
+
+test("machine sync rejects malformed lists without deleting existing records", async (t) => {
+  let response = {};
+  const uuid = "123e4567-e89b-42d3-a456-426614174000";
+  const { api, store } = runtime(t, { call: async () => response });
+  const state = store.read();
+  state.machines.push({ uuid, name: "keep" });
+  state.instances.push({ id: "keep-node", machineUuid: uuid });
+  store.write(state);
+  for (const value of [{}, null, [{ name: "missing UUID" }], [{ uuid }, { uuid }]]) {
+    response = value;
+    await assert.rejects(api.syncMachines(), /机器清单/);
+    assert.equal(store.read().machines.length, 1);
+    assert.equal(store.read().instances.length, 1);
+  }
+  response = [];
+  await api.syncMachines();
+  assert.equal(store.read().machines.length, 0, "a valid empty list removes machines");
+});
+
+test("serial discovery submissions use current server state despite a stale page revision", async (t) => {
+  let count = 0;
+  const fakeBin = fs.mkdtempSync(path.join(os.tmpdir(), "kns-scan-bin-"));
+  t.after(() => fs.rmSync(fakeBin, { recursive: true, force: true }));
+  for (const name of ["id", "sha256sum"]) fs.writeFileSync(path.join(fakeBin, name), "#!/bin/sh\nprintf '0\\n'\n", { mode: 0o755 });
+  const { api, store } = runtime(t, { call: async (method, params) => {
+    if (method === "common:getNodesLatestStatus") return Object.fromEntries(params.uuids.map((uuid) => [uuid, { online: true }]));
+    assert.equal(method, "admin:exec");
+    assert.equal(require("node:child_process").spawnSync("/bin/sh", ["-n", "-c", params.command]).status, 0);
+    if (!count) {
+      const result = require("node:child_process").spawnSync("/bin/sh", ["-c", params.command], { env: { PATH: fakeBin }, encoding: "utf8" });
+      assert.equal(result.status, 127);
+      assert.match(result.stdout, /KNS_SCAN_ERROR=missing_bash/);
+    }
+    return { task_id: "task-" + (++count) };
+  } });
+  const state = store.read();
+  state.settings.setupComplete = true;
+  for (let i = 0; i < 26; i++) state.machines.push({ uuid: "123e4567-e89b-42d3-a456-4266141740" + String(i).padStart(2, "0"), name: "machine-" + i, online: true });
+  store.write(state);
+  const staleRevision = store.read().revision;
+  for (const machine of state.machines) {
+    const res = { statusCode: 0, body: "", setHeader() {}, end(value) { this.body = value; } };
+    await api.handleAction({ headers: { "content-type": "application/json", host: "monitor.example", origin: "https://monitor.example" }, context: { principal: { roles: ["admin"] } }, body: JSON.stringify({ action: "machine.discover", machineUuid: machine.uuid, idempotencyKey: machine.uuid, expectedRevision: staleRevision }) }, res);
+    assert.equal(JSON.parse(res.body).ok, true);
+  }
+  assert.equal(count, 26);
+  assert.equal(store.read().jobs.length, 26);
+  await assert.rejects(api.handleAction({ headers: { "content-type": "application/json", host: "monitor.example", origin: "https://monitor.example" }, context: { principal: { roles: ["admin"] } }, body: JSON.stringify({ action: "settings.update", expectedRevision: staleRevision }) }, { setHeader() {}, end() {} }), (error) => error.code === "state_revision_conflict");
+});
+
+test("discovery errors expose only recognized scan stages and remote-control failures", async (t) => {
+  const responses = { bash: { exit_code: 127, stdout: "KNS_SCAN_ERROR=missing_bash\nsecret output" }, jq: { exit_code: 127, stdout: "KNS_SCAN_ERROR=missing_jq" }, missing: { exit_code: 1, stdout: "KNS_SCAN_ERROR=config_missing" }, disabled: { exit_code: -1, result: "Remote control is disabled." }, unknown: { exit_code: -1, result: "private output" } };
+  const { api, store } = runtime(t, { call: async (_method, params) => responses[params.task_id] });
+  const state = store.read();
+  for (const id of Object.keys(responses)) state.jobs.push({ id, action: "machine.discover", state: "dispatched", machineUuid: "m", taskId: id, createdAt: new Date().toISOString() });
+  store.write(state);
+  await api.pollPendingJobs();
+  const jobs = store.read().jobs;
+  assert.match(jobs.find((job) => job.id === "bash").message, /缺少 bash/);
+  assert.match(jobs.find((job) => job.id === "jq").message, /缺少 jq/);
+  assert.match(jobs.find((job) => job.id === "missing").message, /尚未安装 OneBox/);
+  assert.match(jobs.find((job) => job.id === "disabled").message, /远程控制未启用/);
+  assert.match(jobs.find((job) => job.id === "unknown").message, /退出码 -1/);
+  assert.ok(jobs.every((job) => !/secret output|private output/.test(job.message)));
+});
+
+test("deleting a machine while a scan is being submitted does not revive its job", async (t) => {
+  const uuid = "123e4567-e89b-42d3-a456-426614174000";
+  let releaseDispatch, dispatchStarted;
+  const started = new Promise((resolve) => { dispatchStarted = resolve; });
+  const server = { call: async (method) => {
+    if (method === "common:getNodesLatestStatus") return { [uuid]: { online: true } };
+    if (method === "admin:exec") { dispatchStarted(); return new Promise((resolve) => { releaseDispatch = resolve; }); }
+    if (method === "admin:listClients") return [];
+    throw new Error("unexpected RPC " + method);
+  } };
+  const { api, store } = runtime(t, server);
+  const state = store.read(); state.settings.setupComplete = true;
+  state.machines.push({ uuid, name: "machine", online: true }); store.write(state);
+  const response = { statusCode: 0, body: "", setHeader() {}, end(value) { this.body = value; } };
+  const submit = api.handleAction({ headers: { "content-type": "application/json", host: "monitor.example", origin: "https://monitor.example" }, context: { principal: { roles: ["admin"] } }, body: JSON.stringify({ action: "machine.discover", machineUuid: uuid, idempotencyKey: "scan" }) }, response);
+  await started;
+  await api.syncMachines();
+  releaseDispatch({ task_id: "task-id" });
+  await submit;
+  assert.equal(JSON.parse(response.body).ok, false);
+  assert.equal(store.read().jobs[0].state, "cancelled");
+  assert.equal(store.read().machines.length, 0);
+});
+
+test("plugin update package is limited to the latest release and verified before delivery", async (t) => {
+  const crypto = require("node:crypto");
+  const originalFetch = global.fetch; t.after(() => { global.fetch = originalFetch; });
+  const bytes = Buffer.from([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]);
+  const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+  let checksum = digest; const calls = [];
+  global.fetch = async (url) => {
+    calls.push(url);
+    if (url.endsWith("/latest")) return { ok: true, json: async () => ({ tag_name: "v9.9.9", assets: [{ name: "onebox-bridge.zip", state: "uploaded", size: bytes.length }, { name: "onebox-bridge.zip.sha256", state: "uploaded", size: 84 }] }) };
+    if (url.endsWith(".sha256")) return { ok: true, text: async () => checksum + "  onebox-bridge.zip\n" };
+    return { ok: true, headers: { get: () => String(bytes.length) }, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+  };
+  const { api, store } = runtime(t);
+  const response = () => ({ headers: {}, chunks: [], setHeader(key, value) { this.headers[key] = value; }, write(chunk) { this.chunks.push(Buffer.from(chunk)); }, end() {} });
+  let res = response();
+  await api.downloadPluginUpdate({ query: { version: "9.9.9" } }, res);
+  assert.deepEqual(Buffer.concat(res.chunks), bytes);
+  assert.equal(res.headers["Content-Type"], "application/zip");
+  assert.equal(calls.length, 3);
+  res = response(); checksum = "0".repeat(64);
+  await assert.rejects(api.downloadPluginUpdate({ query: { version: "9.9.9" } }, res), (error) => error.code === "update_checksum_mismatch");
+  assert.equal(res.chunks.length, 0);
+  await assert.rejects(api.downloadPluginUpdate({ query: { version: "9.9.8" } }, response()), (error) => error.code === "update_version_changed");
+  await assert.rejects(api.downloadPluginUpdate({ query: { version: "../../latest" } }, response()), (error) => error.code === "invalid_update_version");
+  const state = store.read(); state.jobs.push({ id: "running", state: "running" }); store.write(state);
+  await assert.rejects(api.downloadPluginUpdate({ query: { version: "9.9.9" } }, response()), (error) => error.code === "active_jobs_block_maintenance");
+});
+
+test("remote dispatch checks live presence and refuses offline or unknown targets", async (t) => {
+  let presence = false, execCalls = 0;
+  const uuid = "123e4567-e89b-42d3-a456-426614174000";
+  const { api, store } = runtime(t, { call: async (method) => {
+    if (method === "common:getNodesLatestStatus") return presence === null ? {} : { [uuid]: { online: presence } };
+    if (method === "admin:exec") { execCalls++; return { task_id: "accepted" }; }
+    throw new Error("unexpected RPC");
+  } });
+  const state = store.read(); state.settings.setupComplete = true;
+  state.machines.push({ uuid, name: "probe", online: true }); store.write(state);
+  for (const [index, value] of [false, null, true].entries()) {
+    presence = value;
+    const res = { body: "", setHeader() {}, end(value) { this.body = value; } };
+    await api.handleAction({ headers: { "content-type": "application/json", host: "monitor.example", origin: "https://monitor.example" }, context: { principal: { roles: ["admin"] } }, body: JSON.stringify({ action: "machine.discover", machineUuid: uuid, idempotencyKey: "scan-" + index }) }, res);
+    const result = JSON.parse(res.body);
+    assert.equal(result.ok, value === true);
+    if (value !== true) assert.match(result.job.message, /未发送远程命令/);
+  }
+  assert.equal(execCalls, 1);
+});
+
+test("a removed and reconnected probe does not automatically deploy a second time", async (t) => {
+  const uuid = "123e4567-e89b-42d3-a456-426614174000";
+  let present = true;
+  const { api, store } = runtime(t, { call: async (method) => {
+    if (method === "admin:listClients") return present ? [{ uuid, name: "probe" }] : [];
+    if (method === "common:getNodesLatestStatus") return { [uuid]: { online: false } };
+    throw new Error("unexpected RPC " + method);
+  } });
+  const state = store.read(); state.settings.setupComplete = true; state.settings.autoProvisionNewProbes = true; store.write(state);
+  await api.syncMachines(); assert.equal(store.read().machines[0].autoProvision.state, "queued");
+  present = false; await api.syncMachines(); assert.equal(store.read().machines.length, 0);
+  present = true; await api.syncMachines();
+  assert.equal(store.read().machines[0].autoProvision, undefined);
+});
+
+test("a probe removed during presence lookup never receives its queued command", async (t) => {
+  const uuid = "123e4567-e89b-42d3-a456-426614174000";
+  let releasePresence, startedPresence, execCalls = 0;
+  const started = new Promise((resolve) => { startedPresence = resolve; });
+  const { api, store } = runtime(t, { call: async (method) => {
+    if (method === "common:getNodesLatestStatus") { startedPresence(); return new Promise((resolve) => { releasePresence = resolve; }); }
+    if (method === "admin:listClients") return [];
+    if (method === "admin:exec") { execCalls++; return { task_id: "unexpected" }; }
+    throw new Error("unexpected RPC");
+  } });
+  const state = store.read(); state.settings.setupComplete = true; state.machines.push({ uuid, name: "probe", online: true }); store.write(state);
+  const response = { body: "", setHeader() {}, end(value) { this.body = value; } };
+  const submit = api.handleAction({ headers: { "content-type": "application/json", host: "monitor.example", origin: "https://monitor.example" }, context: { principal: { roles: ["admin"] } }, body: JSON.stringify({ action: "machine.discover", machineUuid: uuid, idempotencyKey: "queued" }) }, response);
+  await started; await api.syncMachines(); releasePresence({ [uuid]: { online: true } }); await submit;
+  assert.equal(execCalls, 0);
+  assert.equal(JSON.parse(response.body).job.state, "cancelled");
+});
+
+test("plugin update maintenance lock blocks new actions until explicitly released", async (t) => {
+  const { api, store } = runtime(t);
+  const state = store.read(); state.settings.setupComplete = true; store.write(state);
+  const act = async (body) => {
+    const res = { body: "", setHeader() {}, end(value) { this.body = value; } };
+    await api.handleAction({ headers: { "content-type": "application/json", host: "monitor.example", origin: "https://monitor.example" }, context: { principal: { roles: ["admin"] } }, body: JSON.stringify(body) }, res);
+    return JSON.parse(res.body);
+  };
+  const locked = await act({ action: "plugin.update.prepare" });
+  assert.ok(locked.token);
+  await assert.rejects(act({ action: "settings.update" }), (error) => error.code === "maintenance_in_progress");
+  await assert.rejects(act({ action: "plugin.update.unlock", token: "incorrect" }), (error) => error.code === "invalid_update_lock");
+  assert.equal((await act({ action: "plugin.update.unlock", token: locked.token })).ok, true);
+  assert.equal((await act({ action: "plugin.update.prepare" })).ok, true);
 });

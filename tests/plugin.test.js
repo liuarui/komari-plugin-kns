@@ -42,7 +42,11 @@ test("onebox-bridge leftover migration keeps URI format and serves on-demand nat
   const mockServer = {
     route(method, url, handler) { routes.set(method + " " + url, handler); },
     cron(expression, handler) { crons.push({ expression, handler }); },
-    async call() { return []; },
+    async call(method) {
+      if (method === "admin:listClients") return [{ uuid: machineUuid, name: "legacy-node" }];
+      if (method === "common:getNodesLatestStatus") return { [machineUuid]: { online: true } };
+      return [];
+    },
   };
   Module._load = function (request, parent, isMain) {
     if (request === "server") return mockServer;

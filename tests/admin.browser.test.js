@@ -188,3 +188,82 @@ test("subscription drawer creates, edits and protects unsaved changes", { skip: 
   assert.equal(await page.locator('#profileDrawer').isVisible(), false);
   assert.deepEqual(errors, []);
 });
+
+test("plugin update checks, downloads and uses Komari chunk upload", { skip: !driver }, async (t) => {
+  const { chromium } = require(driver);
+  const root = path.resolve(__dirname, "../pages");
+  const server = http.createServer((req, res) => {
+    const file = ({ "/": "admin.html", "/qrcode-generator.js": "qrcode-generator.js", "/qrcode-generator-utf8.js": "qrcode-generator-utf8.js" })[req.url];
+    if (!file) { res.writeHead(404); res.end(); return; }
+    res.setHeader("Content-Type", file.endsWith(".js") ? "text/javascript" : "text/html;charset=utf-8");
+    res.end(fs.readFileSync(path.join(root, file)));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const browser = await chromium.launch({ channel: "chrome", headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  const errors = []; page.on("pageerror", (error) => errors.push(error.message));
+  const state = { revision: 1, pluginVersion: "1.0.1", settings: { setupComplete: true, defaultNode: {} }, machines: [], instances: [], jobs: [], profiles: [], audit: [], backups: [] };
+  const calls = [];
+  await page.route("**/api/kns/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/admin/update-package")) { calls.push("download:" + url.searchParams.get("version")); return route.fulfill({ body: Buffer.from([0x50, 0x4b, 3, 4]), contentType: "application/zip" }); }
+    if (route.request().method() === "GET") return route.fulfill({ json: state });
+    const body = route.request().postDataJSON();
+    if (body.action === "plugin.update.prepare") return route.fulfill({ json: { ok: true, token: "fixture-lock" } });
+    return route.fulfill({ json: { ok: true, currentVersion: "1.0.1", latestVersion: "1.0.2", updateAvailable: true } });
+  });
+  await page.route("**/api/admin/upload/**", async (route) => {
+    const step = new URL(route.request().url()).pathname.split("/").pop(); calls.push(step);
+    if (step === "init") { assert.equal(route.request().postDataJSON().purpose, "plugin"); return route.fulfill({ json: { status: "success", data: { upload_id: "fixture", chunk_size: 5 * 1024 * 1024 } } }); }
+    if (step === "chunk") { assert.match(route.request().postData(), /upload_id/); return route.fulfill({ json: { status: "success", data: { received: true, chunk_index: 0 } } }); }
+    if (step === "merge") { assert.equal(route.request().postDataJSON().upload_id, "fixture"); return route.fulfill({ json: { status: "success", data: { version: "1.0.2" } } }); }
+    return route.fulfill({ json: { status: "success", data: {} } });
+  });
+  await page.goto(`http://127.0.0.1:${server.address().port}/`);
+  await page.locator('[data-panel="settings"]').click();
+  await page.locator('#checkPluginUpdate').click();
+  await page.locator('#installPluginUpdate').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#installPluginUpdate').textContent(), '安装 v1.0.2');
+  await page.locator('#installPluginUpdate').click();
+  await page.locator('#operationConfirm').click();
+  await page.waitForResponse((response) => response.url().endsWith('/api/admin/upload/merge'));
+  assert.deepEqual(calls, ['download:1.0.2', 'init', 'chunk', 'merge']);
+  assert.deepEqual(errors, []);
+});
+
+test("one-click batch scan only claims freshly scanned online machines", { skip: !driver }, async (t) => {
+  const { chromium } = require(driver);
+  const root = path.resolve(__dirname, "../pages");
+  const server = http.createServer((req, res) => {
+    const file = ({ "/": "admin.html", "/qrcode-generator.js": "qrcode-generator.js", "/qrcode-generator-utf8.js": "qrcode-generator-utf8.js" })[req.url];
+    if (!file) { res.writeHead(404); res.end(); return; }
+    res.setHeader("Content-Type", file.endsWith(".js") ? "text/javascript" : "text/html;charset=utf-8"); res.end(fs.readFileSync(path.join(root, file)));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const browser = await chromium.launch({ channel: "chrome", headless: true }); t.after(() => browser.close());
+  const page = await browser.newPage(); const errors = []; page.on("pageerror", (error) => errors.push(error.message));
+  const machine = { uuid: "online", name: "Online probe", online: true, ipv4: "8.8.8.8", policy: { deployAllowed: true, tags: [] } };
+  const state = { revision: 1, settings: { setupComplete: true, defaultNode: {} }, machines: [machine, { uuid: "offline", name: "Offline probe", online: false, policy: {} }], instances: [], jobs: [], profiles: [], audit: [], backups: [] };
+  const actions = [];
+  await page.route("**/api/kns/**", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: state });
+    const body = route.request().postDataJSON(); actions.push(body);
+    const job = { id: "job-" + actions.length, action: body.action, state: "succeeded", machineUuid: body.machineUuid, legacyTag: body.legacyTag };
+    if (body.action === "machine.discover") { machine.discoveredAt = new Date().toISOString(); machine.discoveredNodes = [{ tag: "old-node", protocol: "vless", importable: true, managed: false, listen: { port: 443, transport: "tcp" } }]; }
+    if (body.action === "machine.import") state.instances.push({ id: "claimed", machineUuid: "online", name: "claimed", legacyTag: body.legacyTag, protocol: "vless", enabled: true, listen: { port: 443, transport: "tcp" }, endpoint: { host: "8.8.8.8", port: 443 } });
+    state.jobs.unshift(job); state.revision++; return route.fulfill({ json: { ok: true, job } });
+  });
+  await page.goto(`http://127.0.0.1:${server.address().port}/`);
+  await page.locator('[data-panel="machines"]').click();
+  await page.locator('#scanAndClaimAll').click();
+  assert.match(await page.locator('#operationDescription').textContent(), /重载共享服务/);
+  await page.locator('#operationConfirm').click();
+  await page.waitForFunction(() => document.querySelector('#batchClaimStatus').textContent.includes('批量处理结束'), { timeout: 15000 });
+  assert.deepEqual(actions.map((item) => [item.action, item.machineUuid]), [["machine.discover", "online"], ["machine.import", "online"]]);
+  assert.equal(actions[1].legacyTag, "old-node");
+  assert.match(await page.locator('#batchClaimStatus').textContent(), /已接管 1 个节点/);
+  assert.deepEqual(errors, []);
+});

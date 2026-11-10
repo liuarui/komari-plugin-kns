@@ -60,6 +60,8 @@ let healthBusy = false;
 let endpointBusy = false;
 let autoProvisionBusy = false;
 let maintenanceLock = false;
+let pluginUpdateLockToken = "";
+let pluginUpdateLockTimer = null;
 let lastLiveSync = 0;
 let subscriptionRefreshBusy = false;
 let subscriptionRefreshPending = false;
@@ -609,7 +611,7 @@ function nodesFrom(value) {
   if (Array.isArray(value)) return value;
   if (value && Array.isArray(value.data)) return value.data;
   if (value && Array.isArray(value.clients)) return value.clients;
-  return [];
+  throw new Error("Komari 机器清单格式无效，已保留现有机器数据。");
 }
 
 function firstString(object, keys) {
@@ -651,7 +653,11 @@ async function syncMachines() {
   if (syncBusy) return false;
   syncBusy = true;
   try {
-    const live = nodesFrom(await server.call("admin:listClients")).map(normalizeMachine).filter(Boolean);
+    const records = nodesFrom(await server.call("admin:listClients"));
+    const live = records.map((record) => record && typeof record === "object" ? normalizeMachine(record) : null);
+    if (live.some((machine) => !machine) || new Set(live.map((machine) => machine.uuid)).size !== live.length) {
+      throw new Error("Komari 机器清单包含无效或重复的机器，已保留现有机器数据。");
+    }
     if (live.length) {
       try {
         // admin:listClients returns registered-client records, not live
@@ -667,7 +673,8 @@ async function syncMachines() {
       }
     }
     const state = getState();
-    const current = new Map(state.machines.map((machine) => [machine.uuid, machine]));
+    const machineKey = (uuid) => String(uuid || "").toLowerCase();
+    const current = new Map(state.machines.map((machine) => [machineKey(machine.uuid), machine]));
     const baseline = new Set(state.settings.autoProvisionBaselineUuids || []);
     const incoming = [];
     for (const node of live) {
@@ -682,6 +689,7 @@ async function syncMachines() {
         merged.autoProvision = { state: "queued", templateVersion: Number(state.settings.defaultNode && state.settings.defaultNode.version) || 1, template: deepClone(state.settings.defaultNode), createdAt: now(), updatedAt: now(), message: "新探针已加入自动部署队列。" };
         audit(state, null, "auto_provision.queued", { machineUuid: node.uuid, protocol: "vless", listenPort: state.settings.defaultNode.listenPort });
       }
+      if (state.settings.setupComplete === true) baseline.add(node.uuid);
       const observed = preferredObservedAddress(merged);
       const prior = previous.observedAddress || "";
       if (observed && observed !== prior) {
@@ -695,19 +703,25 @@ async function syncMachines() {
       incoming.push(merged);
     }
     const known = new Set(incoming.map((machine) => machine.uuid));
-    const removed = state.machines.filter((machine) => !known.has(machine.uuid)).map((machine) => {
-      const next = Object.assign({}, machine, { online: false });
-      if (!next.removedFromKomariAt) {
-        next.removedFromKomariAt = now();
-        audit(state, null, "machine.removed_from_komari", { machineUuid: next.uuid });
+    const removed = state.machines.filter((machine) => !known.has(machineKey(machine.uuid)));
+    const removedUuids = new Set(removed.map((machine) => machineKey(machine.uuid)));
+    for (const uuid of removedUuids) baseline.add(uuid);
+    state.settings.autoProvisionBaselineUuids = Array.from(baseline);
+    for (const machine of removed) audit(state, null, "machine.removed_from_komari", { machineUuid: machine.uuid });
+    if (removedUuids.size) {
+      state.instances = state.instances.filter((instance) => !removedUuids.has(machineKey(instance.machineUuid)));
+      state.runtimes = state.runtimes.filter((runtime) => !removedUuids.has(machineKey(runtime.machineUuid)));
+      state.legacyNodes = state.legacyNodes.filter((node) => !removedUuids.has(machineKey(node.machineUuid)));
+      for (const job of state.jobs) {
+        if (!removedUuids.has(machineKey(job.machineUuid))) continue;
+        if (["authorized", "dispatched", "running", "verifying"].includes(job.state)) {
+          job.state = "cancelled"; job.updatedAt = now();
+          job.message = "机器已从 Komari 删除，KNS 已停止跟踪此任务。";
+        }
+        closeJob(job);
       }
-      if (next.autoProvision && next.autoProvision.state === "queued") {
-        next.autoProvision = Object.assign({}, next.autoProvision, { state: "cancelled", updatedAt: now(), message: "机器已从 Komari 删除，自动部署队列已取消。" });
-        audit(state, null, "auto_provision.cancelled", { machineUuid: next.uuid, reason: "machine_removed_from_komari" });
-      }
-      return next;
-    });
-    const machines = incoming.concat(removed);
+    }
+    const machines = incoming;
     const nextState = Object.assign({}, state, { machines });
     lastLiveSync = Date.now();
     const snapshot = (items) => JSON.stringify((items || []).map((machine) => ({
@@ -718,7 +732,7 @@ async function syncMachines() {
       policy: { deployAllowed: !!(machine.policy && machine.policy.deployAllowed), addressMode: (machine.policy && machine.policy.addressMode) || "auto", manualAddress: (machine.policy && machine.policy.manualAddress) || "", ddnsHostname: (machine.policy && machine.policy.ddnsHostname) || "", tags: (machine.policy && machine.policy.tags) || [], managementTags: (machine.policy && machine.policy.managementTags) || [] },
       autoProvision: machine.autoProvision && { state: machine.autoProvision.state, instanceId: machine.autoProvision.instanceId || "", templateVersion: Number(machine.autoProvision.templateVersion) || 0 },
     })));
-    if (snapshot(state.machines) !== snapshot(machines)) save(nextState);
+    if (removedUuids.size || snapshot(state.machines) !== snapshot(machines)) save(nextState);
     if (nextState.machines.some((machine) => !machine.removedFromKomariAt && machine.autoProvision && machine.autoProvision.state === "queued")) setTimeout(dispatchAutoProvisionQueue, 0);
     return true;
   } finally { syncBusy = false; }
@@ -1175,14 +1189,17 @@ function makeRemoteDiscoveryCommand() {
   const digest = quoteShell(INSTALLER_SHA256);
   return [
     "set -u",
-    "[ \"$(id -u)\" -eq 0 ] || { echo 'KNS requires a root Komari Agent.' >&2; exit 77; }",
-    "command -v sha256sum >/dev/null 2>&1 || exit 127",
-    "installer=$(mktemp) || exit 1; trap 'rm -f \"$installer\"' EXIT",
-    "if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 10 --max-time 180 " + installer + " -o \"$installer\"; elif command -v wget >/dev/null 2>&1; then wget -qO \"$installer\" " + installer + "; else exit 127; fi",
-    "printf '%s  %s\\n' " + digest + " \"$installer\" | sha256sum -c - >/dev/null || { echo 'OneBox installer SHA256 mismatch.' >&2; exit 65; }",
-    "result=$(bash \"$installer\" kns discover); discover_rc=$?; if [ \"$discover_rc\" -ne 0 ]; then case \"$result\" in *low_pid_headroom*) printf '%s\\n' KNS_RESOURCE=low_pid_headroom ;; *low_memory_headroom*) printf '%s\\n' KNS_RESOURCE=low_memory_headroom ;; esac; exit \"$discover_rc\"; fi",
+    "[ \"$(id -u)\" -eq 0 ] || { printf '%s\\n' KNS_SCAN_ERROR=not_root; exit 77; }",
+    "command -v sha256sum >/dev/null 2>&1 || { printf '%s\\n' KNS_SCAN_ERROR=missing_sha256sum; exit 127; }",
+    "command -v bash >/dev/null 2>&1 || { printf '%s\\n' KNS_SCAN_ERROR=missing_bash; exit 127; }",
+    "if [ ! -e /etc/onebox/config.json ] && [ ! -L /etc/onebox/config.json ]; then printf '%s\\n' KNS_SCAN_ERROR=config_missing; exit 1; fi",
+    "command -v jq >/dev/null 2>&1 || { printf '%s\\n' KNS_SCAN_ERROR=missing_jq; exit 127; }",
+    "installer=$(mktemp) || { printf '%s\\n' KNS_SCAN_ERROR=temp_file; exit 1; }; trap 'rm -f \"$installer\"' EXIT",
+    "if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 10 --max-time 180 " + installer + " -o \"$installer\" || { printf '%s\\n' KNS_SCAN_ERROR=download_failed; exit 1; }; elif command -v wget >/dev/null 2>&1; then wget -qO \"$installer\" " + installer + " || { printf '%s\\n' KNS_SCAN_ERROR=download_failed; exit 1; }; else printf '%s\\n' KNS_SCAN_ERROR=missing_downloader; exit 127; fi",
+    "printf '%s  %s\\n' " + digest + " \"$installer\" | sha256sum -c - >/dev/null || { printf '%s\\n' KNS_SCAN_ERROR=checksum_failed; exit 65; }",
+    "result=$(bash \"$installer\" kns discover); discover_rc=$?; if [ \"$discover_rc\" -ne 0 ]; then case \"$result\" in *low_pid_headroom*) printf '%s\\n' KNS_RESOURCE=low_pid_headroom ;; *low_memory_headroom*) printf '%s\\n' KNS_RESOURCE=low_memory_headroom ;; esac; printf '%s\\n' KNS_SCAN_ERROR=discover_failed; exit \"$discover_rc\"; fi",
     "printf 'KNS_DISCOVERY=%s\\n' \"$result\"",
-    "runtime=$(bash \"$installer\" kns runtime-status) || exit 1; printf 'KNS_RUNTIME_STATUS=%s\\n' \"$runtime\"",
+    "runtime=$(bash \"$installer\" kns runtime-status) || { printf '%s\\n' KNS_SCAN_ERROR=runtime_failed; exit 1; }; printf 'KNS_RUNTIME_STATUS=%s\\n' \"$runtime\"",
   ].join("; ");
 }
 
@@ -1545,19 +1562,25 @@ async function pollPendingJobs() {
       if (code !== 0) {
         const outputText = taskText(result);
         const resourceLimit = outputText.match(/(?:KNS_RESOURCE=|"code"\s*:\s*")(low_pid_headroom|low_memory_headroom)/);
+        const scanFailure = job.action === "machine.discover" && outputText.match(/(?:^|\n)KNS_SCAN_ERROR=(not_root|missing_sha256sum|missing_bash|missing_jq|config_missing|temp_file|download_failed|missing_downloader|checksum_failed|discover_failed|runtime_failed)(?:\r?\n|$)/);
+        const scanMessages = { not_root: "Komari Agent 未以 root 运行。", missing_sha256sum: "机器缺少 sha256sum，无法校验 OneBox 脚本。", missing_bash: "机器缺少 bash，无法运行 OneBox 扫描。", missing_jq: "机器缺少 jq，无法读取 OneBox 配置。", config_missing: "未找到 /etc/onebox/config.json；这台机器可能尚未安装 OneBox。", temp_file: "无法创建临时文件，请检查临时目录与磁盘空间。", download_failed: "无法下载 OneBox 扫描脚本，请检查机器访问 GitHub 的网络和 DNS。", missing_downloader: "机器缺少 curl 或 wget，无法下载 OneBox 扫描脚本。", checksum_failed: "下载的 OneBox 脚本校验失败，请检查网络或代理。", discover_failed: "OneBox 读取节点配置失败，请检查机器上的 OneBox 配置及依赖。", runtime_failed: "OneBox 运行状态读取失败，请检查机器上的 OneBox 环境及依赖。" };
         const bootstrapBlocked = outputText.match(/(?:^|\n)KNS_BOOTSTRAP_BLOCKED=(existing_state|invalid_config)(?:\r?\n|$)/);
         const bootstrapFailure = outputText.match(/(?:^|\n)KNS_BOOTSTRAP_FAILED=(\d{1,3})(?:\r?\n|$)/);
         const bootstrapCompleted = /^KNS_BOOTSTRAP=completed$/m.test(outputText);
         const oneboxErrorCode = extractOneboxErrorCode(result, job);
         job.state = "failed"; job.updatedAt = now(); job.message = resourceLimit
           ? (resourceLimit[1] === "low_pid_headroom" ? "探针剩余进程额度不足；OneBox 已跳过操作，请释放或提高 pids 限额后重试。" : "探针可用内存不足；OneBox 已跳过操作，请释放或提高内存限额后重试。")
+          : /remote control is disabled\.?/i.test(outputText)
+            ? "Komari Agent 的远程控制未启用；请检查该机器的 Agent 配置。"
+          : scanFailure
+            ? scanMessages[scanFailure[1]]
           : bootstrapBlocked
             ? (bootstrapBlocked[1] === "existing_state" ? "检测到 OneBox 主配置缺失，但仍有旧数据或服务文件；为保护现场，自动初始化已停止。请先恢复 OneBox 配置。" : "OneBox 主配置路径异常或格式无效；自动初始化已停止，未覆盖现有配置。请检查配置路径和文件结构后重试。")
             : bootstrapFailure
             ? "OneBox 基础环境初始化失败（退出码 " + bootstrapFailure[1] + "），节点安装未继续。请检查目标机系统、依赖和网络。原始输出未保存在 KNS。"
             : oneboxErrorCode
               ? (bootstrapCompleted ? "OneBox 基础环境已就绪，但节点安装失败：" : "节点安装失败：") + safeOneboxErrorMessage(oneboxErrorCode) + "原始输出未保存在 KNS。"
-              : "远程任务退出码 " + code + "。敏感输出未保存在 KNS。";
+              : code === -1 ? "Komari Agent 返回退出码 -1；请检查远程控制是否启用及 Agent 日志。敏感输出未保存在 KNS。" : "远程任务退出码 " + code + "。敏感输出未保存在 KNS。";
         closeJob(job); changed = true; continue;
       }
       const status = extractStatus(result);
@@ -1745,11 +1768,32 @@ async function dispatchJob(state, job, params) {
 }
 
 async function finishDispatch(job, params) {
-  await dispatchJob(null, job, params);
-  const latest = getState();
-  const current = latest.jobs.find((item) => item.id === job.id);
+  let latest = getState();
+  let current = latest.jobs.find((item) => item.id === job.id);
   if (!current) fail("job_lost", "任务记录在远程提交期间消失，请检查状态备份。", 500);
-  for (const field of ["taskId", "state", "updatedAt", "message", "rpcErrorCode"]) current[field] = job[field];
+  if (current.state === "cancelled") return current;
+  let presence;
+  try { presence = onlineStatusMap(await server.call("common:getNodesLatestStatus", { uuids: [job.machineUuid] })); }
+  catch (_) { presence = null; }
+  latest = getState();
+  current = latest.jobs.find((item) => item.id === job.id);
+  if (!current) fail("job_lost", "任务记录在远程提交期间消失，请检查状态备份。", 500);
+  if (current.state === "cancelled") return current;
+  const machine = latest.machines.find((item) => item.uuid === job.machineUuid && !item.removedFromKomariAt);
+  if (!machine || !presence || presence.get(job.machineUuid) !== true) {
+    current.state = machine ? "failed" : "cancelled";
+    current.updatedAt = now();
+    current.message = !machine ? "机器已从 Komari 删除，未发送远程命令。" : presence && presence.get(job.machineUuid) === false ? "机器当前离线，未发送远程命令。" : "无法确认机器在线状态，未发送远程命令。";
+    closeJob(current); save(latest); return current;
+  }
+  await dispatchJob(null, job, params);
+  latest = getState();
+  current = latest.jobs.find((item) => item.id === job.id);
+  if (!current) fail("job_lost", "任务记录在远程提交期间消失，请检查状态备份。", 500);
+  if (current.state === "cancelled") return current;
+  if (current.callback) {
+    current.taskId = job.taskId || current.taskId;
+  } else for (const field of ["taskId", "state", "updatedAt", "message", "rpcErrorCode"]) current[field] = job[field];
   save(latest);
   return current;
 }
@@ -1773,10 +1817,31 @@ async function handleAction(req, res) {
   const action = String(body.action || "");
   if (action !== "backup.inspect" && Buffer.byteLength(String(req.body || ""), "utf8") > 1024 * 1024) fail("body_too_large", "请求正文超过允许大小。", 413);
   const state = getState();
-  if (maintenanceLock) fail("maintenance_in_progress", "KNS 正在执行互斥设置或数据维护；请稍后重试。", 409);
-  assertExpectedRevision(state.revision, body);
-  if (state.settings.setupComplete !== true && !["setup.complete", "backup.export", "backup.inspect", "backup.restore.preview", "profile.preview", "plugin.update.check"].includes(action)) {
+  if (maintenanceLock && !(action === "plugin.update.unlock" && pluginUpdateLockToken)) fail("maintenance_in_progress", "KNS 正在执行互斥设置或数据维护；请稍后重试。", 409);
+  // Discovery reads the latest machine and task state below and does not edit a draft.
+  if (!["machine.discover", "plugin.update.check", "plugin.update.prepare", "plugin.update.unlock"].includes(action)) assertExpectedRevision(state.revision, body);
+  if (state.settings.setupComplete !== true && !["setup.complete", "backup.export", "backup.inspect", "backup.restore.preview", "profile.preview", "plugin.update.check", "plugin.update.prepare", "plugin.update.unlock"].includes(action)) {
     fail("setup_required", "请先完成连接设置；未初始化期间管理页面为只读。", 409);
+  }
+  if (action === "plugin.update.prepare") {
+    assertNoActiveJobs(state, "更新插件");
+    if (autoProvisionBusy) fail("active_jobs_block_maintenance", "自动部署队列正在处理，请稍后再更新。", 409);
+    maintenanceLock = true;
+    pluginUpdateLockToken = randomId("update");
+    const token = pluginUpdateLockToken;
+    pluginUpdateLockTimer = setTimeout(() => {
+      if (pluginUpdateLockToken !== token) return;
+      pluginUpdateLockToken = ""; pluginUpdateLockTimer = null; maintenanceLock = false;
+      setTimeout(dispatchAutoProvisionQueue, 0);
+    }, 5 * 60 * 1000);
+    return json(res, 200, { ok: true, token });
+  }
+  if (action === "plugin.update.unlock") {
+    if (!pluginUpdateLockToken || body.token !== pluginUpdateLockToken) fail("invalid_update_lock", "更新锁无效或已过期。", 409);
+    if (pluginUpdateLockTimer) clearTimeout(pluginUpdateLockTimer);
+    pluginUpdateLockTimer = null; pluginUpdateLockToken = ""; maintenanceLock = false;
+    setTimeout(dispatchAutoProvisionQueue, 0);
+    return json(res, 200, { ok: true });
   }
   if (action === "plugin.update.check") {
     const current = String(PLUGIN_VERSION || "");
@@ -1890,7 +1955,7 @@ async function handleAction(req, res) {
     const retry = state.jobs.find((job) => job.retryOfJobId === failed.id);
     if (retry) {
       if (retry.retryIdempotencyKey !== retryKey) fail("idempotency_conflict", "此失败任务已使用其他幂等键重试；请检查已创建的重试任务。", 409);
-      return json(res, 200, { ok: retry.state !== "failed", reused: true, job: Object.assign(safeJob(retry), { canRetry: jobRetryable(state, retry) }) });
+      return json(res, 200, { ok: !["failed", "cancelled"].includes(retry.state), reused: true, job: Object.assign(safeJob(retry), { canRetry: jobRetryable(state, retry) }) });
     }
     if (!jobRetryable(state, failed)) fail("job_not_retryable", "该任务可能已到达探针，不能安全自动重试；请先核对机器状态。", 409);
     const machine = machineByUuid(state, failed.machineUuid);
@@ -1935,7 +2000,7 @@ async function handleAction(req, res) {
     audit(state, req, "job.retry.authorized", { jobId: job.id, retryOfJobId: failed.id, machineUuid: machine.uuid, action: job.action });
     save(state);
     const submitted = await finishDispatch(job, params);
-    return json(res, 202, { ok: submitted.state !== "failed", job: Object.assign(safeJob(submitted), { canRetry: jobRetryable(getState(), submitted) }) });
+    return json(res, 202, { ok: !["failed", "cancelled"].includes(submitted.state), job: Object.assign(safeJob(submitted), { canRetry: jobRetryable(getState(), submitted) }) });
   }
   if (action === "install.batch") {
     if (body.confirm !== true) fail("confirmation_required", "批量部署需要明确确认。", 400);
@@ -1964,7 +2029,7 @@ async function handleAction(req, res) {
         const prior = state.jobs.find((job) => job.action === "install" && job.machineUuid === machineUuid && job.idempotencyKey === key);
         if (prior) {
           if (prior.requestHash !== requestHash) fail("idempotency_conflict", "同一批量请求标识已用于不同的部署参数。", 409);
-          results.push({ machineUuid, reused: true, accepted: prior.state !== "failed", job: safeJob(prior) });
+          results.push({ machineUuid, reused: true, accepted: !["failed", "cancelled"].includes(prior.state), job: safeJob(prior) });
           continue;
         }
         if (state.jobs.some((job) => job.machineUuid === machineUuid && job.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(job.state))) fail("runtime_busy", "该探针的共享 OneBox Runtime 仍有未完成任务。", 409);
@@ -1992,7 +2057,7 @@ async function handleAction(req, res) {
     for (const item of requestSpecs) {
       try {
         const submitted = await finishDispatch(item.job, item.params);
-        results.push({ machineUuid: item.machineUuid, accepted: submitted.state !== "failed", job: safeJob(submitted) });
+        results.push({ machineUuid: item.machineUuid, accepted: !["failed", "cancelled"].includes(submitted.state), job: safeJob(submitted) });
       } catch (error) {
         results.push({ machineUuid: item.machineUuid, accepted: false, error: { code: error.code || "dispatch_failed", message: safeText(error.message || error, 240) } });
       }
@@ -2048,7 +2113,7 @@ async function handleAction(req, res) {
     const prior = state.jobs.find((item) => item.action === action && item.machineUuid === machine.uuid && item.idempotencyKey === key);
     if (prior) {
       if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于其他扫描请求。", 409);
-      return json(res, 200, { ok: prior.state !== "failed", reused: true, job: safeJob(prior) });
+      return json(res, 200, { ok: !["failed", "cancelled"].includes(prior.state), reused: true, job: safeJob(prior) });
     }
     const conflict = state.jobs.find((item) => item.machineUuid === machine.uuid && item.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
     if (conflict) fail("runtime_busy", "该探针已有 OneBox 任务进行中，请等待完成后再扫描。", 409);
@@ -2057,7 +2122,7 @@ async function handleAction(req, res) {
     state.jobs.push(job); audit(state, req, "machine.legacy_discovery.requested", { jobId: job.id, machineUuid: machine.uuid }); save(state);
     const params = { command: makeRemoteDiscoveryCommand(), clients: [machine.uuid] };
     if (code) params["2fa_code"] = code;
-    const submitted = await finishDispatch(job, params); return json(res, 202, { ok: submitted.state !== "failed", job: safeJob(submitted) });
+    const submitted = await finishDispatch(job, params); return json(res, 202, { ok: !["failed", "cancelled"].includes(submitted.state), job: safeJob(submitted) });
   }
   if (action === "machine.import") {
     const machine = machineByUuid(state, String(body.machineUuid || "").toLowerCase());
@@ -2090,7 +2155,7 @@ async function handleAction(req, res) {
     const prior = state.jobs.find((item) => item.machineUuid === machine.uuid && item.action === action && item.idempotencyKey === idempotencyKey);
     if (prior) {
       if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于其他导入请求。", 409);
-      return json(res, 200, { ok: prior.state !== "failed", reused: true, job: safeJob(prior) });
+      return json(res, 200, { ok: !["failed", "cancelled"].includes(prior.state), reused: true, job: safeJob(prior) });
     }
     const conflict = state.jobs.find((item) => item.machineUuid === machine.uuid && item.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
     if (conflict) fail("runtime_busy", "该探针已有 OneBox 任务进行中，请等待完成后再导入。", 409);
@@ -2105,7 +2170,7 @@ async function handleAction(req, res) {
     job.legacyTag = legacyTag; job.requestHash = requestHash;
     audit(state, req, "instance.legacy_import.authorized", { jobId: job.id, machineUuid: machine.uuid, instanceId: job.instanceId, legacyTag });
     save(state);
-    const submitted = await finishDispatch(job, params); return json(res, 202, { ok: submitted.state !== "failed", job: safeJob(submitted) });
+    const submitted = await finishDispatch(job, params); return json(res, 202, { ok: !["failed", "cancelled"].includes(submitted.state), job: safeJob(submitted) });
   }
   if (action === "backup.export") {
     const envelope = encryptedBackupEnvelope(state, body.passphrase);
@@ -2330,7 +2395,7 @@ async function handleAction(req, res) {
     if (code) params["2fa_code"] = code;
     const job = { id: randomId("job"), action, state: "authorized", machineUuid: machine.uuid, machineName: machine.name, instanceId: instance.id, protocol: instance.protocol, runtimeId: instance.runtimeId || "onebox-main", idempotencyKey: key, requestHash: crypto.createHash("sha256").update(machine.uuid + ":" + instance.id + ":status").digest("hex"), taskId: "", callback: null, createdAt: now(), updatedAt: now(), message: "正在提交只读状态核查。" };
     state.jobs.push(job); audit(state, req, "instance.status.requested", { jobId: job.id, instanceId: instance.id, machineUuid: machine.uuid }); save(state);
-    const submitted = await finishDispatch(job, params); return json(res, 202, { ok: submitted.state !== "failed", job: safeJob(submitted) });
+    const submitted = await finishDispatch(job, params); return json(res, 202, { ok: !["failed", "cancelled"].includes(submitted.state), job: safeJob(submitted) });
   }
   if (action === "runtime.script.update" || action === "runtime.kernel.update") {
     const machine = machineByUuid(state, String(body.machineUuid || "").toLowerCase());
@@ -2349,7 +2414,7 @@ async function handleAction(req, res) {
     const prior = state.jobs.find((item) => item.machineUuid === machine.uuid && item.action === action && item.idempotencyKey === idempotencyKey);
     if (prior) {
       if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于不同的 OneBox 升级目标。", 409);
-      return json(res, 200, { ok: prior.state !== "failed", reused: true, job: safeJob(prior) });
+      return json(res, 200, { ok: !["failed", "cancelled"].includes(prior.state), reused: true, job: safeJob(prior) });
     }
     const conflict = state.jobs.find((item) => item.machineUuid === machine.uuid && item.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
     if (conflict) fail("runtime_busy", "该探针的共享 OneBox Runtime 仍有未完成任务。", 409);
@@ -2358,7 +2423,7 @@ async function handleAction(req, res) {
     audit(state, req, "runtime.upgrade.authorized", { jobId: job.id, action, machineUuid: machine.uuid, target: action === "runtime.kernel.update" ? "latest-stable" : INSTALLER_SHA256 });
     save(state);
     const submitted = await finishDispatch(job, params);
-    return json(res, 202, { ok: submitted.state !== "failed", job: safeJob(submitted) });
+    return json(res, 202, { ok: !["failed", "cancelled"].includes(submitted.state), job: safeJob(submitted) });
   }
   if (!installAction(body)) fail("unknown_action", "不支持的管理动作。", 400);
   if (typeof body.confirm !== "boolean" || body.confirm !== true) fail("confirmation_required", "此操作需要显式确认。", 400);
@@ -2426,7 +2491,7 @@ async function handleAction(req, res) {
   const prior = state.jobs.find((item) => item.machineUuid === machineUuid && item.action === actionName && item.idempotencyKey === suppliedIdempotencyKey);
   if (prior) {
     if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于不同的远程动作。", 409);
-    return json(res, 200, { ok: prior.state !== "failed", reused: true, job: safeJob(prior) });
+    return json(res, 200, { ok: !["failed", "cancelled"].includes(prior.state), reused: true, job: safeJob(prior) });
   }
   spec.idempotencyKey = suppliedIdempotencyKey;
   spec.requestHash = requestHash;
@@ -2437,7 +2502,7 @@ async function handleAction(req, res) {
   // Persist the authorization record before dispatch so callbacks cannot precede it.
   save(state);
   const submitted = await finishDispatch(job, params);
-  json(res, 202, { ok: submitted.state !== "failed", job: safeJob(submitted) });
+  json(res, 202, { ok: !["failed", "cancelled"].includes(submitted.state), job: safeJob(submitted) });
 }
 
 function validateFutureDate(value) {
@@ -2911,8 +2976,54 @@ function registerAdmin(method, suffix, handler) {
   });
 }
 
+async function downloadPluginUpdate(req, res) {
+  const version = String((req.query || {}).version || "");
+  try {
+    if (!/^\d+\.\d+\.\d+$/.test(version) || compareSemver(version, PLUGIN_VERSION) <= 0) throw new Error("invalid_version");
+  } catch (_) { fail("invalid_update_version", "只能安装比当前版本新的正式版本。", 400); }
+  if (maintenanceLock) fail("maintenance_in_progress", "KNS 正在执行数据维护，请稍后再更新。", 409);
+  assertNoActiveJobs(getState(), "更新插件");
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), 30000) : null;
+  const options = { headers: { accept: "application/vnd.github+json", "user-agent": "komari-plugin-kns/" + PLUGIN_VERSION }, signal: controller && controller.signal };
+  try {
+    const latest = await fetch("https://api.github.com/repos/liuarui/komari-plugin-kns/releases/latest", options);
+    if (!latest || !latest.ok) fail("update_download_failed", "无法获取 GitHub 最新发布信息。", 502);
+    const release = await latest.json();
+    if (String(release.tag_name || "") !== "v" + version || release.draft || release.prerelease) fail("update_version_changed", "最新发布版本已变化，请重新检查更新。", 409);
+    const assets = Array.isArray(release.assets) ? release.assets : [];
+    const archive = assets.find((item) => item && item.name === "onebox-bridge.zip" && item.state === "uploaded");
+    const checksumAsset = assets.find((item) => item && item.name === "onebox-bridge.zip.sha256" && item.state === "uploaded");
+    if (!archive || !Number.isSafeInteger(archive.size) || archive.size < 4 || archive.size > 8 * 1024 * 1024 || !checksumAsset || !Number.isSafeInteger(checksumAsset.size) || checksumAsset.size < 1 || checksumAsset.size > 512) fail("update_package_invalid", "发布页的更新包或校验文件缺失，或大小无效。", 502);
+    const base = "https://github.com/liuarui/komari-plugin-kns/releases/download/v" + version + "/";
+    const checksumResponse = await fetch(base + "onebox-bridge.zip.sha256", options);
+    if (!checksumResponse || !checksumResponse.ok) fail("update_download_failed", "无法下载更新校验文件。", 502);
+    const checksumText = await checksumResponse.text();
+    const checksum = checksumText.length <= 512 && /^([a-f0-9]{64})\s+\*?onebox-bridge\.zip\s*$/i.exec(checksumText);
+    if (!checksum) fail("update_checksum_invalid", "更新校验文件格式无效。", 502);
+    const packageResponse = await fetch(base + "onebox-bridge.zip", options);
+    if (!packageResponse || !packageResponse.ok) fail("update_download_failed", "无法下载插件更新包。", 502);
+    const declaredSize = Number(packageResponse.headers && packageResponse.headers.get("content-length") || 0);
+    if (declaredSize > 8 * 1024 * 1024) fail("update_package_too_large", "插件更新包超过允许大小。", 502);
+    const data = Buffer.from(await packageResponse.arrayBuffer());
+    if (data.length !== archive.size || data[0] !== 0x50 || data[1] !== 0x4b) fail("update_package_invalid", "插件更新包格式或大小无效。", 502);
+    const digest = crypto.createHash("sha256").update(data).digest("hex");
+    if (digest !== checksum[1].toLowerCase()) fail("update_checksum_mismatch", "插件更新包校验失败，已停止安装。", 502);
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.write(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+    res.end();
+  } catch (error) {
+    if (error && error.status) throw error;
+    fail("update_download_failed", "下载插件更新失败，请检查 GitHub 网络连接后重试。", 502);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
 function registerRoutes() {
   registerAdmin("GET", "/admin/state", (_req, res) => json(res, 200, publicState(getState())));
+  registerAdmin("GET", "/admin/update-package", downloadPluginUpdate);
   registerAdmin("POST", "/admin/action", handleAction);
   registerAdmin("GET", "/admin/logs", (req, res) => {
     const state = getState();
@@ -2977,6 +3088,8 @@ function load() {
 
 function unload() {
   try { flushTokenUsage(); } catch (_) {}
+  if (pluginUpdateLockTimer) clearTimeout(pluginUpdateLockTimer);
+  pluginUpdateLockTimer = null; pluginUpdateLockToken = ""; maintenanceLock = false;
   pollBusy = false; syncBusy = false; healthBusy = false;
   subscriptionRefreshStopped = true;
   subscriptionRefreshPending = false;

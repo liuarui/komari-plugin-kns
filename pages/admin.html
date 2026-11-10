@@ -10,7 +10,7 @@
       color-scheme: light;
       --bg:#f6f8fc; --surface:#ffffff; --sidebar:#fbfcff;
       --ink:#202b3c; --ink-2:#546278; --muted:#8290a5;
-      --line:#e5eaf1; --blue:#4264e9; --blue-hover:#3053d8; --blue-soft:#edf2ff; --blue-solid:#4264e9; --blue-solid-hover:#3053d8;
+      --line:#e5eaf1; --machine-border:#b7c5d8; --machine-shadow:0 2px 8px rgba(34,46,77,.07); --blue:#4264e9; --blue-hover:#3053d8; --blue-soft:#edf2ff; --blue-solid:#4264e9; --blue-solid-hover:#3053d8;
       --green:#128665; --green-soft:#eaf7ef; --amber:#966a1f; --amber-soft:#fff5e2;
       --red:#be494e; --red-soft:#fff0ef;
       --shadow:0 6px 25px rgba(34,46,77,.032); --radius:15px;
@@ -21,7 +21,7 @@
       color-scheme: dark;
       --bg:#0b111b; --surface:#141c29; --sidebar:#101722;
       --ink:#eef3fc; --ink-2:#c0ccdd; --muted:#99a9bf;
-      --line:#2a3649; --blue:#94abff; --blue-hover:#b2c1ff; --blue-soft:#263656; --blue-solid:#4f6ef2; --blue-solid-hover:#6a85ff;
+      --line:#2a3649; --machine-border:#536780; --machine-shadow:0 2px 10px rgba(0,0,0,.2); --blue:#94abff; --blue-hover:#b2c1ff; --blue-soft:#263656; --blue-solid:#4f6ef2; --blue-solid-hover:#6a85ff;
       --green:#74d7b2; --green-soft:#193d33; --amber:#f1cb83; --amber-soft:#403322;
       --red:#fa979c; --red-soft:#45252d;
       --shadow:0 10px 40px rgba(0,0,0,.13); --radius:15px;
@@ -175,7 +175,7 @@
     .machine-list[data-layout="list"] .machine-card>.machine-advanced,
     .machine-list[data-layout="list"] .machine-card>.job-history,
     .machine-list[data-layout="list"] .machine-card>.discovery-summary { grid-column:1/-1; width:100%; }
-    .machine-card { border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; background:var(--surface); }
+    .machine-card { border:2px solid var(--machine-border); border-radius:var(--radius); padding:16px 18px; background:var(--surface); box-shadow:var(--machine-shadow); }
     .machine-card.highlight { outline:2px solid var(--blue); outline-offset:2px; }
     .machine-heading,.node-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; }
     .machine-heading h3,.node-heading h4 { margin:0; overflow-wrap:anywhere; }
@@ -542,14 +542,13 @@
 
   <section id="machines" class="panel">
     <div class="card">
-      <div class="hero"><div><h2>机器与节点</h2><p class="muted">按 Komari 服务器列表顺序展示。可按在线状态、OneBox 检测结果和协议筛选，也可切换卡片密度。</p></div><button id="export" class="secondary">导出加密备份</button></div>
+      <div class="hero"><div><h2>机器与节点</h2><p class="muted">按 Komari 服务器列表顺序展示。可按在线状态、OneBox 检测结果和协议筛选，也可切换卡片密度。</p></div><div class="actions"><button id="scanAndClaimAll" type="button">一键扫描并接管</button><button id="export" class="secondary">导出加密备份</button></div></div>
       <div class="machine-toolbar">
         <label class="machine-search">查找机器<input id="homeMachineSearch" type="search" placeholder="名称、地址或 UUID" data-no-draft="true"></label>
         <div class="filter-field"><span class="filter-label">在线状态</span><div class="filter-select" data-filter-for="machineOnlineFilter"><select id="machineOnlineFilter" class="filter-native" tabindex="-1" aria-hidden="true"><option value="all">全部</option><option value="online">在线</option><option value="offline">离线</option><option value="unknown">未知</option></select><button type="button" class="filter-trigger" aria-haspopup="listbox" aria-expanded="false"><span class="filter-value">全部</span><svg class="filter-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><div class="filter-menu" role="listbox" hidden></div></div></div>
         <div class="filter-field"><span class="filter-label">OneBox 检测</span><div class="filter-select" data-filter-for="machineOneBoxFilter"><select id="machineOneBoxFilter" class="filter-native" tabindex="-1" aria-hidden="true"><option value="all">全部</option><option value="detected">检测到 OneBox</option><option value="none">扫描未发现入站</option><option value="unknown">未扫描或结果已过期</option></select><button type="button" class="filter-trigger" aria-haspopup="listbox" aria-expanded="false"><span class="filter-value">全部</span><svg class="filter-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><div class="filter-menu" role="listbox" hidden></div></div></div>
         <div class="filter-field"><span class="filter-label">协议</span><div class="filter-select" data-filter-for="machineProtocolFilter"><select id="machineProtocolFilter" class="filter-native" tabindex="-1" aria-hidden="true"><option value="all">全部协议</option></select><button type="button" class="filter-trigger" aria-haspopup="listbox" aria-expanded="false"><span class="filter-value">全部</span><svg class="filter-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><div class="filter-menu" role="listbox" hidden></div></div></div>
         <label class="machine-unmanaged-toggle"><input id="showUnmanagedMachines" type="checkbox" data-no-draft="true">显示不纳管机器</label>
-        <label class="machine-unmanaged-toggle"><input id="showRemovedMachines" type="checkbox" data-no-draft="true">显示已从 Komari 删除</label>
         <div class="seg machine-layout-switch" id="machineLayoutSwitch" role="group" aria-label="机器布局">
           <button type="button" data-machine-layout="grid3" aria-pressed="true">三列卡片</button>
           <button type="button" data-machine-layout="single" aria-pressed="false">单列卡片</button>
@@ -558,6 +557,7 @@
       </div>
       <p id="machineFilterSummary" class="small muted" aria-live="polite"></p>
       <details class="machine-advanced"><summary>批量扫描与机器同步</summary><div class="actions"><button id="selectOnlineScans" class="secondary">全选在线机器</button><button id="clearScanSelection" class="secondary">清空选择</button><button id="scanLegacySelected" class="secondary">扫描所选机器已有节点</button><button id="reloadMachines" class="secondary">立即同步 Komari 机器</button></div><p id="scanBatchStatus" class="status small muted" role="status">KNS 每 15 秒自动同步 Komari 机器清单；删除或重新接入的机器会自动更新。此按钮可立即同步。只读扫描不会安装、修改或卸载节点。</p></details>
+      <p id="batchClaimStatus" class="status muted" role="status"></p><div id="batchClaimResults" class="result-list"></div>
       <p class="small muted">“不纳管”机器默认隐藏。OneBox 检测状态来自最近 30 分钟的只读扫描；未扫描或结果过期不代表机器没有安装 OneBox。</p>
       <div id="machineRows" class="machine-list" data-layout="grid3"><p class="muted empty-state">正在读取机器…</p></div>
     </div>
@@ -584,13 +584,14 @@
   </section>
 
   <section id="settings" class="panel">
+    <div class="card"><h2>插件更新</h2><p class="muted small">检查官方发布的新版本，并在确认后安装。</p><div class="actions"><button id="checkPluginUpdate" class="secondary" type="button">检查更新</button><button id="installPluginUpdate" type="button" hidden>安装更新</button></div><p id="pluginUpdateStatus" class="status muted" role="status"></p></div>
     <div class="card"><h2>服务与转换设置</h2><div class="grid"><label>Komari HTTPS 公网地址<input id="publicBaseUrl" type="url" placeholder="https://monitor.example.com"></label><label>SubConverter 接口<input id="subconverterUrl" type="url" placeholder="留空关闭；https://converter.example.com/sub"></label><label>默认转换 target<select id="converterTarget"><option value="clash">Clash</option><option value="clashr">ClashR</option><option value="surge">Surge</option><option value="quan">Quantumult</option><option value="quanx">Quantumult X</option><option value="loon">Loon</option><option value="surfboard">Surfboard</option><option value="stash">Stash</option><option value="mellow">Mellow</option><option value="singbox">sing-box</option><option value="ss">SS</option><option value="ssd">SSD</option><option value="ssr">SSR</option><option value="sssub">SSSub</option><option value="v2ray">V2Ray</option><option value="v2rayn">V2RayN</option><option value="v2rayng">V2RayNG</option><option value="shadowrocket">Shadowrocket</option><option value="trojan">Trojan</option><option value="vless">VLESS</option><option value="hysteria2">Hysteria2</option><option value="mixed">Mixed</option></select></label><label><input id="privateSite" type="checkbox">允许发布私有 Endpoint（仅内网订阅）</label></div><p class="muted small">令牌创建或轮换后，可在订阅结果中选择客户端。Clash 可选默认、ACL4SSR 轻量或完整规则模板（由当前 SubConverter 服务提供）；转换端会跳过目标客户端无法表示的协议。</p><p class="notice">KNS 回调要求 HTTPS 公网地址。外部 SubConverter 会收到原始订阅 URI 与其中的凭据；默认不启用外部转换，仅提供 KNS 原生订阅。需要转换时请显式配置可信 HTTPS 转换器；留空可关闭，不支持 HTTP。旧版保存的 HTTP 地址会被忽略，按空值处理。</p><div class="actions"><button id="saveSettings">保存设置</button><span id="settingsStatus" class="status muted"></span></div><p class="small muted">OneBox 安装脚本固定到已审查的 Git commit 和 SHA256，不从可变 main 分支执行。</p><p id="installerPin" class="small"></p></div>
     <div class="card"><h2>默认部署与新探针授权</h2><p class="muted">默认模板只应用于首次发现的新探针。自动部署默认关闭；已派发任务不受开关变化影响。</p><div class="grid"><label>默认监听端口<input id="defaultNodePort" type="number" min="1" max="65535"></label><label>默认服务监听地址<select id="defaultNodeAddress"><option value="::">双栈通配 ::</option><option value="0.0.0.0">IPv4 通配 0.0.0.0</option></select></label><label><input id="autoProvisionEnabled" type="checkbox">授权新探针自动部署</label></div><p id="autoProvisionStatus" class="small muted"></p><div class="actions"><button id="saveDefaultNode">保存默认部署设置</button></div></div>
     <div class="card"><h2>数据恢复</h2><p class="muted">每日保留 7 份状态和密钥备份。恢复前会校验状态与配对密钥；有未完成远程任务时会阻止维护。</p><div class="toolbar"><select id="backupSelect"></select><button id="restoreBackup" class="danger">预览并恢复所选备份</button><button id="exportState" class="secondary">导出加密备份</button><input id="importBackupFile" type="file" accept="application/json,.json"><button id="importBackup" class="danger">预检并导入加密备份</button></div></div>
     <div class="card"><h2>审计日志</h2><p id="auditRetention" class="muted small"></p><div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>动作</th><th>详情</th></tr></thead><tbody id="auditRows"></tbody></table></div><button id="auditOlder" type="button" hidden>加载更早记录</button></div>
     <div class="card"><h2>兼容性与运行限制</h2><p id="compatibility" class="muted">该插件依赖 Komari MoeJS 插件路由、定时任务、admin:listClients、common:getNodesLatestStatus、admin:exec 和 admin:getSpecificTaskResult。最终需在目标 Komari Server/Agent 版本实测。</p></div>
   </section>
-    <footer class="muted small"><span id="pluginVersionLabel">Komari KNS</span> · <a id="pluginSourceLink" href="https://github.com/liuarui/komari-plugin-kns" target="_blank" rel="noopener">源码</a> · <button id="checkPluginUpdate" class="secondary" type="button">检查更新</button> · <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">GNU AGPL v3.0-only</a><p id="pluginUpdateStatus" class="status muted" role="status"></p></footer>
+    <footer class="muted small"><span id="pluginVersionLabel">Komari KNS</span> · <a id="pluginSourceLink" href="https://github.com/liuarui/komari-plugin-kns" target="_blank" rel="noopener">源码</a> · <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">GNU AGPL v3.0-only</a></footer>
   </div>
 </main>
 <dialog id="profileDrawer" class="profile-drawer" aria-labelledby="profileDrawerTitle">
@@ -739,6 +740,7 @@
   let latestSubscriptionProfileId = "";
   let deploymentBatch = [];
   let installPlanRunning = false;
+  let batchClaimRunning = false;
   const draftScopes = new Map();
   const installMachineSelection = new Set();
   const localActionStatus = new Map();
@@ -821,6 +823,7 @@
   }
   function draftScopeFor(target) {
     if (!target || target.matches('[type="search"],[data-no-draft]')) return "";
+    if (target.dataset && target.dataset.importScope) return target.dataset.importScope;
     const row = target.closest("[data-machine-uuid]");
     if (row) return "machine:" + row.dataset.machineUuid;
     const profileCard = target.closest("[data-profile-id]");
@@ -849,6 +852,9 @@
     try {
       const result = await request("/admin/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({}, body, { expectedRevision })) });
       trackOperationResult(body,result);
+      if (body.action !== "install.batch" && remoteTaskActions.has(String(body.action || "")) && result && result.ok === false && result.job) {
+        const error = new Error(result.job.message || "远程任务未提交。"); error.code = "remote_not_dispatched"; throw error;
+      }
       if (scope) draftScopes.delete(scope);
       draftConflict = null;
       updateDraftControls();
@@ -1484,6 +1490,72 @@
     setStatus("scanBatchStatus", summary, failed ? "error" : "success");
   }
 
+  async function waitForBatchClaimJob(jobId, machineName) {
+    const deadline=Date.now()+30*60*1000;
+    while(Date.now()<deadline){
+      await wait(2500);
+      let latest;
+      try{latest=await request("/admin/state");latestServerSnapshot=latest;lastSuccessfulRefreshAt=Date.now();}
+      catch(error){setStatus("batchClaimStatus","等待 "+machineName+" 的任务结果；读取失败，将继续等待。","muted");continue;}
+      const job=(latest.jobs||[]).find((item)=>item.id===jobId);
+      if(!job)return {job:null,latest};
+      if(["succeeded","failed","needs_reconcile","timed_out","cancelled"].includes(job.state))return {job,latest};
+    }
+    return {job:null,latest:null};
+  }
+  async function scanAndClaimAll(){
+    if(batchClaimRunning)return;
+    if(draftScopes.size||installPlanRunning){setStatus("batchClaimStatus","请先保存草稿并等待其他安装计划结束。","error");return;}
+    const all=state.machines.filter((machine)=>!machine.removedFromKomariAt);
+    const offlineCount=all.filter((machine)=>machine.online!==true).length;
+    const unmanagedCount=all.filter((machine)=>machine.online===true&&(machine.policy&&machine.policy.managementTags||[]).includes("不纳管")).length;
+    const machines=all.filter((machine)=>machine.online===true&&!(machine.policy&&machine.policy.managementTags||[]).includes("不纳管"));
+    if(!machines.length){setStatus("batchClaimStatus","没有可扫描的在线机器。","error");return;}
+    const confirmation=await askOperation({title:"批量扫描并接管",description:"将逐台扫描 "+machines.length+" 台在线且未标记为不纳管的机器，并接管扫描发现的所有受支持节点。跳过离线或状态未知 "+offlineCount+" 台、不纳管 "+unmanagedCount+" 台。接管会修改入站 tag 并重载共享服务；连接地址使用机器已有策略和节点监听端口。NAT 机器如需指定外部端口，请先单独设置或接管。失败或结果不确定的机器会停止继续接管。请保持页面打开，关闭后尚未提交的操作不会继续。",confirmLabel:"开始扫描并接管",danger:true});
+    if(!confirmation)return;
+    batchClaimRunning=true;$("scanAndClaimAll").disabled=true;$("scanLegacySelected").disabled=true;
+    const results=$("batchClaimResults");results.replaceChildren();let claimed=0,failed=0,skipped=0,stopped=false;
+    try{
+      for(let index=0;index<machines.length;index++){
+        const original=machines[index];const name=original.name||original.uuid;
+        if(draftScopes.size){stopped=true;break;}
+        setStatus("batchClaimStatus","正在处理 "+(index+1)+"/"+machines.length+"："+name+"；已接管 "+claimed+" 个节点。","muted");
+        try{
+          const latest=await request("/admin/state");latestServerSnapshot=latest;
+          const current=(latest.machines||[]).find((item)=>item.uuid===original.uuid);
+          if(!current||current.online!==true||current.removedFromKomariAt||(current.policy&&current.policy.managementTags||[]).includes("不纳管")){skipped++;results.append(el("p",name+"：已离线、删除或设置为不纳管，已跳过。","small muted"));continue;}
+          const scan=await postAction({action:"machine.discover",machineUuid:current.uuid,idempotencyKey:idempotencyKey()});
+          if(!scan.ok||!scan.job||!scan.job.id)throw new Error(scan.job&&scan.job.message||"扫描未提交。");
+          const scanned=await waitForBatchClaimJob(scan.job.id,name);
+          if(!scanned.job||scanned.job.state!=="succeeded")throw new Error(scanned.job&&scanned.job.message||"扫描结果未知，请在任务记录中核查。");
+          let snapshot=scanned.latest;
+          const scannedMachine=(snapshot.machines||[]).find((item)=>item.uuid===current.uuid);
+          if(!scannedMachine||scannedMachine.online!==true){skipped++;results.append(el("p",name+"：扫描后机器离线，已跳过接管。","small muted"));continue;}
+          const candidates=(scannedMachine.discoveredNodes||[]).filter((node)=>node.importable&&!node.managed&&node.listen&&["tcp","udp","tcp+udp"].includes(node.listen.transport)&&!(snapshot.instances||[]).some((instance)=>instance.machineUuid===current.uuid&&!instance.deletedAt&&instance.managedBy!=="legacy_import"&&instance.legacyTag===node.tag));
+          if(!candidates.length){skipped++;results.append(el("p",name+"：没有需要接管的受支持节点。","small muted"));continue;}
+          let machineClaimed=0;
+          for(const node of candidates){
+            if(draftScopes.size)throw new Error("发现未保存草稿，停止继续接管。");
+            const existing=(snapshot.instances||[]).find((instance)=>instance.machineUuid===current.uuid&&!instance.deletedAt&&instance.managedBy==="legacy_import"&&instance.legacyTag===node.tag);
+            const body={action:"machine.import",machineUuid:current.uuid,legacyTag:node.tag,name:existing&&existing.name||node.tag,tags:existing&&existing.tags||(current.policy&&current.policy.tags||[]),confirm:true,idempotencyKey:idempotencyKey()};
+            let result;
+            for(let attempt=0;attempt<3;attempt++){
+              try{result=await postAction(body);break;}catch(error){if(error.code!=="state_revision_conflict"||attempt===2)throw error;}
+            }
+            if(!result||!result.ok||!result.job||!result.job.id)throw new Error(result&&result.job&&result.job.message||"接管未提交。");
+            const finished=await waitForBatchClaimJob(result.job.id,name);snapshot=finished.latest;
+            if(!finished.job||finished.job.state!=="succeeded")throw new Error(finished.job&&finished.job.message||"接管结果未知，请在任务记录中核查。");
+            claimed++;machineClaimed++;
+          }
+          results.append(el("p",name+"：已接管 "+machineClaimed+" 个节点。","small success"));
+        }catch(error){failed++;results.append(el("p",name+"："+(error.message||"处理失败")+" 已停止此机器的后续接管。","small error"));}
+      }
+    }finally{
+      batchClaimRunning=false;$("scanAndClaimAll").disabled=false;$("scanLegacySelected").disabled=false;
+      await refresh();setStatus("batchClaimStatus",(stopped?"发现未保存草稿，已停止后续处理。":"批量处理结束：")+"已接管 "+claimed+" 个节点，处理时跳过 "+skipped+" 台，失败 "+failed+" 台；开始时跳过离线或未知 "+offlineCount+" 台、不纳管 "+unmanagedCount+" 台。请查看各机器结果。",failed||stopped?"error":"success");
+    }
+  }
+
   function selectOnlineLegacyScanMachines() {
     legacyScanSelection.clear();
     state.machines.filter((machine) => !machine.removedFromKomariAt && machine.online === true).forEach((machine) => legacyScanSelection.add(machine.uuid));
@@ -1498,7 +1570,8 @@
   }
 
   async function importLegacyNode(machine, node, overrides={}) {
-    if(draftScopes.size)return setMachineStatus(machine.uuid,"请先保存或放弃未保存的设置，再纳入节点。","error");
+    const scope="machine-import:"+machine.uuid+":"+node.tag;
+    if(Array.from(draftScopes.keys()).some((key)=>key!==scope))return setMachineStatus(machine.uuid,"请先保存或放弃其他未保存的设置，再纳入节点。","error");
     const scannedAt=Date.parse(machine.discoveredAt||"");
     if(!Number.isFinite(scannedAt)||scannedAt>Date.now()||Date.now()-scannedAt>30*60*1000)return setMachineStatus(machine.uuid,"扫描结果已过期，请重新扫描后再纳入管理。","error");
     const existing=(state.instances||[]).find((instance)=>instance.machineUuid===machine.uuid&&instance.managedBy==="legacy_import"&&instance.legacyTag===node.tag&&!instance.deletedAt);
@@ -1508,7 +1581,7 @@
     if(!confirmation)return;
     try {
       setMachineStatus(machine.uuid,"正在接管旧节点…");
-      const result=await postAction({ action:"machine.import", machineUuid:machine.uuid, legacyTag:node.tag, name:existing&&existing.name||node.tag, tags:existing&&existing.tags||(machine.policy&&machine.policy.tags||[]), endpointHost, externalPort, confirm:true, idempotencyKey:idempotencyKey() });
+      const result=await postAction({ action:"machine.import", machineUuid:machine.uuid, legacyTag:node.tag, name:existing&&existing.name||node.tag, tags:existing&&existing.tags||(machine.policy&&machine.policy.tags||[]), endpointHost, externalPort, confirm:true, idempotencyKey:idempotencyKey() },scope);
       setMachineStatus(machine.uuid,"接管任务已提交；等待 OneBox 迁移配置并核验结果。"+(result.job&&result.job.id?" 任务编号 "+result.job.id:""),"muted"); await refresh();
     } catch (error) { setMachineStatus(machine.uuid,error.message,"error"); }
   }
@@ -1548,7 +1621,6 @@
     const endpoint=instance.endpoint||{};const listen=instance.listen||{};const external=instance.nat&&instance.nat.externalPort||endpoint.port||listen.port||"?";
     const transportLabel=String(listen.transport||"TCP").toUpperCase();
     const nodeLine=el("p",protocolName(instance.protocol)+" · "+(formatEndpointHost(endpoint.host)||"使用机器地址")+":"+external+"/"+transportLabel+" → "+formatEndpointHost(listen.address||"::")+":"+(listen.port||"?")+"/"+transportLabel,"small");card.append(nodeLine);
-    if(remoteDisabled)card.append(el("p","Komari 中已删除此机器；节点记录和订阅保留，远程操作暂停。机器重新接入后可恢复管理。","small notice"));
     if(instance.managedBy==="legacy_import")card.append(el("p","已导入旧版 OneBox 节点；点击接管后可在 KNS 中完整管理。","small muted"));
     const details=el("details",null,"small");const summary=el("summary","检测详情");details.append(summary,el("p","运行状态："+run+" · 远端核查："+(instance.remoteStatus&&instance.remoteStatus.checkedAt||"尚未核查"),"small muted"),el("p","连接检测："+health+" · 等级 "+((instance.health&&instance.health.level)||"未知")+" · "+((instance.health&&(instance.health.lastCheckedAt||instance.health.checkedAt||instance.health.updatedAt))||"无检测时间"),"small muted"),el("p","节点编号："+instance.id,"small muted"));
     card.append(details);
@@ -1599,7 +1671,6 @@
     const onlineFilter=$("machineOnlineFilter").value;
     const oneBoxFilter=$("machineOneBoxFilter").value;
     const showUnmanaged=$("showUnmanagedMachines").checked;
-    const showRemoved=$("showRemovedMachines").checked;
     const knownProtocols=Array.from(new Set((state.instances||[]).filter((item)=>!item.deletedAt).map((item)=>String(item.protocol||"").toLowerCase()).concat((state.machines||[]).flatMap((item)=>(item.discoveredNodes||[]).map((node)=>String(node.protocol||"").toLowerCase()))).filter(Boolean))).sort();
     const protocolSelect=$("machineProtocolFilter");
     const previousProtocol=protocolSelect.value;
@@ -1614,14 +1685,13 @@
       const hay=[machine.name,machine.uuid,machine.region,machine.os,machine.ipv4,machine.ipv6].join(" ").toLowerCase();
       const scanned=machineScanFresh(machine);const found=!!machine.runtimeStatus||(machine.discoveredNodes||[]).length>0;
       const oneBoxState=!scanned?"unknown":found?"detected":"none";
-      return (showRemoved||!machine.removedFromKomariAt)&&(showUnmanaged||!unmanaged||machine.uuid===machineFocusOverrideUuid)&&(!query||hay.includes(query))&&
+      return !machine.removedFromKomariAt&&(showUnmanaged||!unmanaged||machine.uuid===machineFocusOverrideUuid)&&(!query||hay.includes(query))&&
         (onlineFilter==="all"||(onlineFilter==="online"&&machine.online===true)||(onlineFilter==="offline"&&machine.online===false)||(onlineFilter==="unknown"&&machine.online==null))&&
         (oneBoxFilter==="all"||oneBoxFilter===oneBoxState)&&
         (protocolFilter==="all"||machineProtocols(machine).has(protocolFilter));
     });
-    const removedCount=state.machines.filter((machine)=>machine.removedFromKomariAt).length;
-    $("machineFilterSummary").textContent="显示 "+visibleMachines.length+" / "+state.machines.length+" 台机器 · 顺序与 Komari 服务器列表一致"+(!showRemoved&&removedCount?" · 隐藏已删除 "+removedCount+" 台":"")+(machineFocusOverrideUuid&&!showUnmanaged?" · 临时显示刚定位的不纳管机器":"");
-    if(!visibleMachines.length){host.append(el("p",state.machines.length?"没有匹配的机器；已从 Komari 删除的机器默认隐藏。":"Komari 中还没有已接入机器。","muted empty-state"));renderInstallMachineOptions();return;}
+    $("machineFilterSummary").textContent="显示 "+visibleMachines.length+" / "+state.machines.length+" 台机器 · 顺序与 Komari 服务器列表一致"+(machineFocusOverrideUuid&&!showUnmanaged?" · 临时显示刚定位的不纳管机器":"");
+    if(!visibleMachines.length){host.append(el("p",state.machines.length?"没有匹配的机器。":"Komari 中还没有已接入机器。","muted empty-state"));renderInstallMachineOptions();return;}
     for(const machine of visibleMachines){
       const removed=!!machine.removedFromKomariAt;const card=el("article",null,"machine-card");card.dataset.machineUuid=machine.uuid;if(removed)card.dataset.removed="true";
       const instances=state.instances.filter((instance)=>instance.machineUuid===machine.uuid&&!instance.deletedAt);
@@ -1643,7 +1713,7 @@
         if(!scanFresh&&machine.discoveredAt){resultBox.append(el("p","扫描结果已过期，请重新扫描后再纳入管理。","small muted"));}
         else if(scanFresh&&!discovered.length)resultBox.append(el("p","最近扫描未发现可纳入的 OneBox 入站。","small muted"));
         else if(scanFresh){resultBox.append(el("p","接管会将旧入站迁移到 KNS 管理，并短暂重载共享 sing-box 服务。","small muted discovery-disclosure"));
-          for(const node of discovered){const imported=instances.find((instance)=>instance.managedBy==="legacy_import"&&instance.legacyTag===node.tag);const managed=instances.some((instance)=>instance.managedBy!=="legacy_import"&&instance.legacyTag===node.tag);const pending=state.jobs.some((job)=>job.action==="machine.import"&&job.machineUuid===machine.uuid&&job.legacyTag===node.tag&&["authorized","dispatched","running","verifying"].includes(job.state));const row=el("div",null,"result-item");row.append(el("strong",node.tag+" · "+protocolName(node.protocol),"small"),el("p","端口 "+(node.listen&&node.listen.port||"未知")+" · "+(managed?"KNS 已接管":imported?"已导入，可接管":pending?"接管处理中":node.managed?"OneBox 已托管":node.importable?"可接管":"暂不支持"),"small muted"));if(node.importable&&!node.managed&&!managed&&!pending){const mapping=el("details",null,"advanced-fields");mapping.append(el("summary","自定义公网地址或 NAT 端口（可选）"));const mappingGrid=el("div",null,"grid");const endpointLabel=el("label","订阅对外地址");const endpointInput=document.createElement("input");endpointInput.value=imported&&imported.endpointOverride&&imported.endpointOverride.host||machine.policy&&machine.policy.manualAddress||"";endpointInput.placeholder="留空使用机器地址策略";endpointLabel.append(endpointInput);const externalLabel=el("label","NAT 外部端口");const externalInput=document.createElement("input");externalInput.type="number";externalInput.min="1";externalInput.max="65535";externalInput.value=imported&&imported.nat&&imported.nat.externalPort||node.externalPort||node.nat&&node.nat.externalPort||"";externalInput.placeholder="留空使用监听端口 "+(node.listen&&node.listen.port||"");externalLabel.append(externalInput);mappingGrid.append(endpointLabel,externalLabel);mapping.append(mappingGrid);const include=actionButton(imported?"接管并启用完整管理":"接管并加入订阅",()=>importLegacyNode(machine,node,{endpointHost:endpointInput.value,externalPort:externalInput.value}));include.disabled=removed||!scanFresh||machine.online!==true;row.append(mapping,include);}else if(!node.importable&&!node.managed&&!managed&&!pending)row.append(el("small",node.reason==="multiple_users"?"多用户节点暂不支持自动导入":"暂不支持："+node.reason,"muted small"));resultBox.append(row);}
+          for(const node of discovered){const imported=instances.find((instance)=>instance.managedBy==="legacy_import"&&instance.legacyTag===node.tag);const managed=instances.some((instance)=>instance.managedBy!=="legacy_import"&&instance.legacyTag===node.tag);const pending=state.jobs.some((job)=>job.action==="machine.import"&&job.machineUuid===machine.uuid&&job.legacyTag===node.tag&&["authorized","dispatched","running","verifying"].includes(job.state));const row=el("div",null,"result-item");row.append(el("strong",node.tag+" · "+protocolName(node.protocol),"small"),el("p","端口 "+(node.listen&&node.listen.port||"未知")+" · "+(managed?"KNS 已接管":imported?"已导入，可接管":pending?"接管处理中":node.managed?"OneBox 已托管":node.importable?"可接管":"暂不支持"),"small muted"));if(node.importable&&!node.managed&&!managed&&!pending){const mapping=el("details",null,"advanced-fields");mapping.append(el("summary","自定义公网地址或 NAT 端口（可选）"));const mappingGrid=el("div",null,"grid");const endpointLabel=el("label","订阅对外地址");const endpointInput=document.createElement("input");endpointInput.dataset.importScope="machine-import:"+machine.uuid+":"+node.tag;endpointInput.value=imported&&imported.endpointOverride&&imported.endpointOverride.host||machine.policy&&machine.policy.manualAddress||"";endpointInput.placeholder="留空使用机器地址策略";endpointLabel.append(endpointInput);const externalLabel=el("label","NAT 外部端口");const externalInput=document.createElement("input");externalInput.dataset.importScope="machine-import:"+machine.uuid+":"+node.tag;externalInput.type="number";externalInput.min="1";externalInput.max="65535";externalInput.value=imported&&imported.nat&&imported.nat.externalPort||node.externalPort||node.nat&&node.nat.externalPort||"";externalInput.placeholder="留空使用监听端口 "+(node.listen&&node.listen.port||"");externalLabel.append(externalInput);mappingGrid.append(endpointLabel,externalLabel);mapping.append(mappingGrid);const include=actionButton(imported?"接管并启用完整管理":"接管并加入订阅",()=>importLegacyNode(machine,node,{endpointHost:endpointInput.value,externalPort:externalInput.value}));include.disabled=removed||!scanFresh||machine.online!==true;row.append(mapping,include);}else if(!node.importable&&!node.managed&&!managed&&!pending)row.append(el("small",node.reason==="multiple_users"?"多用户节点暂不支持自动导入":"暂不支持："+node.reason,"muted small"));resultBox.append(row);}
         }
         card.append(resultBox);
       }
@@ -1808,7 +1878,6 @@
     $("homeMachineSearch").value="";
     $("machineOnlineFilter").value="all";$("machineOneBoxFilter").value="all";$("machineProtocolFilter").value="all";
     machineFocusOverrideUuid=(machine.policy&&machine.policy.managementTags||[]).includes("不纳管")?uuid:"";
-    if(machine.removedFromKomariAt){$("showRemovedMachines").checked=true;}
     if(!draftScopes.size)renderMachines();
     const card=document.querySelector('.machine-card[data-machine-uuid="'+CSS.escape(uuid)+'"]');
     if(card){
@@ -2141,8 +2210,10 @@
   async function loadOlderAudit(){if(!state.auditCursor)return;try{const page=await request("/admin/logs?limit=200&before="+encodeURIComponent(state.auditCursor));state.audit=(page.audit||[]).slice().reverse().concat(state.audit||[]);state.auditCursor=page.nextCursor||"";state.auditHasMore=page.hasMore===true;renderAudit();}catch(error){setStatus("globalStatus",error.message,"error");}}
   function applySetupGate(){
     const ready=!!(state&&state.settings&&state.settings.setupComplete===true);
-    const disabledIds=["selectOnlineScans","clearScanSelection","scanLegacySelected","reloadMachines","openProfileDrawer","createProfile","saveSettings","saveDefaultNode","restoreBackup","importBackup","startInstall"];
+    const disabledIds=["selectOnlineScans","clearScanSelection","scanLegacySelected","reloadMachines","scanAndClaimAll","openProfileDrawer","createProfile","saveSettings","saveDefaultNode","restoreBackup","importBackup","startInstall"];
     for(const id of disabledIds)if($(id))$(id).disabled=!ready;
+    $("scanAndClaimAll").disabled=!ready||batchClaimRunning;
+    $("scanLegacySelected").disabled=!ready||batchClaimRunning;
     $("startInstall").disabled=!ready||installPlanRunning;
     $("installBatch").disabled=!ready||installPlanRunning;
     if(!ready)document.querySelectorAll("#machineRows button,#profileRows button,.format-list input,#createProfileFilters input,#createProfileFilters select").forEach((control)=>{control.disabled=true;});
@@ -2239,10 +2310,11 @@
   $("selectOnlineScans").addEventListener("click",()=>{if(draftScopes.size)return setStatus("scanBatchStatus","请先保存或放弃草稿。","error");selectOnlineLegacyScanMachines();});
   $("clearScanSelection").addEventListener("click",()=>{if(draftScopes.size)return setStatus("scanBatchStatus","请先保存或放弃草稿。","error");clearLegacyScanSelection();});
   $("scanLegacySelected").addEventListener("click",discoverLegacyNodesBatch);
+  $("scanAndClaimAll").addEventListener("click",scanAndClaimAll);
   $("reloadMachines").addEventListener("click",async()=>{if(draftScopes.size)return setStatus("scanBatchStatus","请先保存或放弃草稿。","error");try{await postAction({action:"machine.sync"});await refresh();setStatus("scanBatchStatus","Komari 机器已同步。","success");}catch(error){setStatus("scanBatchStatus",error.message,"error");}});
   $("refresh").addEventListener("click",refresh);
   $("homeMachineSearch").addEventListener("input",()=>{if(draftScopes.size){setStatus("globalStatus","请先保存或放弃草稿，再筛选机器，避免丢失正在编辑的内容。","muted");return;}machineFocusOverrideUuid="";renderMachines();applySetupGate();});
-  for(const filter of [$("machineOnlineFilter"),$("machineOneBoxFilter"),$("machineProtocolFilter"),$("showUnmanagedMachines"),$("showRemovedMachines")])filter.addEventListener("change",()=>{if(draftScopes.size){setStatus("globalStatus","请先保存或放弃草稿，再筛选机器。","muted");return;}machineFocusOverrideUuid="";renderMachines();applySetupGate();});
+  for(const filter of [$("machineOnlineFilter"),$("machineOneBoxFilter"),$("machineProtocolFilter"),$("showUnmanagedMachines")])filter.addEventListener("change",()=>{if(draftScopes.size){setStatus("globalStatus","请先保存或放弃草稿，再筛选机器。","muted");return;}machineFocusOverrideUuid="";renderMachines();applySetupGate();});
   $("machineLayoutSwitch").addEventListener("click",(event)=>{const button=event.target.closest("[data-machine-layout]");if(button)setMachineViewMode(button.dataset.machineLayout);});
   $("startInstall").addEventListener("click",()=>startInstallForMachine());
   $("manageSubscriptions").addEventListener("click",()=>document.querySelector('[data-panel="subscriptions"]').click());
@@ -2320,17 +2392,67 @@
   function pluginUpdateStatusMessage(result){
     const current=String((result&&result.currentVersion)||"未知");
     const latest=String((result&&result.latestVersion)||"未知");
-    if(result&&result.updateAvailable)return "发现新版本 v"+latest+"（当前 v"+current+"）。不会自动安装，请到插件管理或发布页核对。";
+    if(result&&result.updateAvailable)return "发现新版本 v"+latest+"（当前 v"+current+"），可以安装更新。";
     if(latest&&current&&latest!==current)return "当前运行版本 v"+current+" 高于发布页最新 v"+latest+"。不会自动安装；如需同步发布记录请到源码发布页核对。";
     return "当前运行版本 v"+current+" 与最新发布一致。";
   }
   const checkPluginUpdate=$("checkPluginUpdate");
+  const installPluginUpdate=$("installPluginUpdate");
+  let pendingPluginVersion="";
   if(checkPluginUpdate)checkPluginUpdate.addEventListener("click",async()=>{
     setStatus("pluginUpdateStatus","正在检查 GitHub 最新发布…","muted");
+    pendingPluginVersion="";installPluginUpdate.hidden=true;
     try{
       const result=await postAction({action:"plugin.update.check"});
+      if(result.updateAvailable&&/^\d+\.\d+\.\d+$/.test(result.latestVersion)){pendingPluginVersion=result.latestVersion;installPluginUpdate.textContent="安装 v"+pendingPluginVersion;installPluginUpdate.hidden=false;}
       setStatus("pluginUpdateStatus",pluginUpdateStatusMessage(result),"success");
     }catch(error){setStatus("pluginUpdateStatus",error.message||"无法检查更新。","error");}
+  });
+  async function pluginUploadRequest(path,body,multipart=false){
+    const response=await fetch(path,{method:"POST",credentials:"same-origin",cache:"no-store",headers:multipart?undefined:{"Content-Type":"application/json"},body:multipart?body:JSON.stringify(body)});
+    let payload;try{payload=await response.json();}catch(_){throw new Error("Komari 返回了无法读取的上传结果。");}
+    if(!response.ok||payload.status!=="success")throw new Error(payload.message||"Komari 插件上传失败。");
+    return payload.data;
+  }
+  async function assertPluginUpdateIdle(){
+    const latest=await request("/admin/state");
+    if((latest.jobs||[]).some((job)=>["authorized","dispatched","running","verifying"].includes(job.state)))throw new Error("仍有远程任务未完成，请等待任务结束后再更新。");
+  }
+  if(installPluginUpdate)installPluginUpdate.addEventListener("click",async()=>{
+    const version=pendingPluginVersion;
+    if(!version||draftScopes.size||installPlanRunning||batchClaimRunning){setStatus("pluginUpdateStatus","请先保存草稿并等待当前安装结束，再更新插件。","error");return;}
+    const confirm=await askOperation({title:"安装 KNS v"+version,description:"将从 KNS 官方 GitHub 发布页下载并校验安装包，再由 Komari 替换并重启插件。升级期间管理页面会短暂中断；如果安装失败，请在 Komari 插件管理中手动上传安装包。",confirmLabel:"安装更新"});
+    if(!confirm)return;
+    let uploadId="",updateLock="",mergeStarted=false,installed=false;
+    installPluginUpdate.disabled=true;checkPluginUpdate.disabled=true;
+    try{
+      await assertPluginUpdateIdle();
+      setStatus("pluginUpdateStatus","正在下载并校验更新包…","muted");
+      const response=await fetch(api+"/admin/update-package?version="+encodeURIComponent(version),{credentials:"same-origin",cache:"no-store"});
+      if(!response.ok){let payload;try{payload=await response.json();}catch(_){}throw new Error(payload&&payload.error&&payload.error.message||"无法下载插件更新包。");}
+      const blob=await response.blob();if(!blob.size)throw new Error("插件更新包为空。");
+      const init=await pluginUploadRequest("/api/admin/upload/init",{purpose:"plugin",size:blob.size,filename:"onebox-bridge.zip"});
+      uploadId=String(init&&init.upload_id||"");const chunkSize=Number(init&&init.chunk_size);
+      if(!uploadId||!Number.isSafeInteger(chunkSize)||chunkSize<1||chunkSize>8*1024*1024)throw new Error("Komari 返回的上传会话无效。");
+      for(let offset=0,index=0;offset<blob.size;offset+=chunkSize,index++){
+        const form=new FormData();form.append("upload_id",uploadId);form.append("chunk_index",String(index));form.append("chunk_data",blob.slice(offset,offset+chunkSize),"onebox-bridge.zip");
+        await pluginUploadRequest("/api/admin/upload/chunk",form,true);
+      }
+      await assertPluginUpdateIdle();
+      const lock=await postAction({action:"plugin.update.prepare"});updateLock=String(lock&&lock.token||"");
+      if(!updateLock)throw new Error("无法取得更新锁，请稍后重试。");
+      setStatus("pluginUpdateStatus","正在安装更新，插件即将重启…","muted");
+      mergeStarted=true;await pluginUploadRequest("/api/admin/upload/merge",{upload_id:uploadId});
+      installed=true;
+      setStatus("pluginUpdateStatus","更新已提交，正在重新加载页面…","success");
+      window.location.reload();
+    }catch(error){
+      if(uploadId&&!mergeStarted){try{await pluginUploadRequest("/api/admin/upload/cancel",{upload_id:uploadId});}catch(_){}}
+      setStatus("pluginUpdateStatus",mergeStarted?"安装结果未能确认，请到 Komari 插件管理核对；如插件仍在运行，更新锁最多保留 5 分钟。":"更新未完成："+(error.message||"请稍后重试。"),"error");
+    }finally{
+      if(updateLock&&!installed&&!mergeStarted){try{await postAction({action:"plugin.update.unlock",token:updateLock});}catch(_){}}
+      installPluginUpdate.disabled=false;checkPluginUpdate.disabled=false;
+    }
   });
   $("restoreBackup").addEventListener("click",async()=>{const name=$("backupSelect").value;if(!name)return;try{const preview=await postAction({action:"backup.restore.preview",name});const counts=preview.backup.counts||{};const values=await askOperation({title:"恢复备份范围确认",description:"备份："+name+"\n版本："+(preview.backup.pluginVersion||"未知")+" · 更新时间："+(preview.backup.createdAt||"未知")+"\n将替换：探针 "+(counts.machines||0)+"、节点 "+(counts.instances||0)+"、订阅档案 "+(counts.profiles||0)+"、任务历史 "+(counts.jobs||0)+"。\n恢复会保留本地事务副本；有活动任务时服务端会阻止。请输入“恢复”继续。",fields:[{name:"confirmPhrase",label:"输入“恢复”以确认",required:true}],confirmLabel:"替换 KNS 状态",danger:true,validate:(form)=>form.get("confirmPhrase")==="恢复"?"":"请输入“恢复”。"});if(!values)return;await postAction({action:"backup.restore",name,confirmPhrase:values.confirmPhrase,expectedRevision:preview.currentRevision});setStatus("settingsStatus","备份已恢复；请核对节点和订阅状态。","success");draftScopes.clear();await refresh();}catch(error){setStatus("settingsStatus",error.message,"error");}});
   function syncMachineFilterDropdowns(){

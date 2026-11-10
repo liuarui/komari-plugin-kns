@@ -2,6 +2,14 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.1] - 2026-11-10
+
+- Remove machines and their managed nodes from KNS and subscriptions when they are deleted from Komari.
+- Avoid revision conflicts between consecutive read-only machine scans and report common scan failure causes.
+- Scan online managed machines and claim supported nodes in sequence; verify live presence before sending remote commands.
+- Improve machine card borders in light and dark themes.
+- Install verified KNS updates from the settings page through Komari's plugin manager.
+
 ## [1.0.0] - 2026-11-10
 
 First public release.

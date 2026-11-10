@@ -241,7 +241,7 @@ test("inline results advance only with actual backend job states even without a 
 
 test("setup gate never re-enables offline machine or stale maintenance buttons", () => {
   const controls = new Map(); const offline = { disabled: true }; const stale = { disabled: true };
-  const context = vm.createContext({ state: { settings: { setupComplete: true } }, installPlanRunning: true,
+  const context = vm.createContext({ state: { settings: { setupComplete: true } }, installPlanRunning: true, batchClaimRunning: false,
     $: (id) => { if (!controls.has(id)) controls.set(id, {}); return controls.get(id); },
     document: { querySelectorAll: (selector) => selector.includes("button") ? [offline, stale] : [] },
   });
@@ -662,4 +662,52 @@ test("check-update copy distinguishes equal, older, and newer GitHub latest tags
   const newer = context.pluginUpdateStatusMessage({ updateAvailable: true, currentVersion: "1.3.0", latestVersion: "1.3.1" });
   assert.match(newer, /发现新版本 v1\.3\.1/);
   assert.doesNotMatch(source, /function compareSemver/);
+});
+
+test("scan and claim all waits for this scan and skips offline or failed machines", async () => {
+  const actions = [], status = [], rendered = [];
+  const node = (tag) => ({ tag, protocol: "vless", importable: true, managed: false, listen: { port: 443, transport: "tcp" } });
+  const machines = [
+    { uuid: "a", name: "online", online: true, policy: { tags: [] }, discoveredNodes: [node("first"), node("second")] },
+    { uuid: "b", name: "scan failure", online: true, policy: {}, discoveredNodes: [node("stale")] },
+    { uuid: "c", name: "offline", online: false, policy: {}, discoveredNodes: [node("offline")] },
+    { uuid: "d", name: "unmanaged", online: true, policy: { managementTags: ["不纳管"] }, discoveredNodes: [node("excluded")] },
+  ];
+  const snapshot = { machines, instances: [], jobs: [] };
+  const elements = { batchClaimResults: { replaceChildren() {}, append(value) { rendered.push(value.text); } }, scanAndClaimAll: {}, scanLegacySelected: {} };
+  const context = vm.createContext({
+    state: snapshot, latestServerSnapshot: null, lastSuccessfulRefreshAt: null, draftScopes: new Map(), installPlanRunning: false, batchClaimRunning: false,
+    $: (id) => elements[id], el: (_tag, text) => ({ text }), setStatus: (_id, text) => status.push(text),
+    askOperation: async () => ({}), request: async () => snapshot, wait: async () => {}, refresh: async () => {}, idempotencyKey: () => "fixture",
+    postAction: async (body) => {
+      actions.push(body);
+      const job = { id: "job-" + actions.length, state: body.action === "machine.discover" && body.machineUuid === "b" ? "failed" : "succeeded", message: "scan failed" };
+      snapshot.jobs.push(job);
+      return { ok: true, job };
+    },
+  });
+  vm.runInContext(between("  async function waitForBatchClaimJob(", "  function selectOnlineLegacyScanMachines("), context);
+  await context.scanAndClaimAll();
+  assert.deepEqual(actions.map((item) => [item.action, item.machineUuid, item.legacyTag]), [
+    ["machine.discover", "a", undefined], ["machine.import", "a", "first"], ["machine.import", "a", "second"], ["machine.discover", "b", undefined],
+  ]);
+  assert.ok(rendered.some((text) => text.includes("已接管 2")));
+  assert.ok(rendered.some((text) => text.includes("scan failed")));
+  assert.match(status.at(-1), /已接管 2 个节点/);
+});
+
+test("a node's own endpoint draft can be submitted during takeover", async () => {
+  const scope = "machine-import:machine:old-tag", sent = [];
+  const context = vm.createContext({
+    draftScopes: new Map([[scope, 1]]), state: { instances: [] },
+    setMachineStatus() {}, askOperation: async () => ({}), idempotencyKey: () => "claim-key",
+    postAction: async (body, draftScope) => { sent.push({ body, draftScope }); return { ok: true, job: { id: "job" } }; }, refresh: async () => {},
+  });
+  vm.runInContext(between("  async function importLegacyNode(", "  async function updateOneBoxScript("), context);
+  await context.importLegacyNode({ uuid: "machine", policy: {}, discoveredAt: new Date().toISOString() }, { tag: "old-tag" }, { endpointHost: "2001:4860:4860::8888", externalPort: "" });
+  assert.equal(sent.length, 1); assert.equal(sent[0].draftScope, scope);
+  assert.equal(sent[0].body.endpointHost, "2001:4860:4860::8888");
+  context.draftScopes.set("settings:connection", 1);
+  await context.importLegacyNode({ uuid: "machine", policy: {}, discoveredAt: new Date().toISOString() }, { tag: "old-tag" }, {});
+  assert.equal(sent.length, 1, "a different unsaved draft blocks takeover");
 });
