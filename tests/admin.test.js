@@ -227,11 +227,13 @@ test("preflight blocks missing family, IPv4-only listener, stale machine and act
   assert.match(api.installPreflight(state, ["a"], protocol, { ...networkFixture(), nat: true, endpointHost: "https://bad.example/path" }).join(), /不要包含协议/);
 });
 
-test("preflight blocks new installs while a remote dispatch needs reconciliation", () => {
+test("preflight blocks new installs while a remote task needs reconciliation", () => {
   const api = installContext(); const state = planFixture();
-  state.jobs.push({ machineUuid: "a", action: "install", state: "needs_reconcile", dispatchUncertain: true });
+  state.jobs.push({ machineUuid: "a", action: "install", state: "needs_reconcile" });
   const errors = api.installPreflight(state, ["a"], [{ id: "vless", listenPort: 443 }], networkFixture());
-  assert.match(errors.join(), /上一条远程命令是否送达尚未确认/);
+  assert.match(errors.join(), /上一条远程任务仍待核查/);
+  state.jobs[0].state = "timed_out";
+  assert.match(api.installPreflight(state, ["a"], [{ id: "vless", listenPort: 443 }], networkFixture()).join(), /上一条远程任务仍待核查/);
 });
 
 test("install review skips offline targets while checking online targets", () => {

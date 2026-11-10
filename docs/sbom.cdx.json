@@ -6,7 +6,7 @@
     "component": {
       "type": "application",
       "name": "Komari KNS",
-      "version": "1.0.6",
+      "version": "1.0.7",
       "licenses": [
         {
           "expression": "AGPL-3.0-only"

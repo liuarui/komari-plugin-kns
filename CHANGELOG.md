@@ -2,6 +2,11 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.7] - 2026-11-10
+
+- Block new remote changes after unresolved or timed-out tasks, including tasks carried over from earlier releases; allow them again after the alert is acknowledged.
+- Show the actual blocking reason when an install target is skipped.
+
 ## [1.0.6] - 2026-11-10
 
 - Correct Loon node syntax and include VLESS Reality, Hysteria2 obfuscation, bandwidth, ALPN, and AnyTLS settings.

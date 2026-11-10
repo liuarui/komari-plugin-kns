@@ -791,6 +791,14 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("GET /api/kns/sub")({ query: Object.fromEntries(url.searchParams), headers: {} }, revokedRes);
     assert.equal(revokedRes.statusCode, 403);
 
+    const unresolvedInstallRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "install", machineUuid, protocol: "vless", listenPort: 9444, listenAddress: "::", options: { security: "reality" }, confirm: true, idempotencyKey: "blocked-by-old-unresolved-job" }) }, unresolvedInstallRes);
+    assert.equal(unresolvedInstallRes.statusCode, 409);
+    assert.equal(JSON.parse(unresolvedInstallRes.body).error.code, "dispatch_unconfirmed");
+    const acknowledgeUnresolvedRes = response();
+    await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "attention.acknowledge", kind: "job", jobId: kernelCallbackMissingRequest.jobId, expectedState: "needs_reconcile" }) }, acknowledgeUnresolvedRes);
+    assert.equal(acknowledgeUnresolvedRes.statusCode, 200, acknowledgeUnresolvedRes.body);
+
     nextExecError = Object.assign(new Error("admin session expired"), { code: "-32040" });
     const retryBatchBody = { action: "install.batch", machineUuids: [machineUuid], batchId: "batch-retry-12345678", protocol: "vless", listenPort: 9444, listenAddress: "::", options: { security: "reality" }, confirm: true };
     const retryBatchRes = response();

@@ -1835,11 +1835,11 @@ async function finishDispatch(job, params) {
 }
 
 function unconfirmedDispatch(state, machineUuid) {
-  return state.jobs.find((job) => job.machineUuid === machineUuid && job.dispatchUncertain && !["machine.discover", "instance.status"].includes(job.action) && !["succeeded", "cancelled"].includes(job.state) && !(job.attentionAcknowledgedAt && job.attentionAcknowledgedState === job.state));
+  return state.jobs.find((job) => job.machineUuid === machineUuid && (job.dispatchUncertain || ["needs_reconcile", "timed_out"].includes(job.state)) && !["machine.discover", "instance.status"].includes(job.action) && !["succeeded", "cancelled"].includes(job.state) && !(job.attentionAcknowledgedAt && job.attentionAcknowledgedState === job.state));
 }
 
 function requireConfirmedDispatch(state, machineUuid) {
-  if (unconfirmedDispatch(state, machineUuid)) fail("dispatch_unconfirmed", "之前的远程命令可能已经送达。请先只读核查机器，在工作台确认处理后再执行变更。", 409);
+  if (unconfirmedDispatch(state, machineUuid)) fail("dispatch_unconfirmed", "之前的远程任务仍待核查。请先只读核查机器，在工作台确认处理后再执行变更。", 409);
 }
 
 function machineByUuid(state, uuid) {

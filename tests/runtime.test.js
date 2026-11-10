@@ -77,6 +77,13 @@ test("uncertain Komari dispatches require reconciliation, definite rejections re
   assert.equal(job.state, "needs_reconcile");
   assert.equal(job.dispatchUncertain, true);
   assert.equal(api.unconfirmedDispatch({ jobs: [job] }, "machine"), job);
+  const legacyUnresolved = { id: "old-job", action: "install", machineUuid: "machine", state: "needs_reconcile" };
+  assert.equal(api.unconfirmedDispatch({ jobs: [legacyUnresolved] }, "machine"), legacyUnresolved, "pre-upgrade reconciliation jobs must also block mutations");
+  legacyUnresolved.attentionAcknowledgedAt = new Date().toISOString();
+  legacyUnresolved.attentionAcknowledgedState = "needs_reconcile";
+  assert.equal(api.unconfirmedDispatch({ jobs: [legacyUnresolved] }, "machine"), undefined, "handling the alert releases the block");
+  const timedOut = { id: "timeout", action: "install", machineUuid: "machine", state: "timed_out" };
+  assert.equal(api.unconfirmedDispatch({ jobs: [timedOut] }, "machine"), timedOut, "timed out remote changes must be checked before retrying");
   response = { task_id: "task-1" };
   failure = Object.assign(new Error("permission denied"), { code: -32041 });
   const rejected = { id: "rejected", action: "install", machineUuid: "machine", state: "authorized" };

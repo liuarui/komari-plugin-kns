@@ -1216,7 +1216,7 @@
       if(!machine){errors.push("所选机器已不存在："+uuid);continue;}
       if(!machineInstallAllowed(machine,snapshot))errors.push(machine.name+"："+machineInstallBlockReason(machine,snapshot));
       if((snapshot.jobs||[]).some((job)=>job.machineUuid===uuid&&["authorized","dispatched","running","verifying"].includes(job.state)))errors.push(machine.name+"：共享 Runtime 有未完成任务，请先等待或核查。");
-      if(machineHasUnconfirmedDispatch(machine.uuid,snapshot))errors.push(machine.name+"：上一条远程命令是否送达尚未确认，请先只读核查并处理任务提醒。");
+      if(machineHasUnconfirmedDispatch(machine.uuid,snapshot))errors.push(machine.name+"：上一条远程任务仍待核查，请先只读核查并处理任务提醒。");
       const hosts=(network.nat?(override?[override]:[]):machineEndpointHosts(machine)).map(normalizedEndpointHost);
       if(!hosts.length)errors.push(machine.name+"：所选地址族没有可用地址，请检查机器 IPv4 / IPv6 设置。");
       if(network.listenAddress==="0.0.0.0"&&hosts.some((host)=>host.includes(":")))errors.push(machine.name+"：IPv6 连接地址不能使用仅 IPv4 监听。");
@@ -1688,8 +1688,8 @@
     catch(error){setMachineStatus(machine.uuid,error.message,"error");}
   }
 
-  function machineHasUnconfirmedDispatch(machineUuid,snapshot){const current=snapshot||latestServerSnapshot||state;return (current.jobs||[]).some((job)=>job.machineUuid===machineUuid&&job.dispatchUncertain&&!['machine.discover','instance.status'].includes(job.action)&&!['succeeded','cancelled'].includes(job.state)&&!(job.attentionAcknowledgedAt&&job.attentionAcknowledgedState===job.state));}
-  function machineInstallBlockReason(machine,snapshot){if(machineHasUnconfirmedDispatch(machine.uuid,snapshot))return "上一条远程任务结果未知，请先核查机器并处理任务提醒。";if(machine.removedFromKomariAt)return "机器已从 Komari 删除。";if(machine.online!==true)return "机器离线或状态未知。";if(!(machine.policy&&machine.policy.deployAllowed===true))return "此机器尚未授权远程安装。";return "";}
+  function machineHasUnconfirmedDispatch(machineUuid,snapshot){const current=snapshot||latestServerSnapshot||state;return (current.jobs||[]).some((job)=>job.machineUuid===machineUuid&&(job.dispatchUncertain||['needs_reconcile','timed_out'].includes(job.state))&&!['machine.discover','instance.status'].includes(job.action)&&!['succeeded','cancelled'].includes(job.state)&&!(job.attentionAcknowledgedAt&&job.attentionAcknowledgedState===job.state));}
+  function machineInstallBlockReason(machine,snapshot){if(machineHasUnconfirmedDispatch(machine.uuid,snapshot))return "上一条远程任务结果待核查，请先只读核查机器并处理任务提醒。";if(machine.removedFromKomariAt)return "机器已从 Komari 删除。";if(machine.online!==true)return "机器离线或状态未知。";if(!(machine.policy&&machine.policy.deployAllowed===true))return "此机器尚未授权远程安装。";return "";}
   function machineInstallAllowed(machine,snapshot){return !machineInstallBlockReason(machine,snapshot);}
   function runtimeStateLabel(instance){
     const remote=instance.remoteStatus||{};const checked=Date.parse(remote.checkedAt||"");const fresh=Number.isFinite(checked)&&checked<=Date.now()&&Date.now()-checked<=5*60*1000;
@@ -1790,7 +1790,7 @@
       heading.append(titleBox,meta);card.append(heading);
       const addresses=[machine.ipv4&&"IPv4 "+machine.ipv4,machine.ipv6&&"IPv6 "+machine.ipv6].filter(Boolean);card.append(el("p",addresses.join(" · ")||"尚无可用连接地址","small muted"));
       const policy=machine.policy||{};
-      const install=actionButton("安装节点",()=>startInstallForMachine(machine.uuid));install.disabled=!machineInstallAllowed(machine)||state.settings.setupComplete!==true;install.title=machineHasUnconfirmedDispatch(machine.uuid)?"上一条远程命令结果未知，请先只读核查机器并处理任务提醒":machine.online!==true?"机器当前离线或状态未知":machineInstallAllowed(machine)?"在此机器安装节点":"请先勾选并保存远程安装授权";
+      const install=actionButton("安装节点",()=>startInstallForMachine(machine.uuid));install.disabled=!machineInstallAllowed(machine)||state.settings.setupComplete!==true;install.title=machineHasUnconfirmedDispatch(machine.uuid)?"上一条远程任务结果待核查，请先只读核查机器并处理任务提醒":machine.online!==true?"机器当前离线或状态未知":machineInstallAllowed(machine)?"在此机器安装节点":"请先勾选并保存远程安装授权";
       const tools=el("div",null,"machine-tools");const scanButton=actionButton("扫描已有节点",()=>discoverLegacyNodes(machine));scanButton.disabled=removed||machine.online!==true;tools.append(install,scanButton);if(machine.autoProvision&&machine.autoProvision.state==="failed"){const retry=actionButton("重试自动安装",()=>retryAutoProvision(machine));retry.disabled=removed||machineHasUnconfirmedDispatch(machine.uuid);retry.title=machineHasUnconfirmedDispatch(machine.uuid)?"上一条远程命令结果未知，请先核查并处理任务提醒":"";tools.append(retry);}
       const scanLabel=el("label","加入批量扫描");const scanCheck=document.createElement("input");scanCheck.type="checkbox";scanCheck.dataset.noDraft="true";scanCheck.checked=legacyScanSelection.has(machine.uuid);scanCheck.disabled=removed||machine.online!==true;scanCheck.addEventListener("change",()=>{if(scanCheck.checked)legacyScanSelection.add(machine.uuid);else legacyScanSelection.delete(machine.uuid);});scanLabel.prepend(scanCheck);tools.append(scanLabel);
       const deployLabel=el("label","允许远程安装");deployLabel.title="开启权限不会自动安装；仍需管理员主动提交任务。";const deploy=document.createElement("input");deploy.type="checkbox";deploy.checked=policy.deployAllowed===true;deploy.disabled=removed;deploy.dataset.policy="deploy";deployLabel.prepend(deploy);const savePolicy=actionButton("保存机器设置",()=>updatePolicy(machine.uuid,card));savePolicy.disabled=removed;tools.append(deployLabel,savePolicy,el("small",removed?"该机器已从 Komari 删除，设置只读。":"勾选只授权，不会自动安装。","muted small"));
