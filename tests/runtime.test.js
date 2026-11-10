@@ -21,7 +21,7 @@ function runtime(t, server = {}) {
   };
   vm.runInNewContext(fs.readFileSync(filename, "utf8") + `
     masterKey = secrets.getMasterKey(__storageDir__);
-    module.exports = { publicState, ensureInstance, handleAction, downloadPluginUpdate, save, syncMachines, subscriptionSourceHash, refreshHealth, refreshEndpoints, refreshSubscriptionSnapshots, readSubscriptionSnapshot, subscriptionSnapshotKey, serveSubscription, recordTokenUsage, flushTokenUsage, pollPendingJobs, assertNoActiveJobs, jobRetryable, encryptedBackupEnvelope, decryptBackupEnvelope, handleAction, readBody, unload };
+    module.exports = { publicState, ensureInstance, handleAction, makeRemoteCommand, downloadPluginUpdate, save, syncMachines, subscriptionSourceHash, refreshHealth, refreshEndpoints, refreshSubscriptionSnapshots, readSubscriptionSnapshot, subscriptionSnapshotKey, serveSubscription, recordTokenUsage, flushTokenUsage, pollPendingJobs, assertNoActiveJobs, jobRetryable, encryptedBackupEnvelope, decryptBackupEnvelope, handleAction, readBody, unload };
   `, context, { filename });
   const api = context.module.exports;
   t.after(() => api.unload());
@@ -549,6 +549,53 @@ function stubConnect(t, ok) {
     return socket;
   };
 }
+
+test("acknowledging a task and health incident preserves history and re-alerts after recovery", async (t) => {
+  let reachable = false; stubConnect(t, () => reachable);
+  const { api, store } = runtime(t);
+  const state = store.read(); state.settings.setupComplete = true;
+  state.jobs.push({ id: "failed-job", state: "failed", action: "install", machineUuid: "m", createdAt: new Date().toISOString() });
+  state.instances.push({ id: "node", machineUuid: "m", enabled: true, protocol: "shadowsocks", listen: { port: 443, transport: "tcp" }, endpoint: { host: "8.8.8.8", port: 443 }, health: { state: "unhealthy", hosts: { "8.8.8.8": { state: "unhealthy", consecutiveFailures: 3, consecutiveSuccesses: 0, level: "L1-TCP", reason: "connection_failed" } } } });
+  store.write(state);
+  const response = () => ({ statusCode: 200, body: "", setHeader() {}, end(value) { this.body = String(value || ""); } });
+  const req = (body) => ({ headers: { "content-type": "application/json", host: "monitor.example", origin: "https://monitor.example" }, context: { principal: { roles: ["admin"], username: "tester" } }, body: JSON.stringify({ action: "attention.acknowledge", ...body }) });
+  await api.handleAction(req({ kind: "job", jobId: "failed-job", expectedState: "failed", expectedRevision: 0 }), response());
+  await api.handleAction(req({ kind: "health", instanceId: "node", incidentId: "legacy", expectedRevision: 0 }), response());
+  let current = store.read();
+  assert.equal(current.jobs[0].state, "failed"); assert.equal(current.jobs[0].attentionAcknowledgedState, "failed");
+  assert.equal(current.instances[0].health.attentionAcknowledgedIncidentId, "legacy");
+  await api.refreshHealth();
+  assert.equal(store.read().instances[0].health.attentionAcknowledgedIncidentId, "legacy", "ongoing failure stays acknowledged");
+  reachable = true; await api.refreshHealth(); await api.refreshHealth();
+  assert.equal(store.read().instances[0].health.state, "healthy");
+  reachable = false; await api.refreshHealth(); await api.refreshHealth(); await api.refreshHealth();
+  current = store.read();
+  assert.equal(current.instances[0].health.state, "unhealthy");
+  assert.notEqual(current.instances[0].health.attentionIncidentId, "legacy");
+  assert.equal(current.instances[0].health.attentionAcknowledgedIncidentId, undefined);
+  await assert.rejects(api.handleAction(req({ kind: "health", instanceId: "node", incidentId: "legacy" }), response()), (error) => error.code === "attention_changed");
+});
+
+test("fresh bootstrap accepts only the known empty KNS directories", (t) => {
+  const { api } = runtime(t); const child = require("node:child_process");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "kns-bootstrap-")); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const config = path.join(root, "onebox");
+  const command = api.makeRemoteCommand({ settings: { publicBaseUrl: "https://monitor.example" } }, { id: "job", machineUuid: "m", action: "install", _callbackToken: "test" }, { id: "node", protocol: "vless", listen: { port: 443, transport: "tcp" } });
+  let guard = command.slice(command.indexOf("onebox_config="), command.indexOf('; if [ -n "$onebox_bootstrap_blocked" ]'));
+  assert.ok(guard.startsWith("onebox_config="));
+  guard = guard.replaceAll("/etc/onebox", config);
+  for (const unit of ["/etc/systemd/system/onebox.service", "/run/systemd/system/onebox.service", "/usr/lib/systemd/system/onebox.service", "/lib/systemd/system/onebox.service", "/usr/local/lib/systemd/system/onebox.service", "/etc/init.d/onebox"]) guard = guard.replaceAll(unit, path.join(root, "service"));
+  const run = () => child.execFileSync("bash", ["-c", guard + '; printf "%s|%s" "$onebox_bootstrap_blocked" "$onebox_needs_bootstrap"'], { encoding: "utf8" });
+  fs.mkdirSync(path.join(config, "kns", "instances"), { recursive: true }); fs.mkdirSync(path.join(config, "kns", "certs"));
+  assert.equal(run(), "|1");
+  fs.writeFileSync(path.join(config, ".version_cache"), "cache"); assert.equal(run(), "|1"); fs.unlinkSync(path.join(config, ".version_cache"));
+  fs.symlinkSync(root, path.join(config, ".version_cache")); assert.equal(run(), "existing_state|0"); fs.unlinkSync(path.join(config, ".version_cache"));
+  fs.writeFileSync(path.join(config, "kns", "instances", "old.json"), "{}"); assert.equal(run(), "existing_state|0");
+  fs.unlinkSync(path.join(config, "kns", "instances", "old.json")); fs.symlinkSync(root, path.join(config, "kns", "instances", "link")); assert.equal(run(), "existing_state|0");
+  fs.unlinkSync(path.join(config, "kns", "instances", "link")); fs.mkdirSync(path.join(config, "unknown")); assert.equal(run(), "existing_state|0");
+  fs.rmdirSync(path.join(config, "unknown")); fs.rmdirSync(path.join(config, "kns", "certs")); fs.symlinkSync(root, path.join(config, "kns", "certs")); assert.equal(run(), "existing_state|0");
+  fs.unlinkSync(path.join(config, "kns", "certs")); fs.writeFileSync(path.join(root, "service"), ""); assert.equal(run(), "existing_state|0");
+});
 
 test("healthy probes do not bump revision after the state has already stabilized", async (t) => {
   stubConnect(t, () => true);

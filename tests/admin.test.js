@@ -644,6 +644,24 @@ test("attention todos skip resolved import jobs and duplicate reconcile rows", (
   assert.equal(Array.from(selected, (job) => job.id).join(","), "new-fail,import-open");
 });
 
+test("acknowledging a task or health incident hides only that occurrence", () => {
+  const context = vm.createContext({});
+  vm.runInContext(between("  function attentionJobs(", "  function renderOverview("), context);
+  const snapshot = { instances: [], jobs: [
+    { id: "old", action: "install", state: "failed", machineUuid: "m", createdAt: "2026-11-10T00:00:00Z" },
+    { id: "new", action: "install", state: "failed", machineUuid: "m", createdAt: "2026-11-10T01:00:00Z", attentionAcknowledgedAt: "now", attentionAcknowledgedState: "failed" },
+  ] };
+  assert.equal(context.attentionJobs(snapshot).length, 0, "acknowledging the latest failure does not reveal an older failure");
+  snapshot.jobs.push({ id: "later", action: "install", state: "failed", machineUuid: "m", createdAt: "2026-11-10T02:00:00Z" });
+  assert.equal(context.attentionJobs(snapshot)[0].id, "later");
+  const node = { id: "n", health: { state: "unhealthy" } };
+  assert.equal(context.attentionHealth(node), true);
+  node.health.attentionIncidentId = "first"; node.health.attentionAcknowledgedIncidentId = "first";
+  assert.equal(context.attentionHealth(node), false);
+  node.health.attentionIncidentId = "second";
+  assert.equal(context.attentionHealth(node), true);
+});
+
 
 test("admin footer binds the running plugin version instead of a hardcoded 1.3.0 tag", () => {
   assert.doesNotMatch(source, /Komari KNS v1\.3\.0/);

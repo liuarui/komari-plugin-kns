@@ -2,6 +2,11 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.4] - 2026-11-10
+
+- Allow resolved task failures and health incidents to be acknowledged without deleting their history; new incidents are shown again.
+- Permit fresh initialization when only known empty KNS directories remain, while protecting existing files and services.
+
 ## [1.0.3] - 2026-11-10
 
 - Isolate subscription, machine and settings drafts from unrelated background state updates.

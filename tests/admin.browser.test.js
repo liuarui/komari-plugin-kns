@@ -171,6 +171,41 @@ test("install drawer keeps a long machine list usable and protects its draft", {
   assert.equal(await page.locator("#installWizard").evaluate((dialog) => dialog.open), false);
 });
 
+test("handled alerts disappear but a new task or health incident is shown", { skip: !driver }, async (t) => {
+  const { chromium } = require(driver); const root = path.resolve(__dirname, "../pages");
+  const server = http.createServer((req, res) => {
+    const file = ({ "/": "admin.html", "/qrcode-generator.js": "qrcode-generator.js", "/qrcode-generator-utf8.js": "qrcode-generator-utf8.js" })[req.url];
+    if (!file) { res.writeHead(404); res.end(); return; }
+    res.setHeader("Content-Type", file.endsWith(".js") ? "text/javascript" : "text/html;charset=utf-8"); res.end(fs.readFileSync(path.join(root, file)));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve)); t.after(() => new Promise((resolve) => server.close(resolve)));
+  const browser = await chromium.launch({ channel: "chrome", headless: true }); t.after(() => browser.close());
+  const page = await browser.newPage();
+  const state = { revision: 1, settings: { setupComplete: true, defaultNode: {} }, machines: [{ uuid: "m", name: "机器", online: true, policy: { deployAllowed: true } }],
+    jobs: [{ id: "old-job", machineUuid: "m", action: "install", state: "failed", createdAt: "2026-11-10T00:00:00Z" }],
+    instances: [{ id: "node", machineUuid: "m", name: "测试节点", protocol: "vless", enabled: true, health: { state: "unhealthy" } }], profiles: [], audit: [], backups: [] };
+  await page.route("**/api/kns/**", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: state });
+    const body = route.request().postDataJSON(); assert.equal(body.action, "attention.acknowledge");
+    if (body.kind === "job") { const job = state.jobs.find((item) => item.id === body.jobId); job.attentionAcknowledgedAt = "now"; job.attentionAcknowledgedState = job.state; }
+    else { const health = state.instances[0].health; health.attentionIncidentId = body.incidentId; health.attentionAcknowledgedIncidentId = body.incidentId; }
+    return route.fulfill({ json: { ok: true, acknowledgedAt: "now" } });
+  });
+  await page.goto(`http://127.0.0.1:${server.address().port}/`);
+  const todos = page.locator("#overviewTodos");
+  await todos.getByText("任务编号 old-job").waitFor();
+  await todos.locator(".result-item").filter({ hasText: "old-job" }).getByRole("button", { name: "我已处理" }).click();
+  await todos.locator(".result-item").filter({ hasText: "测试节点" }).getByRole("button", { name: "我已处理" }).click();
+  await page.locator("#refresh").click();
+  await page.waitForFunction(() => document.getElementById("overviewTodosCard").hidden);
+  assert.equal(state.jobs[0].state, "failed", "history remains available");
+  state.jobs.push({ id: "new-job", machineUuid: "m", action: "install", state: "failed", createdAt: "2026-11-10T02:00:00Z" });
+  state.instances[0].health.attentionIncidentId = "new-incident";
+  await page.locator("#refresh").click();
+  await todos.getByText("任务编号 new-job").waitFor();
+  assert.equal(await todos.locator(".result-item").filter({ hasText: "测试节点" }).isVisible(), true);
+});
+
 test("subscription drawer creates, edits and protects unsaved changes", { skip: !driver }, async (t) => {
   const { chromium } = require(driver);
   const root = path.resolve(__dirname, "../pages");

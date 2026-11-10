@@ -24,6 +24,7 @@ KNS 原生订阅格式为 `uri`、`mihomo-full`、`mihomo-provider`、`singbox-f
 
 | `action` | 常用字段 | 返回 |
 | --- | --- | --- |
+| `attention.acknowledge` | `kind:"job"`, `jobId`, `expectedState`；或 `kind:"health"`, `instanceId`, `incidentId` | 标记当前事件已处理，保留任务历史与实际健康状态；节点恢复后再次异常会产生新事件 |
 | `machine.policy.update` | `machineUuid`, `policy.deployAllowed`, `policy.addressMode`, `policy.manualAddress`, `policy.ddnsHostname`, `policy.tags`, 可选 `policy.managementTags` | 更新并返回机器策略；机器远程安装默认允许，可逐台关闭；该权限不会自动提交安装任务。`managementTags` 中包含 `不纳管` 时管理页默认隐藏该机器 |
 | `setup.complete` | `publicBaseUrl`, `defaultNode`（VLESS + Reality 模板）, `autoProvisionNewProbes`, 开启时必须 `confirmAutoProvision:true` | 同步探针、记录既有 UUID 基线、完成初始化并创建默认订阅；返回基线数量及订阅链接；重复调用不会创建第二个默认订阅 |
 | `machine.sync` | 无 | 同步探针快照；已配置自动部署策略时，新发现的探针才会入队 |

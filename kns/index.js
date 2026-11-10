@@ -1190,7 +1190,7 @@ function makeRemoteCommand(state, job, instance) {
       : "kns_rc=$?; verify=$(bash \"$installer\" kns status --instance-id " + statusId + "); verify_rc=$?; if [ \"$verify_rc\" -eq 0 ]; then printf 'KNS_STATUS=%s\\n' \"$verify\"; fi; [ \"$kns_rc\" -eq 0 ] || exit \"$kns_rc\"; [ \"$verify_rc\" -eq 0 ] || exit \"$verify_rc\"";
   const bootstrapCommands = job.action === "install" ? [
     "onebox_config=/etc/onebox/config.json; onebox_needs_bootstrap=0; onebox_bootstrap_blocked=''",
-    "if [ -L /etc/onebox ] || [ -L \"$onebox_config\" ]; then onebox_bootstrap_blocked=invalid_config; elif [ -e \"$onebox_config\" ]; then if [ ! -f \"$onebox_config\" ]; then onebox_bootstrap_blocked=invalid_config; elif ! command -v jq >/dev/null 2>&1; then onebox_needs_bootstrap=1; elif ! jq -e 'type == \"object\" and (.inbounds | type == \"array\")' \"$onebox_config\" >/dev/null 2>&1; then onebox_bootstrap_blocked=invalid_config; elif [ ! -x /usr/local/bin/onebox ] || [ ! -x /usr/local/lib/onebox/sing-box ]; then onebox_needs_bootstrap=1; fi; else if [ -e /etc/onebox ] && [ ! -d /etc/onebox ]; then onebox_bootstrap_blocked=existing_state; elif [ -d /etc/onebox ]; then if ! command -v find >/dev/null 2>&1; then onebox_bootstrap_blocked=existing_state; else onebox_existing_state=$(find /etc/onebox -mindepth 1 ! -path /etc/onebox/.version_cache -print -quit 2>/dev/null); onebox_find_rc=$?; if [ \"$onebox_find_rc\" -ne 0 ] || [ -n \"$onebox_existing_state\" ]; then onebox_bootstrap_blocked=existing_state; fi; fi; fi; for onebox_unit in /etc/systemd/system/onebox.service /run/systemd/system/onebox.service /usr/lib/systemd/system/onebox.service /lib/systemd/system/onebox.service /usr/local/lib/systemd/system/onebox.service /etc/init.d/onebox; do if [ -e \"$onebox_unit\" ] || [ -L \"$onebox_unit\" ]; then onebox_bootstrap_blocked=existing_state; fi; done; if [ -z \"$onebox_bootstrap_blocked\" ]; then onebox_needs_bootstrap=1; fi; fi",
+    "if [ -L /etc/onebox ] || [ -L \"$onebox_config\" ]; then onebox_bootstrap_blocked=invalid_config; elif [ -e \"$onebox_config\" ]; then if [ ! -f \"$onebox_config\" ]; then onebox_bootstrap_blocked=invalid_config; elif ! command -v jq >/dev/null 2>&1; then onebox_needs_bootstrap=1; elif ! jq -e 'type == \"object\" and (.inbounds | type == \"array\")' \"$onebox_config\" >/dev/null 2>&1; then onebox_bootstrap_blocked=invalid_config; elif [ ! -x /usr/local/bin/onebox ] || [ ! -x /usr/local/lib/onebox/sing-box ]; then onebox_needs_bootstrap=1; fi; else if [ -e /etc/onebox ] && [ ! -d /etc/onebox ]; then onebox_bootstrap_blocked=existing_state; elif [ -d /etc/onebox ]; then if ! command -v find >/dev/null 2>&1; then onebox_bootstrap_blocked=existing_state; else onebox_existing_state=$(find /etc/onebox -mindepth 1 ! \\( -type d \\( -path /etc/onebox/kns -o -path /etc/onebox/kns/instances -o -path /etc/onebox/kns/certs \\) \\) ! \\( -type f -path /etc/onebox/.version_cache \\) -print -quit 2>/dev/null); onebox_find_rc=$?; if [ \"$onebox_find_rc\" -ne 0 ] || [ -n \"$onebox_existing_state\" ]; then onebox_bootstrap_blocked=existing_state; fi; fi; fi; for onebox_unit in /etc/systemd/system/onebox.service /run/systemd/system/onebox.service /usr/lib/systemd/system/onebox.service /lib/systemd/system/onebox.service /usr/local/lib/systemd/system/onebox.service /etc/init.d/onebox; do if [ -e \"$onebox_unit\" ] || [ -L \"$onebox_unit\" ]; then onebox_bootstrap_blocked=existing_state; fi; done; if [ -z \"$onebox_bootstrap_blocked\" ]; then onebox_needs_bootstrap=1; fi; fi",
     "if [ -n \"$onebox_bootstrap_blocked\" ]; then printf 'KNS_BOOTSTRAP_BLOCKED=%s\\n' \"$onebox_bootstrap_blocked\"; exit 1; fi",
     "if [ \"$onebox_needs_bootstrap\" -eq 1 ]; then printf 'KNS_BOOTSTRAP=started\\n'; bash \"$installer\" install --non-interactive; bootstrap_rc=$?; if [ \"$bootstrap_rc\" -ne 0 ]; then printf 'KNS_BOOTSTRAP_FAILED=%s\\n' \"$bootstrap_rc\"; exit \"$bootstrap_rc\"; fi; printf 'KNS_BOOTSTRAP=completed\\n'; fi",
   ] : [];
@@ -1846,13 +1846,41 @@ async function handleAction(req, res) {
   const state = getState();
   if (maintenanceLock && !(action === "plugin.update.unlock" && pluginUpdateLockToken)) fail("maintenance_in_progress", "KNS 正在执行互斥设置或数据维护；请稍后重试。", 409);
   // Remote jobs validate current targets and resources; their request is not an edit of the whole state.
-  const currentStateActions = ["install", "install.batch", "uninstall", "enable", "disable", "instance.status", "machine.discover", "runtime.script.update", "runtime.kernel.update", "job.retry", "autoProvision.retry", "machine.sync", "profile.create", "profile.preview", "profile.token.show", "plugin.update.check", "plugin.update.prepare", "plugin.update.unlock"];
+  const currentStateActions = ["install", "install.batch", "uninstall", "enable", "disable", "instance.status", "machine.discover", "runtime.script.update", "runtime.kernel.update", "job.retry", "autoProvision.retry", "machine.sync", "profile.create", "profile.preview", "profile.token.show", "attention.acknowledge", "plugin.update.check", "plugin.update.prepare", "plugin.update.unlock"];
   if (body.expectedEditVersion != null) {
     const currentVersion = actionEditVersion(state, body);
     if (!currentVersion || typeof body.expectedEditVersion !== "string" || body.expectedEditVersion !== currentVersion) fail("state_revision_conflict", "当前编辑的设置已被其他操作修改。草稿已保留，请核对后再保存。", 409);
   } else if (!currentStateActions.includes(action)) assertExpectedRevision(state.revision, body);
   if (state.settings.setupComplete !== true && !["setup.complete", "backup.export", "backup.inspect", "backup.restore.preview", "profile.preview", "plugin.update.check", "plugin.update.prepare", "plugin.update.unlock"].includes(action)) {
     fail("setup_required", "请先完成连接设置；未初始化期间管理页面为只读。", 409);
+  }
+  if (action === "attention.acknowledge") {
+    if (body.kind === "job") {
+      const job = state.jobs.find((item) => item.id === String(body.jobId || ""));
+      if (!job || !["failed", "needs_reconcile", "timed_out"].includes(job.state) || job.state !== body.expectedState) fail("attention_changed", "任务状态已变化，请刷新后重新查看。", 409);
+      if (!job.attentionAcknowledgedAt || job.attentionAcknowledgedState !== job.state) {
+        job.attentionAcknowledgedAt = now();
+        job.attentionAcknowledgedState = job.state;
+        audit(state, req, "attention.job.acknowledged", { jobId: job.id, machineUuid: job.machineUuid, state: job.state });
+        save(state);
+      }
+      return json(res, 200, { ok: true, acknowledgedAt: job.attentionAcknowledgedAt });
+    }
+    if (body.kind === "health") {
+      const instance = state.instances.find((item) => item.id === String(body.instanceId || "") && !item.deletedAt);
+      const health = instance && instance.health;
+      const incident = health && (health.attentionIncidentId || "legacy");
+      if (!health || health.state !== "unhealthy" || body.incidentId !== incident) fail("attention_changed", "节点检测状态已变化，请刷新后重新查看。", 409);
+      if (health.attentionAcknowledgedIncidentId !== incident) {
+        health.attentionIncidentId = incident;
+        health.attentionAcknowledgedIncidentId = incident;
+        health.attentionAcknowledgedAt = now();
+        audit(state, req, "attention.health.acknowledged", { instanceId: instance.id, machineUuid: instance.machineUuid, incidentId: incident });
+        save(state);
+      }
+      return json(res, 200, { ok: true, acknowledgedAt: health.attentionAcknowledgedAt });
+    }
+    fail("invalid_attention_kind", "待处理事项类型无效。", 400);
   }
   if (action === "plugin.update.prepare") {
     assertNoActiveJobs(state, "更新插件");
@@ -2861,6 +2889,12 @@ async function refreshHealth() {
       health.consecutiveFailures = allUnhealthy ? Math.max(...states.map((item) => item.consecutiveFailures || 0), 0) : 0;
       health.consecutiveSuccesses = anyHealthy ? Math.max(...states.map((item) => item.consecutiveSuccesses || 0), 0) : 0;
       const previous = instance.health || {};
+      if (health.state === "unhealthy" && (previous.state === "healthy" || previous.state === "unverified" || !previous.attentionIncidentId && previous.state !== "unhealthy")) {
+        health.attentionIncidentId = randomId("health");
+        delete health.attentionAcknowledgedIncidentId; delete health.attentionAcknowledgedAt;
+      } else if (health.state === "healthy") {
+        delete health.attentionIncidentId; delete health.attentionAcknowledgedIncidentId; delete health.attentionAcknowledgedAt;
+      }
       const hostSummary = (hosts) => Object.fromEntries(Object.entries(hosts || {}).sort().map(([host, item]) => [host, {
         state: item && item.state || "", consecutiveFailures: Number(item && item.consecutiveFailures) || 0,
         consecutiveSuccesses: Number(item && item.consecutiveSuccesses) || 0, level: item && item.level || "", reason: item && item.reason || "",

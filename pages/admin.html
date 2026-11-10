@@ -541,7 +541,7 @@
       <footer class="profile-drawer-footer"><p id="installStatus" class="status muted" role="status"></p><div class="actions deploy-actions"><button id="deployBack" type="button" class="secondary" hidden>上一步</button><button id="deployNext" type="button">下一步</button><button id="installBatch" hidden>下发安装任务</button></div></footer>
       </div>
     </dialog>
-    <div id="overviewTodosCard" class="card"><h2>需要处理</h2><p class="muted small">失败任务和异常检测会显示在这里，以免被机器列表挡住。</p><div id="overviewTodos" class="result-list"><p class="muted">正在读取任务和检测状态…</p></div></div>
+    <div id="overviewTodosCard" class="card"><h2>需要处理</h2><p class="muted small">“我已处理”仅移除提醒，不改变节点、检测或订阅状态；恢复后再次异常会重新提醒。</p><div id="overviewTodos" class="result-list"><p class="muted">正在读取任务和检测状态…</p></div></div>
     <p class="small muted">远程安装默认允许，但不会自动安装；只有管理员主动提交安装任务时才会执行。新探针自动部署另有独立开关且默认关闭。KNS 不修改云安全组、DNS 或外部 NAT。UDP 协议状态会明确标为未验证。</p>
   </section>
 
@@ -1348,12 +1348,32 @@
     }
     const selected=[];
     for(const job of latest.values()){
+      if(job.attentionAcknowledgedAt&&job.attentionAcknowledgedState===job.state)continue;
       if(laterSuccess(job))continue;
       if(job.state==="needs_reconcile"&&importResolved(job))continue;
       if(uninstallResolved(job))continue;
       selected.push(job);
     }
     return selected.sort((a,b)=>time(b)-time(a));
+  }
+  function attentionHealth(instance){
+    const health=instance&&instance.health;
+    return !!(instance&&!instance.deletedAt&&health&&health.state==="unhealthy"&&health.attentionAcknowledgedIncidentId!==(health.attentionIncidentId||"legacy"));
+  }
+  async function acknowledgeAttention(body, button){
+    button.disabled=true;
+    try{
+      const result=await postAction(Object.assign({action:"attention.acknowledge"},body));
+      if(body.kind==="job"){
+        const job=(state.jobs||[]).find((item)=>item.id===body.jobId&&item.state===body.expectedState);
+        if(job){job.attentionAcknowledgedAt=result.acknowledgedAt;job.attentionAcknowledgedState=job.state;}
+      }else{
+        const instance=(state.instances||[]).find((item)=>item.id===body.instanceId);
+        if(instance&&instance.health&&instance.health.state==="unhealthy"&&(instance.health.attentionIncidentId||"legacy")===body.incidentId){instance.health.attentionIncidentId=body.incidentId;instance.health.attentionAcknowledgedIncidentId=body.incidentId;instance.health.attentionAcknowledgedAt=result.acknowledgedAt;}
+      }
+      renderOverview();await refresh();
+      setStatus("globalStatus","已标记为处理完成；历史记录与节点状态仍可查看。","success");
+    }catch(error){setStatus("globalStatus",error.message,"error");button.disabled=false;}
   }
   function jobActionLabel(job){
     const names={"machine.import":"接管旧节点","machine.discover":"扫描节点","instance.status":"状态核查",install:"安装",reconfigure:"重配置",reinstall:"重装",enable:"启动",disable:"停止",uninstall:"卸载"};
@@ -1365,7 +1385,7 @@
     const pending = state.jobs.filter((job) => ["authorized", "dispatched", "running", "verifying"].includes(job.state)).length;
     const profiles = state.profiles.filter((profile) => !profile.revokedAt&&(!profile.expiresAt||Date.parse(profile.expiresAt)>Date.now()));
     const failed = attentionJobs(state);
-    const unhealthy = active.filter((instance) => instance.health&&instance.health.state==="unhealthy");
+    const unhealthy = active.filter(attentionHealth);
     const attentionCount = new Set([...failed.map((job)=>"job:"+job.id),...unhealthy.map((instance)=>"instance:"+instance.id)]).size;
     const items = [["已接入机器", state.machines.length, online + " 台在线"], ["已安装节点", active.length, "按已登记节点统计"], ["需要处理", attentionCount, attentionCount?"存在失败任务或异常检测":"没有已知异常"], ["订阅档案", profiles.length, "令牌不会在页面持久显示"]];
     const metricIcons={
@@ -1420,9 +1440,9 @@
     if (state.settings.setupComplete !== true) todos.append(el("p","请先完成连接设置；机器和节点仍可只读浏览。","notice"));
     for (const job of failed.slice(0,5)) {
       const item=el("div",null,"result-item");item.append(el("strong",(job.machineName||job.machineUuid||"目标未知")+" · "+(jobActionLabel(job)?jobActionLabel(job)+" · ":"")+jobStateLabel(job),"error"),el("p",friendlyJobMessage(job)),el("small","任务编号 "+job.id,"small muted"));
-      item.append(actionButton("查看详情",()=>showJobDetail(job)));if(job.canRetry)item.append(actionButton("安全重试",()=>retryJob(job),"danger"));todos.append(item);
+      item.append(actionButton("查看详情",()=>showJobDetail(job)));if(job.canRetry)item.append(actionButton("安全重试",()=>retryJob(job),"danger"));const done=actionButton("我已处理",()=>acknowledgeAttention({kind:"job",jobId:job.id,expectedState:job.state},done));item.append(done);todos.append(item);
     }
-    for(const instance of unhealthy.slice(0,5)){const item=el("div",null,"result-item");item.append(el("strong",(instance.name||instance.id)+" · 检测异常","error"),el("p",instance.health.message||"连接检查未通过。可重新核查机器状态。"),el("small","检测时间："+(instance.health.lastCheckedAt||instance.health.checkedAt||"未知"),"small muted"));item.append(actionButton("查看节点",()=>{const machine=state.machines.find((entry)=>entry.uuid===instance.machineUuid);if(machine){focusMachine(machine.uuid);const node=document.querySelector('.node-card[data-instance-id="'+CSS.escape(instance.id)+'"]');if(node){const details=node.closest("details.machine-nodes");if(details)details.open=true;node.scrollIntoView({behavior:"smooth",block:"center"});node.classList.add("highlight");setTimeout(()=>node.classList.remove("highlight"),2500);}setMachineStatus(machine.uuid,"该节点检测异常，请查看节点检测详情。","error");}}));todos.append(item);}
+    for(const instance of unhealthy.slice(0,5)){const item=el("div",null,"result-item");item.append(el("strong",(instance.name||instance.id)+" · 检测异常","error"),el("p",instance.health.message||"连接检查未通过。可重新核查机器状态。"),el("small","检测时间："+(instance.health.lastCheckedAt||instance.health.checkedAt||"未知"),"small muted"));item.append(actionButton("查看节点",()=>{const machine=state.machines.find((entry)=>entry.uuid===instance.machineUuid);if(machine){focusMachine(machine.uuid);const node=document.querySelector('.node-card[data-instance-id="'+CSS.escape(instance.id)+'"]');if(node){const details=node.closest("details.machine-nodes");if(details)details.open=true;node.scrollIntoView({behavior:"smooth",block:"center"});node.classList.add("highlight");setTimeout(()=>node.classList.remove("highlight"),2500);}setMachineStatus(machine.uuid,"该节点检测异常，请查看节点检测详情。","error");}}));const done=actionButton("我已处理",()=>acknowledgeAttention({kind:"health",instanceId:instance.id,incidentId:instance.health.attentionIncidentId||"legacy"},done));item.append(done);todos.append(item);}
     if (state.settings.setupComplete === true && !failed.length && !unhealthy.length && !pending) todos.append(el("p","当前没有已知异常。","success"));
     const hasAttention = state.settings.setupComplete !== true || failed.length > 0 || unhealthy.length > 0;
     const todosCard = $("overviewTodosCard");
