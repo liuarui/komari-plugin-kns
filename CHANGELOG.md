@@ -2,6 +2,10 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.14] - 2026-11-11
+
+- Add localized country and region names beside flags in machine filters and pickers.
+
 ## [1.0.13] - 2026-11-11
 
 - Add a quick machine filter for Komari-reported regions.

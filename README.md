@@ -76,6 +76,6 @@ KNS 的 state 和订阅快照以明文保存节点凭据、订阅 token 和派�
 
 ## 项目与许可
 
-- 当前正式版本：**1.0.13**。变更记录见 [CHANGELOG](CHANGELOG.md)。
+- 当前正式版本：**1.0.14**。变更记录见 [CHANGELOG](CHANGELOG.md)。
 - 许可： [GNU AGPL v3.0-only](LICENSE)。
 - 插件安装包可从 [GitHub Releases](https://github.com/liuarui/komari-plugin-kns/releases) 下载。
