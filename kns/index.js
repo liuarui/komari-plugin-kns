@@ -13,9 +13,9 @@ const PLUGIN_VERSION = require("../komari-plugin.json").version;
 const API = "/api/kns";
 const LEGACY_API = "/api/onebox-bridge";
 const SOURCE_URL = "https://github.com/liuarui/komari-plugin-kns/tree/v" + PLUGIN_VERSION;
-const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/66c18c352dc591e58075b6c10468ff7bc3bba233/install.sh";
-const INSTALLER_SHA256 = "9e83c464455d81162170c4e2d33a6b5d8c7e278c959959d86ad431c7ec55ec51";
-const ONEBOX_SCRIPT_VERSION = "1.0.1";
+const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/main/install.sh";
+const INSTALLER_SHA256 = "c05b56f525c7a12798a30d0c7e8246c1e5815cf91e0e2c31df3a247cf06b0536";
+const ONEBOX_SCRIPT_VERSION = "1.0.2";
 const ONEBOX_ADAPTER_VERSION = "1.8.0";
 const SUBSCRIPTION_RULES_VERSION = "kns-subscription-v5";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -68,6 +68,7 @@ let subscriptionRefreshPending = false;
 let subscriptionRefreshTimer = null;
 let subscriptionRefreshStopped = false;
 const pendingTokenUsage = new Map();
+const machineGeoCache = new Map();
 
 function now() { return new Date().toISOString(); }
 function randomId(prefix) { return prefix + "-" + Date.now().toString(36) + "-" + crypto.randomBytes(5).toString("hex"); }
@@ -775,11 +776,64 @@ function normalizeDefaultNode(body, current) {
   return { protocol, listenPort, listenAddress, sniMode: "preferred", version: Math.max(1, Number(existing.version) || 1), updatedAt: existing.updatedAt || "" };
 }
 
-function automaticInstanceName(machineName, port) {
-  const prefix = "VLESS-";
-  const suffix = "-" + String(port);
-  const middle = safeText(machineName || "Komari探针", Math.max(1, 80 - prefix.length - suffix.length));
-  return prefix + (middle || "Komari探针") + suffix;
+const NODE_PROTOCOL_LABELS = { vless: "VLESS", hysteria2: "Hysteria2", trojan: "Trojan", vmess: "VMess", shadowsocks: "Shadowsocks", tuic: "TUIC", anytls: "AnyTLS" };
+
+function countryFlag(countryCode) {
+  const code = String(countryCode || "").trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return "";
+  return String.fromCodePoint(...Array.from(code, (letter) => 0x1f1e6 + letter.charCodeAt(0) - 65));
+}
+
+function machineIpForGeo(machine, preferredAddress) {
+  const policy = machine && machine.policy || {};
+  const net = require("net");
+  let candidates = [preferredAddress, machine && machine.ipv4, machine && machine.ipv6, machine && machine.sourceIp];
+  if (policy.addressMode === "ipv4") candidates = [machine && machine.ipv4, machine && machine.sourceIp];
+  if (policy.addressMode === "ipv6") candidates = [machine && machine.ipv6, machine && machine.sourceIp];
+  if (preferredAddress) candidates.unshift(preferredAddress);
+  for (const candidate of candidates) {
+    const ip = String(candidate || "").trim().replace(/^\[|\]$/g, "");
+    if (!ip || !net.isIP(ip)) continue;
+    try { normalizeHost(ip, false); return ip; } catch (_) {}
+  }
+  return "";
+}
+
+async function machineCountry(machine, preferredAddress) {
+  const ip = machineIpForGeo(machine, preferredAddress);
+  if (!ip) return null;
+  const cached = machineGeoCache.get(ip);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), 1800) : null;
+  try {
+    const url = "https://ipwho.is/" + encodeURIComponent(ip) + "?fields=success,country,country_code&lang=zh-CN";
+    const response = await fetch(url, { headers: { accept: "application/json" }, signal: controller && controller.signal });
+    if (!response.ok) throw new Error("geoip_http_" + response.status);
+    const result = await response.json();
+    const code = String(result && result.country_code || "").toUpperCase();
+    const country = safeText(result && result.country || "", 48);
+    const value = result && result.success === true && countryFlag(code) && country ? { code, country } : null;
+    machineGeoCache.set(ip, { value, expiresAt: Date.now() + (value ? 30 : 1) * 24 * 60 * 60 * 1000 });
+    return value;
+  } catch (_) {
+    machineGeoCache.set(ip, { value: null, expiresAt: Date.now() + 10 * 60 * 1000 });
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function automaticInstanceName(machine, protocol, port, options, preferredAddress) {
+  const location = await machineCountry(machine, preferredAddress);
+  const prefix = location ? countryFlag(location.code) + location.country + "-" : "🌐未知地区-";
+  const protocolName = protocol === "vless" && String(options && options.security || "").toLowerCase() === "reality"
+    ? "VLESS Reality"
+    : NODE_PROTOCOL_LABELS[String(protocol || "").toLowerCase()] || safeText(protocol || "node", 24);
+  const suffix = "-" + protocolName + "-" + String(port);
+  const machineName = safeText(machine && machine.name || "Komari探针", Math.max(1, 80 - prefix.length - suffix.length));
+  return safeText(prefix + (machineName || "Komari探针") + suffix, 80);
 }
 
 async function dispatchAutoProvisionQueue() {
@@ -841,7 +895,7 @@ async function startAutoProvision(machineUuid) {
     audit(state, null, "auto_provision.failed", { machineUuid, reason: "port_conflict", listenPort: validated.port });
     save(state); return;
   }
-  const name = automaticInstanceName(machine.name, validated.port);
+  const name = await automaticInstanceName(machine, validated.protocol, validated.port, validated.options);
   const requestHash = crypto.createHash("sha256").update(JSON.stringify({ action: "install", machineUuid, instanceId: "", protocol: validated.protocol, port: validated.port, transport: validated.transport, options: validated.options, listenAddress: validated.listenAddress, endpointHost: "", endpointPort: 0, externalPort: 0 })).digest("hex");
   const spec = { id: instanceId, protocol: validated.protocol, port: validated.port, listenAddress: validated.listenAddress, transport: validated.transport, options: validated.options, name, tags: [], idempotencyKey: "auto-v" + template.version + "-" + machine.uuid.replace(/-/g, ""), requestHash };
   const { job, params } = createJob(state, { context: { principal: { username: "auto-provision" } } }, "install", machine, spec, null);
@@ -2095,6 +2149,14 @@ async function handleAction(req, res) {
     const externalPort = body.externalPort ? validatePort(body.externalPort) : 0;
     const requestSpecs = [];
     const results = [];
+    const resolvedNames = new Map();
+    if (!String(body.name || "").trim()) {
+      const geoTargets = uuids.map((uuid) => state.machines.find((item) => item.uuid === uuid))
+        .filter((machine) => machine && !machine.removedFromKomariAt && machine.online === true && machine.policy && machine.policy.deployAllowed === true);
+      await Promise.all(geoTargets.map(async (machine) => {
+        resolvedNames.set(machine.uuid, await automaticInstanceName(machine, validated.protocol, externalPort || validated.port, validated.options, body.endpointHost));
+      }));
+    }
     for (const machineUuid of uuids) {
       const key = batchId + ":" + machineUuid;
       const machine = state.machines.find((item) => item.uuid === machineUuid);
@@ -2115,7 +2177,8 @@ async function handleAction(req, res) {
         const instanceId = randomId("kns");
         if (portConflicts(state, machineUuid, validated.port, validated.transport, instanceId, validated.listenAddress)) fail("port_conflict", "该机器已有节点占用相同监听地址、端口和传输类型。", 409);
         const nat = externalPort ? { externalPort } : null;
-        const instance = { id: instanceId, machineUuid, runtimeId: "onebox-main", name: safeText(body.name || machine.name + " " + validated.protocol, 80), tags, protocol: validated.protocol, listen: { port: validated.port, transport: validated.transport, address: validated.listenAddress }, options: validated.options, endpointOverride, nat };
+        const instanceName = safeText(String(body.name || "").trim() || resolvedNames.get(machineUuid) || await automaticInstanceName(machine, validated.protocol, externalPort || validated.port, validated.options, body.endpointHost), 80);
+        const instance = { id: instanceId, machineUuid, runtimeId: "onebox-main", name: instanceName, tags, protocol: validated.protocol, listen: { port: validated.port, transport: validated.transport, address: validated.listenAddress }, options: validated.options, endpointOverride, nat };
         if (nat) {
           const publicEndpoint = candidateAddress(machine, state, instance);
           if (!publicEndpoint) fail("nat_endpoint_missing", "配置 NAT 外部端口时，必须提供公网 Endpoint 地址或先同步机器地址。", 409);
@@ -2240,8 +2303,9 @@ async function handleAction(req, res) {
     const conflict = state.jobs.find((item) => item.machineUuid === machine.uuid && item.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
     if (conflict) fail("runtime_busy", "该探针已有 OneBox 任务进行中，请等待完成后再导入。", 409);
     const address = ["::", "0.0.0.0", "127.0.0.1", "::1"].includes(candidate.listen.address) ? candidate.listen.address : "::";
+    const instanceName = String(body.name || "").trim() || await automaticInstanceName(machine, candidate.protocol, importEndpoint.port || candidate.listen.port, candidate.options, importEndpoint.host);
     const spec = {
-      id: instanceId, legacyTag, name: safeText(body.name || subscriptions.subscriptionNodeName(candidate.protocol, machine.name, importEndpoint.port || candidate.listen.port), 80), tags: Array.isArray(body.tags) ? body.tags.map((tag) => safeText(tag, 32)).filter(Boolean) : legacyExisting && legacyExisting.tags || [],
+      id: instanceId, legacyTag, name: safeText(instanceName, 80), tags: Array.isArray(body.tags) ? body.tags.map((tag) => safeText(tag, 32)).filter(Boolean) : legacyExisting && legacyExisting.tags || [],
       protocol: candidate.protocol, port: candidate.listen.port, listenAddress: address, transport: candidate.listen.transport,
       options: candidate.options || {}, endpointOverride, nat, idempotencyKey, twoFactorCode: body.twoFactorCode, requestHash,
     };

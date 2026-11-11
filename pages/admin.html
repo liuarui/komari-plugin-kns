@@ -522,7 +522,7 @@
       <section id="deployStep2" class="deploy-steps" hidden>
         <p class="muted">可选择多个协议。端口会按目标机器已有节点自动避开冲突；提交前仍由服务端逐台检查。</p>
         <div id="protocolOptions" class="deploy-protocols"></div>
-        <div class="grid"><label>节点名称（留空自动生成）<input id="instanceName" maxlength="80" placeholder="机器名称 + 协议"></label><label>连接入口<select id="entryMode"><option value="machine">使用机器的 IPv4 / IPv6 设置</option><option value="nat">公网地址 / NAT 转发</option></select></label></div>
+        <div class="grid"><label>节点名称（留空自动生成）<input id="instanceName" maxlength="80" placeholder="旗帜国家-机器名-协议-端口"><small class="small muted">自动命名时会通过 HTTPS 将机器公网 IP 发送到 ipwho.is 查询国家；查询失败使用“🌐未知地区”，不影响安装。填写自定义名称时不会查询。</small></label><label>连接入口<select id="entryMode"><option value="machine">使用机器的 IPv4 / IPv6 设置</option><option value="nat">公网地址 / NAT 转发</option></select></label></div>
         <label id="endpointHostField" hidden>订阅对外地址（公网 IP / 域名）<input id="endpointHost" placeholder="例如 203.0.113.10 或 node.example.com"><small class="small muted">此地址会用于所有已选机器；不同机器映射不同请分开安装。</small></label>
         <p id="natMappingHint" class="notice small" hidden>在每个协议的“高级参数”中填写公网外部端口。还需在路由器或云网络中配置：公网地址:外部端口/协议 → 机器地址:监听端口/协议。KNS 只记录映射并生成订阅，不会修改 NAT 转发或防火墙。</p>
         <p id="connectionPreview" class="notice small" aria-live="polite">选择机器和协议后显示连接地址预览。</p>
@@ -1276,7 +1276,7 @@
     protocolBox.append(chips);
     const entry=el("section",null,"deploy-summary-section");entry.append(el("h4","连接入口"));
     const entryList=el("ul");
-    entryList.append(el("li",$("entryMode").value==="nat"?$("endpointHost").value.trim()+"（NAT 转发）":"沿用每台机器的网络设置"),el("li","机器监听："+$("listenAddress").value),el("li","节点名称："+($("instanceName").value.trim()||"协议-机器名-端口")));
+    entryList.append(el("li",$("entryMode").value==="nat"?$("endpointHost").value.trim()+"（NAT 转发）":"沿用每台机器的网络设置"),el("li","机器监听："+$("listenAddress").value),el("li","节点名称："+($("instanceName").value.trim()||"自动：旗帜国家-机器名-协议-端口（按公网 IP 查询国家）")));
     entry.append(entryList);
     grid.append(machines,protocolBox,entry);
     const preview=el("section",null,"deploy-preview");preview.append(el("h4","连接地址预览"),el("pre",$("connectionPreview").textContent));

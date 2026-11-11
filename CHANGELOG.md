@@ -2,6 +2,18 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.9] - 2026-11-11
+
+- Bundle OneBox script 1.0.2, which automatically detects the server egress region and prioritizes matching Reality SNI candidates while preserving global fallback.
+- Keep KNS script update verification aligned with the pinned OneBox script version and checksum.
+
+## [1.0.8] - 2026-11-11
+
+- Generate consistent default node names as country flag, country, Komari machine name, protocol, and port for installs, automatic provisioning, and legacy-node takeover.
+- Look up country from the machine's public IP on demand; manual names bypass lookup and lookup failures do not block remote tasks.
+- Preserve names of nodes already registered before this release; the new format applies to newly created or taken-over nodes.
+- Explain the naming rule and IP geolocation lookup in the installation flow.
+
 ## [1.0.7] - 2026-11-10
 
 - Block new remote changes after unresolved or timed-out tasks, including tasks carried over from earlier releases; allow them again after the alert is acknowledged.

@@ -39,7 +39,7 @@ OneBox 负责在 Linux 机器上安装和运行代理节点；KNS 通过 Komari 
 
 ## 订阅链接
 
-创建订阅档案后，可以设置包含或排除的机器、协议和节点标签，决定是否过滤不健康节点，并选择输出格式。插件原生生成 URI、Clash / Mihomo、sing-box、Loon、Surge / Surfboard、Quantumult X、Shadowrocket、Stash、Mellow、V2RayN / V2RayNG、Shadowsocks、SSD 等常用格式，不依赖外部 SubConverter。订阅节点名统一为“协议-机器名-端口”，例如 `VLESS-新加坡 · SG-01-443`。
+创建订阅档案后，可以设置包含或排除的机器、协议和节点标签，决定是否过滤不健康节点，并选择输出格式。插件原生生成 URI、Clash / Mihomo、sing-box、Loon、Surge / Surfboard、Quantumult X、Shadowrocket、Stash、Mellow、V2RayN / V2RayNG、Shadowsocks、SSD 等常用格式，不依赖外部 SubConverter。新建或接管节点的默认名称为“旗帜国家-机器名-协议-端口”，例如 `🇭🇰香港-hytron hk-VLESS Reality-443`；手动命名和升级前已登记的节点保留现有名称。
 
 外部 SubConverter 仍可作为额外 target 使用；Clash 的默认、ACL4SSR 轻量和 ACL4SSR 完整规则模板由当前配置的 SubConverter 服务提供。
 
@@ -76,6 +76,6 @@ KNS 的 state 和订阅快照以明文保存节点凭据、订阅 token 和派�
 
 ## 项目与许可
 
-- 当前正式版本：**1.0.7**。变更记录见 [CHANGELOG](CHANGELOG.md)。
+- 当前正式版本：**1.0.9**。变更记录见 [CHANGELOG](CHANGELOG.md)。
 - 许可： [GNU AGPL v3.0-only](LICENSE)。
 - 插件安装包可从 [GitHub Releases](https://github.com/liuarui/komari-plugin-kns/releases) 下载。

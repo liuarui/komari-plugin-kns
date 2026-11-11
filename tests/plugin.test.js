@@ -511,11 +511,11 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const scriptUpdateRequest = JSON.parse(Buffer.from(execParams.command.match(/printf %s '([A-Za-z0-9+/=]+)' \| base64 -d/)[1], "base64").toString("utf8"));
     assert.equal(scriptUpdateRequest.instance, null);
     assert.match(scriptUpdateRequest.upgrade.scriptSha256, /^[0-9a-f]{64}$/);
-    const scriptUpdateCallback = { schema: 1, jobId: scriptUpdateRequest.jobId, machineUuid, status: "succeeded", runtime: { id: "onebox-main", engine: "sing-box" }, instances: [], operationResult: { type: "script_update", version: "1.0.1", previousSha256: "b".repeat(64), scriptSha256: scriptUpdateRequest.upgrade.scriptSha256, changed: true }, artifactVersion: "1.8.0" };
+    const scriptUpdateCallback = { schema: 1, jobId: scriptUpdateRequest.jobId, machineUuid, status: "succeeded", runtime: { id: "onebox-main", engine: "sing-box" }, instances: [], operationResult: { type: "script_update", version: "1.0.2", previousSha256: "b".repeat(64), scriptSha256: scriptUpdateRequest.upgrade.scriptSha256, changed: true }, artifactVersion: "1.8.0" };
     const scriptUpdateReportRes = response();
     await routes.get("POST /api/kns/report")({ headers: { authorization: "Bearer " + scriptUpdateRequest.report.oneTimeToken, "content-type": "application/json" }, body: JSON.stringify(scriptUpdateCallback) }, scriptUpdateReportRes);
     assert.equal(scriptUpdateReportRes.statusCode, 204);
-    const scriptRuntimeStatus = { schema: 1, adapterVersion: "1.8.0", runtime: { engine: "sing-box", id: "onebox-main", oneboxScriptVersion: "1.0.1", oneboxScriptSha256: scriptUpdateRequest.upgrade.scriptSha256, singBoxVersion: "1.11.0", serviceState: "active" } };
+    const scriptRuntimeStatus = { schema: 1, adapterVersion: "1.8.0", runtime: { engine: "sing-box", id: "onebox-main", oneboxScriptVersion: "1.0.2", oneboxScriptSha256: scriptUpdateRequest.upgrade.scriptSha256, singBoxVersion: "1.11.0", serviceState: "active" } };
     taskResult = { exit_code: 0, stdout: "KNS_RUNTIME_STATUS=" + JSON.stringify(scriptRuntimeStatus) };
     await crons.find((item) => item.expression === "@every 15s").handler();
     await new Promise((resolve) => setTimeout(resolve, 15));
@@ -536,7 +536,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     const kernelUpdateReportRes = response();
     await routes.get("POST /api/kns/report")({ headers: { authorization: "Bearer " + kernelUpdateRequest.report.oneTimeToken, "content-type": "application/json" }, body: JSON.stringify(kernelUpdateCallback) }, kernelUpdateReportRes);
     assert.equal(kernelUpdateReportRes.statusCode, 204);
-    const kernelRuntimeStatus = { schema: 1, adapterVersion: "1.8.0", runtime: { engine: "sing-box", id: "onebox-main", oneboxScriptVersion: "1.0.1", oneboxScriptSha256: scriptUpdateRequest.upgrade.scriptSha256, singBoxVersion: "1.12.0", serviceState: "active" } };
+    const kernelRuntimeStatus = { schema: 1, adapterVersion: "1.8.0", runtime: { engine: "sing-box", id: "onebox-main", oneboxScriptVersion: "1.0.2", oneboxScriptSha256: scriptUpdateRequest.upgrade.scriptSha256, singBoxVersion: "1.12.0", serviceState: "active" } };
     taskResult = { exit_code: 0, stdout: "KNS_RUNTIME_STATUS=" + JSON.stringify(kernelRuntimeStatus) };
     await crons.find((item) => item.expression === "@every 15s").handler();
     await new Promise((resolve) => setTimeout(resolve, 15));
@@ -550,7 +550,7 @@ test("admin policy, task callback, remote status, and protected URI subscription
     await routes.get("POST /api/kns/admin/action")({ ...admin, headers: { host: "monitor.example", origin: "https://monitor.example", "content-type": "application/json" }, body: JSON.stringify({ action: "runtime.kernel.update", machineUuid, version: "latest", confirm: true, idempotencyKey: "runtime-kernel-update-callback-missing" }) }, kernelCallbackMissingRes);
     assert.equal(kernelCallbackMissingRes.statusCode, 202, kernelCallbackMissingRes.body);
     const kernelCallbackMissingRequest = JSON.parse(Buffer.from(execParams.command.match(/printf %s '([A-Za-z0-9+/=]+)' \| base64 -d/)[1], "base64").toString("utf8"));
-    taskResult = { exit_code: 1, stdout: "KNS_RUNTIME_STATUS=" + JSON.stringify({ schema: 1, adapterVersion: "1.8.0", runtime: { engine: "sing-box", id: "onebox-main", oneboxScriptVersion: "1.0.1", oneboxScriptSha256: scriptUpdateRequest.upgrade.scriptSha256, singBoxVersion: "1.13.0", serviceState: "active" } }) };
+    taskResult = { exit_code: 1, stdout: "KNS_RUNTIME_STATUS=" + JSON.stringify({ schema: 1, adapterVersion: "1.8.0", runtime: { engine: "sing-box", id: "onebox-main", oneboxScriptVersion: "1.0.2", oneboxScriptSha256: scriptUpdateRequest.upgrade.scriptSha256, singBoxVersion: "1.13.0", serviceState: "active" } }) };
     await crons.find((item) => item.expression === "@every 15s").handler();
     await new Promise((resolve) => setTimeout(resolve, 15));
     const kernelCallbackMissingStateRes = response();
