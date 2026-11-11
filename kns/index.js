@@ -657,6 +657,7 @@ function normalizeMachine(raw) {
     region: safeText(raw.region || "", 100),
     os: safeText(raw.os || raw.platform || "", 80),
     arch: safeText(raw.arch || raw.architecture || "", 40),
+    virtualization: safeText(firstString(raw, ["virtualization", "virtualization_type", "virtualizationType"]).trim().toLowerCase(), 64),
     online: typeof raw.online === "boolean" ? raw.online : (typeof raw.is_online === "boolean" ? raw.is_online : null),
     lastSeen: firstString(raw, ["last_seen", "lastSeen", "last_report", "lastReport"]),
     ipv4,
@@ -754,7 +755,7 @@ async function syncMachines() {
     const snapshot = (items) => JSON.stringify((items || []).map((machine) => ({
       uuid: machine.uuid, name: machine.name, online: machine.online, lastSeen: machine.lastSeen || "", ipv4: machine.ipv4 || "", ipv6: machine.ipv6 || "", sourceIp: machine.sourceIp || "",
       removedFromKomariAt: machine.removedFromKomariAt || "",
-      region: machine.region || "", os: machine.os || "", arch: machine.arch || "",
+      region: machine.region || "", os: machine.os || "", arch: machine.arch || "", virtualization: machine.virtualization || "",
       observedAddress: machine.observedAddress || "",
       policy: { deployAllowed: !!(machine.policy && machine.policy.deployAllowed), addressMode: (machine.policy && machine.policy.addressMode) || "auto", manualAddress: (machine.policy && machine.policy.manualAddress) || "", ddnsHostname: (machine.policy && machine.policy.ddnsHostname) || "", tags: (machine.policy && machine.policy.tags) || [], managementTags: (machine.policy && machine.policy.managementTags) || [] },
       autoProvision: machine.autoProvision && { state: machine.autoProvision.state, instanceId: machine.autoProvision.instanceId || "", templateVersion: Number(machine.autoProvision.templateVersion) || 0 },
@@ -926,7 +927,7 @@ function preferredObservedAddress(machine) {
 function safeMachine(machine) {
   return {
     policyVersion: machinePolicyVersion(machine),
-    uuid: machine.uuid, name: machine.name, region: machine.region, os: machine.os, arch: machine.arch,
+    uuid: machine.uuid, name: machine.name, region: machine.region, os: machine.os, arch: machine.arch, virtualization: machine.virtualization || "",
      online: machine.online, lastSeen: machine.lastSeen, ipv4: machine.ipv4, ipv6: machine.ipv6, sourceIp: machine.sourceIp,
     removedFromKomariAt: machine.removedFromKomariAt || "",
      observedAddress: machine.observedAddress || "", addressCandidate: machine.addressCandidate || "", policy: Object.assign({}, machine.policy || {}, { managementTags: Array.isArray(machine.policy && machine.policy.managementTags) ? Array.from(new Set(machine.policy.managementTags.map((tag) => safeText(tag, 32)).filter(Boolean))).slice(0, 30) : [] }),

@@ -8,7 +8,7 @@
 | --- | --- |
 | `schemaVersion`, `pluginVersion`, `revision`, `createdAt`, `updatedAt` | 数据结构版本、最后成功加载此状态的插件版本及递增修订信息 |
 | `settings` | 首次设置状态、明确授权的新探针自动部署与历史基线、版本化默认节点模板、HTTPS 回调基地址、SubConverter、固定 OneBox installer SHA、健康/同步间隔、私有站点开关、批量上限 |
-| `machines[]` | Komari Agent 探针快照及管理员部署/地址策略 |
+| `machines[]` | Komari Agent 探针快照（包括区域、OS、架构和 Komari 上报的虚拟化类型）及管理员部署/地址策略 |
 | `runtimes[]` | 每台机器上的共享 OneBox `sing-box/onebox-main` 服务引用计数 |
 | `instances[]` | 由 KNS 管理的远端实例，保存监听、端点、协议元数据、发布/健康状态、最近一次远端状态/卸载资源预览和加密凭据 |
 | `jobs[]` | 授权、远程任务编号、回调摘要、结果核验、批次/幂等标识和受限安全重试参数；不存远程 stdout/stderr |

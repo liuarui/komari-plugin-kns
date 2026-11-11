@@ -2,6 +2,11 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.13] - 2026-11-11
+
+- Add a quick machine filter for Komari-reported regions.
+- Display and filter Komari-reported virtualization types, including KVM and LXC, and mark missing reports as unrecognized.
+
 ## [1.0.12] - 2026-11-11
 
 - Bundle OneBox script 1.0.5, which removes fixed memory preflight thresholds and reports actual command failures.

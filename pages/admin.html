@@ -547,9 +547,11 @@
 
   <section id="machines" class="panel">
     <div class="card">
-      <div class="hero"><div><h2>机器与节点</h2><p class="muted">按 Komari 服务器列表顺序展示。可按在线状态、OneBox 检测结果和协议筛选，也可切换卡片密度。</p></div><div class="actions"><button id="scanAndClaimAll" type="button">一键扫描并接管</button><button id="export" class="secondary">导出加密备份</button></div></div>
+      <div class="hero"><div><h2>机器与节点</h2><p class="muted">按 Komari 服务器列表顺序展示。可按区域、虚拟化类型、在线状态、OneBox 检测结果和协议筛选，也可切换卡片密度。虚拟化类型读取 Komari 探针上报，未上报时显示“虚拟化未识别”。</p></div><div class="actions"><button id="scanAndClaimAll" type="button">一键扫描并接管</button><button id="export" class="secondary">导出加密备份</button></div></div>
       <div class="machine-toolbar">
         <label class="machine-search">查找机器<input id="homeMachineSearch" type="search" placeholder="名称、地址或 UUID" data-no-draft="true"></label>
+        <div class="filter-field"><span class="filter-label">区域</span><div class="filter-select" data-filter-for="machineRegionFilter"><select id="machineRegionFilter" class="filter-native" tabindex="-1" aria-hidden="true"><option value="all">全部区域</option></select><button type="button" class="filter-trigger" aria-haspopup="listbox" aria-expanded="false"><span class="filter-value">全部区域</span><svg class="filter-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><div class="filter-menu" role="listbox" hidden></div></div></div>
+        <div class="filter-field"><span class="filter-label">虚拟化</span><div class="filter-select" data-filter-for="machineVirtualizationFilter"><select id="machineVirtualizationFilter" class="filter-native" tabindex="-1" aria-hidden="true"><option value="all">全部类型</option></select><button type="button" class="filter-trigger" aria-haspopup="listbox" aria-expanded="false"><span class="filter-value">全部类型</span><svg class="filter-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><div class="filter-menu" role="listbox" hidden></div></div></div>
         <div class="filter-field"><span class="filter-label">在线状态</span><div class="filter-select" data-filter-for="machineOnlineFilter"><select id="machineOnlineFilter" class="filter-native" tabindex="-1" aria-hidden="true"><option value="all">全部</option><option value="online">在线</option><option value="offline">离线</option><option value="unknown">未知</option></select><button type="button" class="filter-trigger" aria-haspopup="listbox" aria-expanded="false"><span class="filter-value">全部</span><svg class="filter-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><div class="filter-menu" role="listbox" hidden></div></div></div>
         <div class="filter-field"><span class="filter-label">OneBox 检测</span><div class="filter-select" data-filter-for="machineOneBoxFilter"><select id="machineOneBoxFilter" class="filter-native" tabindex="-1" aria-hidden="true"><option value="all">全部</option><option value="detected">检测到 OneBox</option><option value="none">扫描未发现入站</option><option value="unknown">未扫描或结果已过期</option></select><button type="button" class="filter-trigger" aria-haspopup="listbox" aria-expanded="false"><span class="filter-value">全部</span><svg class="filter-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><div class="filter-menu" role="listbox" hidden></div></div></div>
         <div class="filter-field"><span class="filter-label">协议</span><div class="filter-select" data-filter-for="machineProtocolFilter"><select id="machineProtocolFilter" class="filter-native" tabindex="-1" aria-hidden="true"><option value="all">全部协议</option></select><button type="button" class="filter-trigger" aria-haspopup="listbox" aria-expanded="false"><span class="filter-value">全部</span><svg class="filter-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><div class="filter-menu" role="listbox" hidden></div></div></div>
@@ -1751,6 +1753,17 @@
     const found=(machine.discoveredNodes||[]).map((node)=>String(node.protocol||"").toLowerCase());
     return new Set([...active,...found].filter(Boolean));
   }
+  function machineVirtualizationLabel(value) {
+    const normalized=String(value||"").trim().toLowerCase();
+    if(!normalized)return "虚拟化未识别";
+    const labels={none:"未检测到虚拟化",kvm:"KVM",lxc:"LXC",lxd:"LXD",qemu:"QEMU",openvz:"OpenVZ",docker:"Docker","hyper-v":"Hyper-V",hyperv:"Hyper-V",vmware:"VMware",bhyve:"bhyve"};
+    return labels[normalized]||normalized;
+  }
+  function setMachineFilterOptions(select,allLabel,options) {
+    const previous=select.value;const all=el("option",allLabel);all.value="all";select.replaceChildren(all);
+    for(const option of options){const item=el("option",option.label);item.value=option.value;select.append(item);}
+    select.value=options.some((option)=>option.value===previous)?previous:"all";
+  }
   function rememberMachineExpansion(){for(const card of document.querySelectorAll(".machine-card[data-machine-uuid]")){const uuid=card.dataset.machineUuid;for(const details of card.querySelectorAll("details[data-expansion]"))machineExpansion.set(uuid+":"+details.dataset.expansion,details.open);}}
   function restoreMachineExpansion(card,uuid){for(const details of card.querySelectorAll("details[data-expansion]")){const key=uuid+":"+details.dataset.expansion;if(machineExpansion.has(key))details.open=machineExpansion.get(key);details.addEventListener("toggle",()=>machineExpansion.set(key,details.open));}}
   function renderMachines(){
@@ -1760,6 +1773,14 @@
     const query=String($("homeMachineSearch").value||"").trim().toLowerCase();
     const onlineFilter=$("machineOnlineFilter").value;
     const oneBoxFilter=$("machineOneBoxFilter").value;
+    const regionSelect=$("machineRegionFilter");
+    const knownRegions=Array.from(new Set((state.machines||[]).map((machine)=>String(machine.region||"").trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b,"zh-Hans-CN"));
+    setMachineFilterOptions(regionSelect,"全部区域",knownRegions.map((region)=>({value:region,label:region})));
+    const virtualizationSelect=$("machineVirtualizationFilter");
+    const knownVirtualizations=Array.from(new Set((state.machines||[]).map((machine)=>String(machine.virtualization||"").trim().toLowerCase()).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+    const virtualizationOptions=knownVirtualizations.map((value)=>({value,label:machineVirtualizationLabel(value)}));
+    if((state.machines||[]).some((machine)=>!String(machine.virtualization||"").trim()))virtualizationOptions.push({value:"__unknown__",label:"虚拟化未识别"});
+    setMachineFilterOptions(virtualizationSelect,"全部类型",virtualizationOptions);
     const showUnmanaged=$("showUnmanagedMachines").checked;
     const knownProtocols=Array.from(new Set((state.instances||[]).filter((item)=>!item.deletedAt).map((item)=>String(item.protocol||"").toLowerCase()).concat((state.machines||[]).flatMap((item)=>(item.discoveredNodes||[]).map((node)=>String(node.protocol||"").toLowerCase()))).filter(Boolean))).sort();
     const protocolSelect=$("machineProtocolFilter");
@@ -1769,15 +1790,20 @@
     protocolSelect.value=knownProtocols.includes(previousProtocol)?previousProtocol:"all";
     syncMachineFilterDropdowns();
     const protocolFilter=protocolSelect.value;
+    const regionFilter=regionSelect.value;
+    const virtualizationFilter=virtualizationSelect.value;
     // Keep Komari's `admin:listClients` order; filtering must not sort cards.
     const visibleMachines=state.machines.filter((machine)=>{
       const policy=machine.policy||{};const unmanaged=(policy.managementTags||[]).includes("不纳管");
-      const hay=[machine.name,machine.uuid,machine.region,machine.os,machine.ipv4,machine.ipv6].join(" ").toLowerCase();
+      const hay=[machine.name,machine.uuid,machine.region,machine.os,machine.arch,machine.virtualization,machine.ipv4,machine.ipv6].join(" ").toLowerCase();
+      const virtualization=String(machine.virtualization||"").trim().toLowerCase();
       const scanned=machineScanFresh(machine);const found=!!machine.runtimeStatus||(machine.discoveredNodes||[]).length>0;
       const oneBoxState=!scanned?"unknown":found?"detected":"none";
       return !machine.removedFromKomariAt&&(showUnmanaged||!unmanaged||machine.uuid===machineFocusOverrideUuid)&&(!query||hay.includes(query))&&
         (onlineFilter==="all"||(onlineFilter==="online"&&machine.online===true)||(onlineFilter==="offline"&&machine.online===false)||(onlineFilter==="unknown"&&machine.online==null))&&
         (oneBoxFilter==="all"||oneBoxFilter===oneBoxState)&&
+        (regionFilter==="all"||String(machine.region||"").trim()===regionFilter)&&
+        (virtualizationFilter==="all"||(virtualizationFilter==="__unknown__"?!virtualization:virtualization===virtualizationFilter))&&
         (protocolFilter==="all"||machineProtocols(machine).has(protocolFilter));
     });
     $("machineFilterSummary").textContent="显示 "+visibleMachines.length+" / "+state.machines.length+" 台机器 · 顺序与 Komari 服务器列表一致"+(machineFocusOverrideUuid&&!showUnmanaged?" · 临时显示刚定位的不纳管机器":"");
@@ -1786,7 +1812,7 @@
       const removed=!!machine.removedFromKomariAt;const card=el("article",null,"machine-card");card.dataset.machineUuid=machine.uuid;if(removed)card.dataset.removed="true";
       const instances=state.instances.filter((instance)=>instance.machineUuid===machine.uuid&&!instance.deletedAt);
       const heading=el("div",null,"machine-heading");const titleBox=el("div");titleBox.append(el("h3",machine.name||machine.uuid),el("small",[machine.region,machine.os,machine.arch].filter(Boolean).join(" · ")||machine.uuid,"muted small"));
-      const meta=el("div",null,"machine-meta");meta.append(el("span",machine.online===true?"在线":machine.online===false?"离线":"状态未知","pill "+(machine.online===true?"success":"muted")),el("span",instances.length+" 个节点","pill"));if(removed)meta.append(el("span","Komari 已删除 · 远程停用","pill error"));if(machineHasUnconfirmedDispatch(machine.uuid))meta.append(el("span","远程任务需核查","pill error"));if((machine.policy&&machine.policy.managementTags||[]).includes("不纳管"))meta.append(el("span","不纳管","pill"));
+      const meta=el("div",null,"machine-meta");meta.append(el("span",machine.online===true?"在线":machine.online===false?"离线":"状态未知","pill "+(machine.online===true?"success":"muted")),el("span",instances.length+" 个节点","pill"),el("span",machineVirtualizationLabel(machine.virtualization),"pill"));if(removed)meta.append(el("span","Komari 已删除 · 远程停用","pill error"));if(machineHasUnconfirmedDispatch(machine.uuid))meta.append(el("span","远程任务需核查","pill error"));if((machine.policy&&machine.policy.managementTags||[]).includes("不纳管"))meta.append(el("span","不纳管","pill"));
       heading.append(titleBox,meta);card.append(heading);
       const addresses=[machine.ipv4&&"IPv4 "+machine.ipv4,machine.ipv6&&"IPv6 "+machine.ipv6].filter(Boolean);card.append(el("p",addresses.join(" · ")||"尚无可用连接地址","small muted"));
       const policy=machine.policy||{};
@@ -1966,7 +1992,7 @@
     if(draftScopes.size){setStatus("globalStatus","请先保存或放弃未保存设置，再查看机器。","muted");return false;}
     if(!$("machines").classList.contains("active"))document.querySelector('[data-panel="machines"]').click();
     $("homeMachineSearch").value="";
-    $("machineOnlineFilter").value="all";$("machineOneBoxFilter").value="all";$("machineProtocolFilter").value="all";
+    $("machineOnlineFilter").value="all";$("machineOneBoxFilter").value="all";$("machineProtocolFilter").value="all";$("machineRegionFilter").value="all";$("machineVirtualizationFilter").value="all";
     machineFocusOverrideUuid=(machine.policy&&machine.policy.managementTags||[]).includes("不纳管")?uuid:"";
     if(!draftScopes.size)renderMachines();
     const card=document.querySelector('.machine-card[data-machine-uuid="'+CSS.escape(uuid)+'"]');
@@ -2406,7 +2432,7 @@
   $("reloadMachines").addEventListener("click",async()=>{if(draftScopes.size)return setStatus("scanBatchStatus","请先保存或放弃草稿。","error");try{await postAction({action:"machine.sync"});await refresh();setStatus("scanBatchStatus","Komari 机器已同步。","success");}catch(error){setStatus("scanBatchStatus",error.message,"error");}});
   $("refresh").addEventListener("click",refresh);
   $("homeMachineSearch").addEventListener("input",()=>{if(draftScopes.size){setStatus("globalStatus","请先保存或放弃草稿，再筛选机器，避免丢失正在编辑的内容。","muted");return;}machineFocusOverrideUuid="";renderMachines();applySetupGate();});
-  for(const filter of [$("machineOnlineFilter"),$("machineOneBoxFilter"),$("machineProtocolFilter"),$("showUnmanagedMachines")])filter.addEventListener("change",()=>{if(draftScopes.size){setStatus("globalStatus","请先保存或放弃草稿，再筛选机器。","muted");return;}machineFocusOverrideUuid="";renderMachines();applySetupGate();});
+  for(const filter of [$("machineRegionFilter"),$("machineVirtualizationFilter"),$("machineOnlineFilter"),$("machineOneBoxFilter"),$("machineProtocolFilter"),$("showUnmanagedMachines")])filter.addEventListener("change",()=>{if(draftScopes.size){setStatus("globalStatus","请先保存或放弃草稿，再筛选机器。","muted");return;}machineFocusOverrideUuid="";renderMachines();applySetupGate();});
   $("machineLayoutSwitch").addEventListener("click",(event)=>{const button=event.target.closest("[data-machine-layout]");if(button)setMachineViewMode(button.dataset.machineLayout);});
   $("startInstall").addEventListener("click",()=>startInstallForMachine());
   $("manageSubscriptions").addEventListener("click",()=>document.querySelector('[data-panel="subscriptions"]').click());
