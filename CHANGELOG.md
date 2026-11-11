@@ -2,6 +2,11 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.11] - 2026-11-11
+
+- Bundle OneBox script 1.0.4, which includes available swap in maintenance preflight while honoring visible cgroup limits.
+- Clarify effective RAM+swap headroom in resource errors.
+
 ## [1.0.10] - 2026-11-11
 
 - Bundle OneBox script 1.0.3 with lower memory gates for routine node operations and a separate gate for kernel upgrades.
