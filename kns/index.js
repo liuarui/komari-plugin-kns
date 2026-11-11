@@ -17,7 +17,7 @@ const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/v1.0.5/i
 const INSTALLER_SHA256 = "15259d1545b9ca575e7219d6a8aa5c9c906a2af50cde3a6ebf025e8e4933cbd3";
 const ONEBOX_SCRIPT_VERSION = "1.0.5";
 const ONEBOX_ADAPTER_VERSION = "1.8.0";
-const SUBSCRIPTION_RULES_VERSION = "kns-subscription-v5";
+const SUBSCRIPTION_RULES_VERSION = "kns-subscription-v6";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PROTOCOLS = {
@@ -56,6 +56,7 @@ function currentMasterKey() {
 
 let pollBusy = false;
 let syncBusy = false;
+let standardInstanceNameMigrationBusy = false;
 let healthBusy = false;
 let endpointBusy = false;
 let autoProvisionBusy = false;
@@ -826,8 +827,7 @@ async function machineCountry(machine, preferredAddress) {
   }
 }
 
-async function automaticInstanceName(machine, protocol, port, options, preferredAddress) {
-  const location = await machineCountry(machine, preferredAddress);
+function formatAutomaticInstanceName(machine, protocol, port, options, location) {
   const prefix = location ? countryFlag(location.code) + location.country + "-" : "🌐未知地区-";
   const protocolName = protocol === "vless" && String(options && options.security || "").toLowerCase() === "reality"
     ? "VLESS Reality"
@@ -835,6 +835,59 @@ async function automaticInstanceName(machine, protocol, port, options, preferred
   const suffix = "-" + protocolName + "-" + String(port);
   const machineName = safeText(machine && machine.name || "Komari探针", Math.max(1, 80 - prefix.length - suffix.length));
   return safeText(prefix + (machineName || "Komari探针") + suffix, 80);
+}
+
+async function automaticInstanceName(machine, protocol, port, options, preferredAddress) {
+  return formatAutomaticInstanceName(machine, protocol, port, options, await machineCountry(machine, preferredAddress));
+}
+
+async function migrateStandardInstanceNames() {
+  if (standardInstanceNameMigrationBusy) return false;
+  standardInstanceNameMigrationBusy = true;
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const state = getState();
+      if (Number(state.settings.standardInstanceNamesVersion) >= 1) return true;
+      const instances = state.instances.filter((instance) => !instance.deletedAt);
+      const machines = new Map(state.machines.map((machine) => [machine.uuid, machine]));
+      if (instances.some((instance) => !machines.has(instance.machineUuid))) return false;
+      const locations = new Map();
+      const names = [];
+      for (let offset = 0; offset < instances.length; offset += 5) {
+        const batch = await Promise.all(instances.slice(offset, offset + 5).map(async (instance) => {
+          const machine = machines.get(instance.machineUuid);
+          const preferredAddress = String(instance.endpointOverride && instance.endpointOverride.host || instance.endpoint && instance.endpoint.host || "").trim();
+          const locationKey = machine.uuid + "\n" + preferredAddress;
+          if (!locations.has(locationKey)) locations.set(locationKey, machineCountry(machine, preferredAddress));
+          const location = await locations.get(locationKey);
+          const port = instance.nat && instance.nat.externalPort || instance.endpoint && instance.endpoint.port || instance.listen && instance.listen.port || 0;
+          return [instance.id, formatAutomaticInstanceName(machine, instance.protocol, port, instance.options, location)];
+        }));
+        names.push(...batch);
+      }
+      const latest = getState();
+      if (Number(latest.settings.standardInstanceNamesVersion) >= 1) return true;
+      if (latest.revision !== state.revision) continue;
+      let renamed = 0;
+      for (const [instanceId, name] of names) {
+        const instance = latest.instances.find((item) => item.id === instanceId && !item.deletedAt);
+        if (!instance || instance.name === name) continue;
+        instance.name = name;
+        instance.updatedAt = now();
+        renamed += 1;
+      }
+      latest.settings.standardInstanceNamesVersion = 1;
+      if (renamed) audit(latest, null, "instances.standard_names.applied", { count: renamed, version: 1 });
+      save(latest);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("[KNS] standard instance name migration failed:", safeText(error && error.message || error, 200));
+    return false;
+  } finally {
+    standardInstanceNameMigrationBusy = false;
+  }
 }
 
 async function dispatchAutoProvisionQueue() {
@@ -2603,7 +2656,8 @@ async function handleAction(req, res) {
     if (portConflicts(state, machineUuid, targetPort, targetTransport, proposedId, actionName === "reinstall" ? instance.listen.address : validated.listenAddress)) fail("port_conflict", "该机器上的监听地址、端口和传输类型与另一实例冲突。", 409);
     if (actionName === "install") {
       const nat = body.externalPort ? { externalPort: validatePort(body.externalPort) } : null;
-      instance = { id: proposedId, machineUuid, runtimeId: "onebox-main", name: safeText(body.name || machine.name + " " + validated.protocol, 80), tags: Array.isArray(body.tags) ? body.tags.map((tag) => safeText(tag, 32)).filter(Boolean) : [], protocol: validated.protocol, listen: { port: validated.port, transport: validated.transport, address: validated.listenAddress }, options: validated.options, endpointOverride: makeEndpointOverride(body.endpointHost, body.endpointPort, !!state.settings.privateSite), nat };
+      const instanceName = String(body.name || "").trim() || await automaticInstanceName(machine, validated.protocol, body.externalPort || validated.port, validated.options, body.endpointHost);
+      instance = { id: proposedId, machineUuid, runtimeId: "onebox-main", name: safeText(instanceName, 80), tags: Array.isArray(body.tags) ? body.tags.map((tag) => safeText(tag, 32)).filter(Boolean) : [], protocol: validated.protocol, listen: { port: validated.port, transport: validated.transport, address: validated.listenAddress }, options: validated.options, endpointOverride: makeEndpointOverride(body.endpointHost, body.endpointPort, !!state.settings.privateSite), nat };
       if (instance.nat) {
         const publicEndpoint = candidateAddress(machine, state, instance);
         if (!publicEndpoint) fail("nat_endpoint_missing", "配置 NAT 外部端口时，必须提供公网 Endpoint 地址或先同步机器地址。", 409);
@@ -3238,14 +3292,14 @@ function load() {
   getState();
   registerRoutes();
   server.cron("@every 15s", () => { cronTick(); });
-  server.cron("@every 15s", () => { syncMachines().catch((error) => console.error("[KNS] machine sync failed:", safeText(error.message || error, 200))); });
+  server.cron("@every 15s", () => { syncMachines().then((synced) => synced ? migrateStandardInstanceNames() : false).catch((error) => console.error("[KNS] machine sync failed:", safeText(error.message || error, 200))); });
   server.cron("@every 1m", () => { refreshEndpoints().catch((error) => console.error("[KNS] endpoint refresh failed:", safeText(error.message || error, 200))); });
   server.cron("@every 1m", () => { try { flushTokenUsage(); } catch (error) { console.error("[KNS] token usage save failed:", safeText(error.message || error, 200)); } });
   server.cron("@every 5m", () => { refreshHealth().catch((error) => console.error("[KNS] health check failed:", safeText(error.message || error, 200))); });
   server.cron("@every 5m", () => { scheduleSubscriptionRefresh(); });
   server.cron("0 3 * * *", () => { try { const state = getState(); store.write(state); } catch (error) { console.error("[KNS] daily backup failed:", safeText(error && error.message || error, 200)); } });
   scheduleSubscriptionRefresh();
-  syncMachines().catch((error) => console.error("[KNS] initial machine sync failed:", safeText(error.message || error, 200)));
+  syncMachines().then((synced) => synced ? migrateStandardInstanceNames() : false).catch((error) => console.error("[KNS] initial machine sync failed:", safeText(error.message || error, 200)));
 }
 
 function unload() {

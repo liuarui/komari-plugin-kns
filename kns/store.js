@@ -19,6 +19,7 @@ function initialState() {
       setupComplete: false,
       autoProvisionNewProbes: false,
       autoProvisionBaselineUuids: [],
+      standardInstanceNamesVersion: 0,
       remoteInstallDefaultApplied: true,
       defaultNode: { protocol: "vless", listenPort: 443, listenAddress: "::", sniMode: "preferred", version: 1, updatedAt: "" },
       publicBaseUrl: "",

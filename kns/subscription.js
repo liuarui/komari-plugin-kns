@@ -330,7 +330,7 @@ function prepareSubscription(state, profile, decrypt) {
   const displayNameFor = (instance) => {
     const endpoint = instance.endpoint || {};
     const port = endpoint.port || (instance.listen && instance.listen.port) || "";
-    return subscriptionNodeName(instance.protocol, machineNames.get(instance.machineUuid) || instance.machineUuid || "", port);
+    return cleanLabel(instance.name || subscriptionNodeName(instance.protocol, machineNames.get(instance.machineUuid) || instance.machineUuid || "", port));
   };
   const compare = (left, right) => left < right ? -1 : left > right ? 1 : 0;
   selected.sort((a, b) => {

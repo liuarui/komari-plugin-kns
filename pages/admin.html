@@ -1944,7 +1944,7 @@
   }
 
   async function renameInstance(instance){
-    const values=await askOperation({title:"重命名节点",description:"只修改 KNS 中的显示名称，不会安装、重启服务、轮换凭据或改变订阅令牌。",fields:[{name:"name",label:"节点显示名称",value:instance.name||instance.id,required:true}],confirmLabel:"保存名称"});
+    const values=await askOperation({title:"重命名节点",description:"修改节点显示名称和订阅中的节点名称，不会安装、重启服务、轮换凭据或改变订阅令牌。",fields:[{name:"name",label:"节点显示名称",value:instance.name||instance.id,required:true}],confirmLabel:"保存名称"});
     if(!values)return;
     try{await postAction({action:"instance.metadata.update",instanceId:instance.id,name:String(values.name||"").trim()});setInstanceStatus(instance.id,"节点名称已保存。","success");await refresh();}catch(error){setInstanceStatus(instance.id,error.message,"error");}
   }

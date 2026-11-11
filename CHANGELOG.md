@@ -2,6 +2,11 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.15] - 2026-11-11
+
+- Standardize existing KNS node names once on upgrade and use those names in subscription output.
+- Apply the same standard name format to single-node installs.
+
 ## [1.0.14] - 2026-11-11
 
 - Add localized country and region names beside flags in machine filters and pickers.
