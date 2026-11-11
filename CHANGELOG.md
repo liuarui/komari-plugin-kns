@@ -2,6 +2,12 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.12] - 2026-11-11
+
+- Bundle OneBox script 1.0.5, which removes fixed memory preflight thresholds and reports actual command failures.
+- Keep PID headroom protection and RAM-based SNI concurrency adjustment; use the preset when automatic SNI scanning cannot run.
+- Clarify likely OOM termination when a remote task exits with code 137.
+
 ## [1.0.11] - 2026-11-11
 
 - Bundle OneBox script 1.0.4, which includes available swap in maintenance preflight while honoring visible cgroup limits.

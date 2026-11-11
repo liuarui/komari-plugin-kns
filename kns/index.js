@@ -13,9 +13,9 @@ const PLUGIN_VERSION = require("../komari-plugin.json").version;
 const API = "/api/kns";
 const LEGACY_API = "/api/onebox-bridge";
 const SOURCE_URL = "https://github.com/liuarui/komari-plugin-kns/tree/v" + PLUGIN_VERSION;
-const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/v1.0.4/install.sh";
-const INSTALLER_SHA256 = "50bc373807dbbdbefc80db56b28435999d7a57cf71b9dc53a9817e01d2dcd1df";
-const ONEBOX_SCRIPT_VERSION = "1.0.4";
+const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/v1.0.5/install.sh";
+const INSTALLER_SHA256 = "15259d1545b9ca575e7219d6a8aa5c9c906a2af50cde3a6ebf025e8e4933cbd3";
+const ONEBOX_SCRIPT_VERSION = "1.0.5";
 const ONEBOX_ADAPTER_VERSION = "1.8.0";
 const SUBSCRIPTION_RULES_VERSION = "kns-subscription-v5";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -1643,6 +1643,7 @@ async function pollPendingJobs() {
       }
       if (code !== 0) {
         const outputText = taskText(result);
+        const oomReported = /\b(?:out of memory|oom-kill|memory cgroup out of memory)\b/i.test(outputText);
         const resourceLimit = outputText.match(/(?:KNS_RESOURCE=|"code"\s*:\s*")(low_pid_headroom|low_memory_headroom)/);
         const resourceMemory = outputText.match(/"code"\s*:\s*"low_memory_headroom"[^}]*"availableMiB"\s*:\s*(\d+)[^}]*"requiredMiB"\s*:\s*(\d+)/);
         const scanFailure = job.action === "machine.discover" && outputText.match(/(?:^|\n)KNS_SCAN_ERROR=(not_root|missing_sha256sum|missing_bash|missing_jq|config_missing|temp_file|download_failed|missing_downloader|checksum_failed|discover_failed|runtime_failed)(?:\r?\n|$)/);
@@ -1655,6 +1656,10 @@ async function pollPendingJobs() {
           ? (resourceLimit[1] === "low_pid_headroom" ? "探针剩余进程额度不足；OneBox 已跳过操作，请释放或提高 pids 限额后重试。" : resourceMemory ? "探针当前有效 RAM+swap 余量约 " + resourceMemory[1] + " MiB，本次操作至少需要 " + resourceMemory[2] + " MiB；OneBox 已跳过操作。请释放资源或检查容器内存/swap 限额后重试。" : "探针有效 RAM+swap 余量不足；OneBox 已跳过操作，请检查可用内存和 swap 限额后重试。")
           : /remote control is disabled\.?/i.test(outputText)
             ? "Komari Agent 的远程控制未启用；请检查该机器的 Agent 配置。"
+          : oomReported
+            ? "目标机报告了内存分配失败，任务已停止。请检查系统或容器内存日志后重试。敏感输出未保存在 KNS。"
+          : code === 137
+            ? "远程任务退出码 137，进程被系统强制终止，可能与 OOM 有关；请检查目标机内核或容器日志。敏感输出未保存在 KNS。"
           : scanFailure
             ? scanMessages[scanFailure[1]]
           : bootstrapBlocked
