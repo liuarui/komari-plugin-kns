@@ -13,9 +13,9 @@ const PLUGIN_VERSION = require("../komari-plugin.json").version;
 const API = "/api/kns";
 const LEGACY_API = "/api/onebox-bridge";
 const SOURCE_URL = "https://github.com/liuarui/komari-plugin-kns/tree/v" + PLUGIN_VERSION;
-const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/main/install.sh";
-const INSTALLER_SHA256 = "c05b56f525c7a12798a30d0c7e8246c1e5815cf91e0e2c31df3a247cf06b0536";
-const ONEBOX_SCRIPT_VERSION = "1.0.2";
+const INSTALLER_URL = "https://raw.githubusercontent.com/liuarui/onebox/v1.0.3/install.sh";
+const INSTALLER_SHA256 = "221c03d97db13ab700f56634d8aff852eaa99cb9fd8b6f0f525424ba7345007b";
+const ONEBOX_SCRIPT_VERSION = "1.0.3";
 const ONEBOX_ADAPTER_VERSION = "1.8.0";
 const SUBSCRIPTION_RULES_VERSION = "kns-subscription-v5";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -1644,6 +1644,7 @@ async function pollPendingJobs() {
       if (code !== 0) {
         const outputText = taskText(result);
         const resourceLimit = outputText.match(/(?:KNS_RESOURCE=|"code"\s*:\s*")(low_pid_headroom|low_memory_headroom)/);
+        const resourceMemory = outputText.match(/"code"\s*:\s*"low_memory_headroom"[^}]*"availableMiB"\s*:\s*(\d+)[^}]*"requiredMiB"\s*:\s*(\d+)/);
         const scanFailure = job.action === "machine.discover" && outputText.match(/(?:^|\n)KNS_SCAN_ERROR=(not_root|missing_sha256sum|missing_bash|missing_jq|config_missing|temp_file|download_failed|missing_downloader|checksum_failed|discover_failed|runtime_failed)(?:\r?\n|$)/);
         const scanMessages = { not_root: "Komari Agent 未以 root 运行。", missing_sha256sum: "机器缺少 sha256sum，无法校验 OneBox 脚本。", missing_bash: "机器缺少 bash，无法运行 OneBox 扫描。", missing_jq: "机器缺少 jq，无法读取 OneBox 配置。", config_missing: "未找到 /etc/onebox/config.json；这台机器可能尚未安装 OneBox。", temp_file: "无法创建临时文件，请检查临时目录与磁盘空间。", download_failed: "无法下载 OneBox 扫描脚本，请检查机器访问 GitHub 的网络和 DNS。", missing_downloader: "机器缺少 curl 或 wget，无法下载 OneBox 扫描脚本。", checksum_failed: "下载的 OneBox 脚本校验失败，请检查网络或代理。", discover_failed: "OneBox 读取节点配置失败，请检查机器上的 OneBox 配置及依赖。", runtime_failed: "OneBox 运行状态读取失败，请检查机器上的 OneBox 环境及依赖。" };
         const bootstrapBlocked = outputText.match(/(?:^|\n)KNS_BOOTSTRAP_BLOCKED=(existing_state|invalid_config)(?:\r?\n|$)/);
@@ -1651,7 +1652,7 @@ async function pollPendingJobs() {
         const bootstrapCompleted = /^KNS_BOOTSTRAP=completed$/m.test(outputText);
         const oneboxErrorCode = extractOneboxErrorCode(result, job);
         job.state = "failed"; job.updatedAt = now(); job.message = resourceLimit
-          ? (resourceLimit[1] === "low_pid_headroom" ? "探针剩余进程额度不足；OneBox 已跳过操作，请释放或提高 pids 限额后重试。" : "探针可用内存不足；OneBox 已跳过操作，请释放或提高内存限额后重试。")
+          ? (resourceLimit[1] === "low_pid_headroom" ? "探针剩余进程额度不足；OneBox 已跳过操作，请释放或提高 pids 限额后重试。" : resourceMemory ? "探针当前可用内存约 " + resourceMemory[1] + " MiB，本次操作至少需要 " + resourceMemory[2] + " MiB；OneBox 已跳过操作。请释放内存或提高限额后重试。" : "探针可用内存不足；OneBox 已跳过操作，请释放或提高内存限额后重试。")
           : /remote control is disabled\.?/i.test(outputText)
             ? "Komari Agent 的远程控制未启用；请检查该机器的 Agent 配置。"
           : scanFailure

@@ -2,6 +2,12 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.0.10] - 2026-11-11
+
+- Bundle OneBox script 1.0.3 with lower memory gates for routine node operations and a separate gate for kernel upgrades.
+- Show measured available memory and the per-operation minimum in resource failure messages.
+- Pin the managed OneBox script to its immutable v1.0.3 release tag.
+
 ## [1.0.9] - 2026-11-11
 
 - Bundle OneBox script 1.0.2, which automatically detects the server egress region and prioritizes matching Reality SNI candidates while preserving global fallback.
