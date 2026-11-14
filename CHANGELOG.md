@@ -2,6 +2,12 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.3.2] - 2026-11-14
+
+- Pin OneBox script `1.0.9` by its `v1.0.9` release URL and SHA-256.
+- Include Netnod and NLnet Labs in the default European SNI candidates, expanding the catalog to 29 hosts.
+- Limit this new batch to independent civilian organizations; keep adapter schema 1 and version `1.8.0`.
+
 ## [1.3.1] - 2026-11-14
 
 - Pin OneBox script `1.0.8` by its immutable `v1.0.8` release URL and SHA-256.
