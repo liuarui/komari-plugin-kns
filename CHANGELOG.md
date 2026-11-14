@@ -2,6 +2,12 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.3.1] - 2026-11-14
+
+- Pin OneBox script `1.0.8` by its immutable `v1.0.8` release URL and SHA-256.
+- Include corrected regional SNI labels and strict region-first candidate ranking from OneBox `1.0.8`.
+- Keep adapter schema 1 and version `1.8.0`.
+
 ## [1.3.0] - 2026-11-14
 
 - Pin OneBox script `1.0.6` by its immutable `v1.0.6` release URL and SHA-256.

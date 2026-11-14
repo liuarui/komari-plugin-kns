@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | 目标面板已运行 KNS v1.0.0。机器中心页、分开的 OneBox 脚本/内核维护操作、默认订阅档案及临时链接的复制/二维码显示经过目标 UI 操作；临时 token 已撤销。完整安装向导、订阅客户端、响应式/键盘与完整 OneBox 生命周期未验收 |
 | Komari Agent | 目标 Agent 版本未提供；使用 `admin:exec` 与 `admin:getSpecificTaskResult` | 一台在线探针只读扫描及两个 Runtime 维护 Job 成功；扫描仍发现一个 OneBox 入站并保留原节点。Agent 版本未知；安装新节点、重配置、启停和卸载未在目标探针执行 |
-| OneBox | adapter schema 1，版本 `1.8.0`；[Release `v1.0.6`](https://github.com/liuarui/onebox/releases/tag/v1.0.6)，脚本版本 `1.0.6`，固定 SHA-256 `0f151c4b456814b7267838ddf12eb50f86e9a0c12f4ba381d8d814fa6d0ac52f` | OneBox `1.0.5` 的管理脚本更新操作已在目标探针成功，既有节点配置保持；`1.0.6` 的候选清单更新通过本地静态检查，仍需在目标探针重新执行脚本更新和节点生命周期验收。仅一台 Linux 探针实测，不代表完整 OS/LXC 矩阵 |
+| OneBox | adapter schema 1，版本 `1.8.0`；[Release `v1.0.8`](https://github.com/liuarui/onebox/releases/tag/v1.0.8)，脚本版本 `1.0.8`，固定 SHA-256 `92465e927f4ecf8828fda26b0352fd8d6a1c4d1dc16278011beaa4e99dcba289` | OneBox `1.0.5` 的管理脚本更新操作已在目标探针成功，既有节点配置保持；`1.0.6` 的候选清单更新通过本地静态检查；`1.0.7` 和 `1.0.8` 的地区标签与优先排序通过静态检查，仍需在目标探针重新执行脚本更新和节点生命周期验收。仅一台 Linux 探针实测，不代表完整 OS/LXC 矩阵 |
 | sing-box | OneBox 共享 `onebox-main` Runtime | 目标探针的独立内核维护操作成功；之后观察到 `1.14.4` 且服务 `active`。未验证真实客户端导入或代理流量连通，也未对该目标二进制执行配置 `check` |
 | Mihomo | 输出 Mihomo full/provider YAML | 已检查生成文本片段；未用冻结客户端导入 |
 | SubConverter | 可选外部转换；KNS 默认关闭并只接受显式配置的 HTTPS `/sub` 地址。旧状态中的 HTTP 地址会在生成链接时重新校验并被忽略 | 历史上曾用虚构 VLESS URI 对 SubConverter-Extended `v1.9.7` 的 HTTP `/sub` 做只读 GET；这只说明服务接受过合成请求，不证明当前 KNS 会提供该 HTTP 链接、节点清单纯净或客户端兼容。没有向转换器发送真实 KNS token；当前 HTTPS 转换链路和客户端导入仍待验收 |

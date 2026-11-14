@@ -730,7 +730,7 @@ test("plugin.update.check only flags GitHub latest when it is a newer SemVer", a
   const cases = [
     { tag: "v0.9.9", available: false },
     { tag: "v" + current, available: false },
-    { tag: "v1.3.1", available: true },
+    { tag: "v9.9.9", available: true },
   ];
   for (const item of cases) {
     global.fetch = async () => ({ ok: true, json: async () => ({ tag_name: item.tag, html_url: "https://github.com/liuarui/komari-plugin-kns/releases/tag/" + item.tag }) });
