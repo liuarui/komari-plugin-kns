@@ -613,6 +613,7 @@ test("install wizard defaults to authorized online machines and explains an empt
     installMachineSelection: new Set(),
     draftScopes: new Map(),
     machineHasUnconfirmedDispatch: () => false,
+    machineRegionLabel: (value) => value || "",
     machineInstallBlockReason(machine) { return machine.online !== true ? "机器离线或状态未知。" : machine.policy && machine.policy.deployAllowed ? "" : "此机器尚未授权远程安装。"; },
     machineInstallAllowed(machine) { return machine.online === true && !!(machine.policy && machine.policy.deployAllowed); },
     updateDraftControls() {},

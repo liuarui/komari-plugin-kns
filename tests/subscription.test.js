@@ -346,7 +346,8 @@ test("native subscriptions assign unique identifiers to batch nodes and reserve 
   assert.equal(new Set(tags).size, tags.length);
   assert.equal(nativeTags.length, instances.length + 1);
   for (const name of reserved) assert.ok(!nativeTags.includes(name), name);
-  assert.ok(nativeTags.every((tag) => /^Shadowsocks-/.test(tag)));
+  assert.equal(new Set(nativeTags).size, nativeTags.length);
+  assert.ok(nativeTags.includes("unique"), "unique user labels must be preserved");
   assert.ok(nativeTags.includes(full.route.final), "route final must refer to a generated node");
   const outboundTags = JSON.parse(buildSubscription(state, {}, "singbox-outbounds").body).outbounds.map((item) => item.tag);
   assert.deepEqual(outboundTags, nativeTags);
@@ -362,8 +363,8 @@ test("native subscriptions assign unique identifiers to batch nodes and reserve 
     }
   }
   const uri = buildSubscription(state, {}, "uri").body;
-  assert.match(uri, /#Shadowsocks-machine_0-443-IPv4\n/);
-  assert.match(uri, /#Shadowsocks-machine_0-443-IPv6\n/);
+  assert.match(uri, /#shared-IPv4\n/);
+  assert.match(uri, /#shared-IPv6\n/);
 });
 
 test("native collision suffixes stay stable across input and profile sorting changes", () => {

@@ -2,6 +2,13 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.3.0] - 2026-11-14
+
+- Pin OneBox script `1.0.6` by its immutable `v1.0.6` release URL and SHA-256.
+- Keep the adapter at schema 1, version `1.8.0`; callbacks still require the exact adapter and script versions.
+- Replace static version badges with a live release badge and clarify the Komari manifest compatibility requirement.
+- Add quick-start navigation, a deployment diagram, responsive illustration sizing, and links to the detailed documentation.
+
 ## [1.0.15] - 2026-11-11
 
 - Standardize existing KNS node names once on upgrade and use those names in subscription output.
