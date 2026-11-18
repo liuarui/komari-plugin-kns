@@ -2,6 +2,12 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.3.3] - 2026-11-18
+
+- Pin OneBox script `1.0.10` by its immutable `v1.0.10` release URL and SHA-256.
+- Replace the Microsoft `bing.com` default for self-signed TLS certificates with `www.python.org`; Hysteria2, TUIC, AnyTLS, share links, and KNS legacy discovery/import now share the non-Microsoft default and read the certificate CN when `SELF_DOMAIN` is missing.
+- Keep adapter schema 1 and version `1.8.0`.
+
 ## [1.3.2] - 2026-11-14
 
 - Pin OneBox script `1.0.9` by its `v1.0.9` release URL and SHA-256.
