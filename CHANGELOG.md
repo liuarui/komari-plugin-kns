@@ -2,6 +2,12 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.3.4] - 2026-11-20
+
+- Pin OneBox script `1.0.11` by its immutable `v1.0.11` release URL and SHA-256.
+- Keep adapter schema 1 and version `1.8.0`.
+- Fix interactive menu lock contention so browsing does not hold the shared operation lock, while mutations remain serialized with KNS and ACME.
+
 ## [1.3.3] - 2026-11-18
 
 - Pin OneBox script `1.0.10` by its immutable `v1.0.10` release URL and SHA-256.
