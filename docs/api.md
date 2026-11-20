@@ -34,6 +34,7 @@ KNS 原生订阅格式为 `uri`、`mihomo-full`、`mihomo-provider`、`singbox-f
 | `autoProvision.retry` | `machineUuid`, `confirm:true` | 仅重试失败且无已登记默认节点、在线、已授权且无活动任务的目标 |
 | `install.batch` | `machineUuids[]`, `batchId`, 协议配置, `confirm:true`, 可选 `twoFactorCode` | `202` 逐目标返回已受理/阻断/错误与 Job；相同批次 ID 和参数复用原任务，最多 10 台 |
 | `machine.discover` | `machineUuid`, `idempotencyKey` | `202` 单机只读扫描任务；管理页不要求输入 2FA；结果和可纳入节点直接显示在机器卡片中，不含节点凭据 |
+| `machine.install.check` | `machineUuid`, `idempotencyKey` | 安装前只读核查，要求在线、已授权且 Runtime 空闲；返回 `machine.discover` Job，带 `installPreflight:true`。先检查旧变更任务终止证据，再派发只读扫描。无法确认旧任务时返回 `200`、`ok:false` 和失败 Job；成功派发返回 `202`，相同核查正在执行时复用 Job |
 | `runtime.script.update` | `machineUuid`, `confirm:true`, `idempotencyKey`, 可选 `twoFactorCode` | `202` 更新 OneBox 管理脚本；要求在线、已授权、30 分钟内扫描发现 OneBox、配置 HTTPS 回调并且共享 Runtime 空闲。以固定 SHA-256 核验产物，并检查 Agent、一次性回调和远端脚本版本/摘要 |
 | `runtime.kernel.update` | `machineUuid`, `version:"latest"`, `confirm:true`, `idempotencyKey`, 可选 `twoFactorCode` | `202` 独立升级 sing-box 稳定版内核；影响该机全部 KNS 节点，保持升级前运行/停止状态；以 Agent、一次性回调、内核版本和服务状态双重核验 |
 | `machine.import` | `machineUuid`, `legacyTag`, `confirm:true`, `idempotencyKey`, 可选 `name`, `endpointHost`, `externalPort` | `202` 接管任务；迁移入站 tag 并重载共享 sing-box 服务，通过一次性 HTTPS 回调登记节点和凭据；默认按协议、机器名和公网端口命名 |
@@ -69,6 +70,10 @@ KNS 原生订阅格式为 `uri`、`mihomo-full`、`mihomo-provider`、`singbox-f
 `machineUuids`、`protocols` 的空数组代表不限制；包含机器与排除机器同时配置时先做包含筛选，再排除命中的机器。标签按实例标签做“任一匹配”。地址族筛选作用于 Endpoint 中的字面 IPv4/IPv6 地址；域名会保留，由订阅客户端按自身 DNS 能力连接。排序支持 `name`、`protocol`、`endpoint`、`machine`。
 
 安装类动作默认拒绝。探针必须被管理员显式设为 `deployAllowed:true`，并且危险变更需要 `confirm:true` 和有效 `idempotencyKey`。同一机器共享 OneBox runtime 一次只允许一个变更 job。
+
+`machine.install.check` 不创建依赖或节点；对于没有 OneBox 配置、残留数据或服务文件的全新环境，可直接完成只读核查。已有环境会返回新扫描清单。旧变更任务有明确非负退出码，或有完成时间且明确报告未执行（离线 / 远程控制关闭）时，才会继续扫描；扫描成功后记录 `dispatchReview`。缺少任务编号、结果缺失或读取失败会保留限制并返回具体原因。自动核对不修改旧任务的状态或结果。人工处理使用 `attention.acknowledge`，界面需先展示任务详情和确认含义。
+
+管理页安装前核查结果有效期为五分钟；新的变更任务会使结果失效。最近五分钟的扫描清单也参与端口冲突判断，覆盖未接管的入站；成功变更后清单过期，接管成功则保存其返回的新清单。登记节点继续保留其监听端口，包括已停用的节点。
 
 ## OneBox 回调与远程核验
 

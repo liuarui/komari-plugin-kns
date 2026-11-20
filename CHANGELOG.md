@@ -2,6 +2,14 @@
 
 This file records public releases. Private development history before the first public release is intentionally not included.
 
+## [1.3.5] - 2026-11-20
+
+- Automatically run an installation preflight when an authorized online machine is selected; preserve protocol settings while the read-only check runs.
+- Check earlier uncertain Agent tasks for completion before scanning the current OneBox inventory. Clear the dispatch restriction only when both checks succeed, without changing the original task result.
+- Show every blocking task on its machine card and provide task details, explicit acknowledgement, and retry controls inside the installation wizard.
+- Include recently scanned OneBox listeners in automatic port allocation and server-side conflict checks, including nodes not yet managed by KNS.
+- Keep OneBox script `1.0.11` and adapter `1.8.0` pinned; this release changes the KNS installation and task review flow.
+
 ## [1.3.4] - 2026-11-20
 
 - Pin OneBox script `1.0.11` by its immutable `v1.0.11` release URL and SHA-256.

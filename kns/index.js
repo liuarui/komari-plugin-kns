@@ -1200,16 +1200,20 @@ function portConflicts(state, machineUuid, port, transport, ignoreId, listenAddr
   const wantsTcp = transport === "tcp" || transport === "tcp+udp";
   const wantsUdp = transport === "udp" || transport === "tcp+udp";
   const address = listenAddress || "::";
-  return state.instances.some((instance) => {
-    if (instance.machineUuid !== machineUuid || instance.id === ignoreId || instance.deletedAt) return false;
-    const listen = instance.listen || {};
+  const conflicts = (listen) => {
     if (Number(listen.port) !== port) return false;
     const existingAddress = listen.address || "::";
     const overlapsAddress = existingAddress === address || ["::", "0.0.0.0"].includes(existingAddress) || ["::", "0.0.0.0"].includes(address);
     if (!overlapsAddress) return false;
-    const existing = listen.transport || "tcp";
+    const existing = listen.transport === "ws" ? "tcp" : listen.transport === "unknown" ? "tcp+udp" : listen.transport || "tcp";
     return (wantsTcp && (existing === "tcp" || existing === "tcp+udp")) || (wantsUdp && (existing === "udp" || existing === "tcp+udp"));
-  });
+  };
+  if (state.instances.some((instance) => instance.machineUuid === machineUuid && instance.id !== ignoreId && !instance.deletedAt && conflicts(instance.listen || {}))) return true;
+  const machine = state.machines.find((item) => item.uuid === machineUuid);
+  const scannedAt = Date.parse(machine && machine.discoveredAt || "");
+  if (!Number.isFinite(scannedAt) || scannedAt > Date.now() || Date.now() - scannedAt > 5 * 60 * 1000) return false;
+  const ignored = state.instances.find((item) => item.id === ignoreId && item.machineUuid === machineUuid);
+  return (machine.discoveredNodes || []).some((node) => node.tag !== "kns-" + ignoreId && (!ignored || node.tag !== ignored.oneboxTag && node.tag !== ignored.legacyTag) && conflicts(node.listen || {}));
 }
 
 function natMappingConflicts(state, externalPort, transport, publicHosts, ignoreId) {
@@ -1262,6 +1266,14 @@ function checkTwoFactor(value) {
   return code;
 }
 
+function oneboxEnvironmentCheckCommands() {
+  return [
+    "onebox_config=/etc/onebox/config.json; onebox_needs_bootstrap=0; onebox_bootstrap_blocked=''",
+    "if [ -L /etc/onebox ] || [ -L \"$onebox_config\" ]; then onebox_bootstrap_blocked=invalid_config; elif [ -e \"$onebox_config\" ]; then if [ ! -f \"$onebox_config\" ]; then onebox_bootstrap_blocked=invalid_config; elif ! command -v jq >/dev/null 2>&1; then onebox_needs_bootstrap=1; elif ! jq -e 'type == \"object\" and (.inbounds | type == \"array\")' \"$onebox_config\" >/dev/null 2>&1; then onebox_bootstrap_blocked=invalid_config; elif [ ! -x /usr/local/bin/onebox ] || [ ! -x /usr/local/lib/onebox/sing-box ]; then onebox_needs_bootstrap=1; fi; else if [ -e /etc/onebox ] && [ ! -d /etc/onebox ]; then onebox_bootstrap_blocked=existing_state; elif [ -d /etc/onebox ]; then if ! command -v find >/dev/null 2>&1; then onebox_bootstrap_blocked=existing_state; else onebox_existing_state=$(find /etc/onebox -mindepth 1 ! \\( -type d \\( -path /etc/onebox/kns -o -path /etc/onebox/kns/instances -o -path /etc/onebox/kns/certs \\) \\) ! \\( -type f -path /etc/onebox/.version_cache \\) -print -quit 2>/dev/null); onebox_find_rc=$?; if [ \"$onebox_find_rc\" -ne 0 ] || [ -n \"$onebox_existing_state\" ]; then onebox_bootstrap_blocked=existing_state; fi; fi; fi; for onebox_unit in /etc/systemd/system/onebox.service /run/systemd/system/onebox.service /usr/lib/systemd/system/onebox.service /lib/systemd/system/onebox.service /usr/local/lib/systemd/system/onebox.service /etc/init.d/onebox; do if [ -e \"$onebox_unit\" ] || [ -L \"$onebox_unit\" ]; then onebox_bootstrap_blocked=existing_state; fi; done; if [ -z \"$onebox_bootstrap_blocked\" ]; then onebox_needs_bootstrap=1; fi; fi",
+    "if [ -n \"$onebox_bootstrap_blocked\" ]; then printf 'KNS_BOOTSTRAP_BLOCKED=%s\\n' \"$onebox_bootstrap_blocked\"; exit 1; fi",
+  ];
+}
+
 function makeRemoteCommand(state, job, instance) {
   const callbackUrl = state.settings.publicBaseUrl.replace(/\/$/, "") + API + "/report";
   const runtimeUpgrade = ["runtime.script.update", "runtime.kernel.update"].includes(job.action);
@@ -1297,9 +1309,7 @@ function makeRemoteCommand(state, job, instance) {
       ? "kns_rc=$?; verify=$(bash \"$installer\" kns discover); discover_rc=$?; if [ \"$discover_rc\" -eq 0 ]; then printf 'KNS_DISCOVERY=%s\\n' \"$verify\"; fi; runtime=$(bash \"$installer\" kns runtime-status); runtime_rc=$?; if [ \"$runtime_rc\" -eq 0 ]; then printf 'KNS_RUNTIME_STATUS=%s\\n' \"$runtime\"; fi; [ \"$kns_rc\" -eq 0 ] || exit \"$kns_rc\"; [ \"$discover_rc\" -eq 0 ] || exit \"$discover_rc\"; [ \"$runtime_rc\" -eq 0 ] || exit \"$runtime_rc\""
       : "kns_rc=$?; verify=$(bash \"$installer\" kns status --instance-id " + statusId + "); verify_rc=$?; if [ \"$verify_rc\" -eq 0 ]; then printf 'KNS_STATUS=%s\\n' \"$verify\"; fi; [ \"$kns_rc\" -eq 0 ] || exit \"$kns_rc\"; [ \"$verify_rc\" -eq 0 ] || exit \"$verify_rc\"";
   const bootstrapCommands = job.action === "install" ? [
-    "onebox_config=/etc/onebox/config.json; onebox_needs_bootstrap=0; onebox_bootstrap_blocked=''",
-    "if [ -L /etc/onebox ] || [ -L \"$onebox_config\" ]; then onebox_bootstrap_blocked=invalid_config; elif [ -e \"$onebox_config\" ]; then if [ ! -f \"$onebox_config\" ]; then onebox_bootstrap_blocked=invalid_config; elif ! command -v jq >/dev/null 2>&1; then onebox_needs_bootstrap=1; elif ! jq -e 'type == \"object\" and (.inbounds | type == \"array\")' \"$onebox_config\" >/dev/null 2>&1; then onebox_bootstrap_blocked=invalid_config; elif [ ! -x /usr/local/bin/onebox ] || [ ! -x /usr/local/lib/onebox/sing-box ]; then onebox_needs_bootstrap=1; fi; else if [ -e /etc/onebox ] && [ ! -d /etc/onebox ]; then onebox_bootstrap_blocked=existing_state; elif [ -d /etc/onebox ]; then if ! command -v find >/dev/null 2>&1; then onebox_bootstrap_blocked=existing_state; else onebox_existing_state=$(find /etc/onebox -mindepth 1 ! \\( -type d \\( -path /etc/onebox/kns -o -path /etc/onebox/kns/instances -o -path /etc/onebox/kns/certs \\) \\) ! \\( -type f -path /etc/onebox/.version_cache \\) -print -quit 2>/dev/null); onebox_find_rc=$?; if [ \"$onebox_find_rc\" -ne 0 ] || [ -n \"$onebox_existing_state\" ]; then onebox_bootstrap_blocked=existing_state; fi; fi; fi; for onebox_unit in /etc/systemd/system/onebox.service /run/systemd/system/onebox.service /usr/lib/systemd/system/onebox.service /lib/systemd/system/onebox.service /usr/local/lib/systemd/system/onebox.service /etc/init.d/onebox; do if [ -e \"$onebox_unit\" ] || [ -L \"$onebox_unit\" ]; then onebox_bootstrap_blocked=existing_state; fi; done; if [ -z \"$onebox_bootstrap_blocked\" ]; then onebox_needs_bootstrap=1; fi; fi",
-    "if [ -n \"$onebox_bootstrap_blocked\" ]; then printf 'KNS_BOOTSTRAP_BLOCKED=%s\\n' \"$onebox_bootstrap_blocked\"; exit 1; fi",
+    ...oneboxEnvironmentCheckCommands(),
     "if [ \"$onebox_needs_bootstrap\" -eq 1 ]; then printf 'KNS_BOOTSTRAP=started\\n'; bash \"$installer\" install --non-interactive; bootstrap_rc=$?; if [ \"$bootstrap_rc\" -ne 0 ]; then printf 'KNS_BOOTSTRAP_FAILED=%s\\n' \"$bootstrap_rc\"; exit \"$bootstrap_rc\"; fi; printf 'KNS_BOOTSTRAP=completed\\n'; fi",
   ] : [];
   return [
@@ -1319,12 +1329,16 @@ function makeRemoteCommand(state, job, instance) {
   ].join("; ");
 }
 
-function makeRemoteDiscoveryCommand() {
+function makeRemoteDiscoveryCommand(installPreflight = false) {
   const installer = quoteShell(INSTALLER_URL);
   const digest = quoteShell(INSTALLER_SHA256);
   return [
     "set -u",
     "[ \"$(id -u)\" -eq 0 ] || { printf '%s\\n' KNS_SCAN_ERROR=not_root; exit 77; }",
+    ...(installPreflight ? [
+      ...oneboxEnvironmentCheckCommands(),
+      "if [ ! -e /etc/onebox/config.json ]; then printf '%s\\n' KNS_INSTALL_CHECK=uninstalled; exit 0; fi",
+    ] : []),
     "command -v sha256sum >/dev/null 2>&1 || { printf '%s\\n' KNS_SCAN_ERROR=missing_sha256sum; exit 127; }",
     "command -v bash >/dev/null 2>&1 || { printf '%s\\n' KNS_SCAN_ERROR=missing_bash; exit 127; }",
     "if [ ! -e /etc/onebox/config.json ] && [ ! -L /etc/onebox/config.json ]; then printf '%s\\n' KNS_SCAN_ERROR=config_missing; exit 1; fi",
@@ -1727,16 +1741,24 @@ async function pollPendingJobs() {
       }
       const status = extractStatus(result);
       if (job.action === "machine.discover") {
-        const discovered = validateDiscovery(job, extractDiscovery(result));
+        const uninstalled = job.installPreflight === true && /^KNS_INSTALL_CHECK=uninstalled\r?$/m.test(taskText(result));
+        const discovered = uninstalled ? [] : validateDiscovery(job, extractDiscovery(result));
         const runtimeStatus = validateRuntimeStatus(extractRuntimeStatus(result));
         const machine = state.machines.find((item) => item.uuid === job.machineUuid);
-        if (!discovered || !runtimeStatus || !machine) {
+        if (!discovered || (!uninstalled && !runtimeStatus) || !machine) {
           job.state = "needs_reconcile"; job.updatedAt = now(); job.message = "远端发现结果格式无效，未保存节点信息。"; changed = true; continue;
         }
         machine.discoveredNodes = discovered;
         machine.discoveredAt = now();
-        machine.runtimeStatus = runtimeStatus;
+        if (runtimeStatus) machine.runtimeStatus = runtimeStatus;
+        else delete machine.runtimeStatus;
         job.state = "succeeded"; job.updatedAt = now(); job.message = "只读扫描完成，发现 " + discovered.length + " 个 OneBox 入站；可导入的节点需要管理员逐个确认。"; closeJob(job); changed = true;
+        if (job.installPreflight) {
+          if (uninstalled && state.instances.some((item) => item.machineUuid === job.machineUuid && !item.deletedAt)) {
+            job.state = "failed";
+            job.message = "机器缺少 OneBox 配置，但 KNS 仍有登记节点；请核对机器与登记记录，未自动清空或覆盖。";
+          } else completeInstallDispatchReview(state, job, job.installDispatchReviews);
+        }
         audit(state, null, "machine.legacy_discovery.completed", { jobId: job.id, machineUuid: job.machineUuid, discoveredCount: discovered.length, importableCount: discovered.filter((node) => node.importable).length });
         continue;
       }
@@ -1766,6 +1788,8 @@ async function pollPendingJobs() {
           changed = true; continue;
         }
         machine.runtimeStatus = runtimeStatus;
+        machine.discoveredNodes = discovered;
+        machine.discoveredAt = now();
         job.state = "succeeded"; job.updatedAt = now(); job.message = "旧节点已接管；现可在 KNS 中重配置、启停、重装或卸载。"; closeJob(job); changed = true;
         audit(state, null, "instance.legacy_claim.completed", { jobId: job.id, machineUuid: job.machineUuid, instanceId: job.instanceId, legacyTag: job.legacyTag });
         continue;
@@ -1814,6 +1838,8 @@ async function pollPendingJobs() {
           changed = true; continue;
         }
         const bootstrapped = job.action === "install" && /^KNS_BOOTSTRAP=completed$/m.test(taskText(result));
+        const changedMachine = state.machines.find((item) => item.uuid === job.machineUuid);
+        if (changedMachine) changedMachine.discoveredAt = "";
         job.state = "succeeded"; job.updatedAt = now(); job.message = job.action === "uninstall" ? "已验证实例已卸载。" : bootstrapped ? "OneBox 基础环境已初始化；节点安装和远端核查均完成。" : "回调和远程实例状态均已验证。"; closeJob(job); changed = true;
         audit(state, null, "job.succeeded", { jobId: job.id, action: job.action, machineUuid: job.machineUuid, instanceId: job.instanceId });
     }
@@ -1949,11 +1975,87 @@ async function finishDispatch(job, params) {
 }
 
 function unconfirmedDispatch(state, machineUuid) {
-  return state.jobs.find((job) => job.machineUuid === machineUuid && (job.dispatchUncertain || ["needs_reconcile", "timed_out"].includes(job.state)) && !["machine.discover", "instance.status"].includes(job.action) && !["succeeded", "cancelled"].includes(job.state) && !(job.attentionAcknowledgedAt && job.attentionAcknowledgedState === job.state));
+  return state.jobs.find((job) => job.machineUuid === machineUuid && dispatchNeedsReview(job));
+}
+
+function dispatchNeedsReview(job) {
+  return (job.dispatchUncertain || ["needs_reconcile", "timed_out"].includes(job.state)) && !["machine.discover", "instance.status"].includes(job.action) && !["succeeded", "cancelled"].includes(job.state) &&
+    !(job.attentionAcknowledgedAt && job.attentionAcknowledgedState === job.state) &&
+    !(job.dispatchReview && job.dispatchReview.state === job.state && job.dispatchReview.taskId === job.taskId && job.dispatchReview.jobUpdatedAt === job.updatedAt);
+}
+
+// An RPC response's generic `code` can be an envelope status, not an exit code.
+function completedTaskEvidence(value) {
+  if (!value || typeof value !== "object") return undefined;
+  for (const key of ["exit_code", "exitCode"]) {
+    if (!Number.isInteger(value[key])) continue;
+    const evidence = { exitCode: value[key] };
+    const finishedAt = value.finished_at || value.finishedAt;
+    const finishedTime = Date.parse(finishedAt || "");
+    if (typeof finishedAt === "string" && Number.isFinite(finishedTime) && finishedTime > 0 && finishedTime <= Date.now()) evidence.finishedAt = finishedAt;
+    if (evidence.exitCode === -1 && evidence.finishedAt && typeof value.result === "string") {
+      if (value.result.trim() === "Client offline!") evidence.notExecuted = "client_offline";
+      if (value.result.trim() === "Remote control is disabled.") evidence.notExecuted = "remote_control_disabled";
+    }
+    return evidence;
+  }
+  for (const key of Object.keys(value)) {
+    const evidence = completedTaskEvidence(value[key]);
+    if (evidence) return evidence;
+  }
+  return undefined;
+}
+
+function installDispatchTerminated(review) {
+  return !!review.taskId && Number.isInteger(review.exitCode) && (review.exitCode >= 0 || review.exitCode === -1 && !!review.finishedAt && ["client_offline", "remote_control_disabled"].includes(review.notExecuted));
+}
+
+function installDispatchFailureMessage(review) {
+  const prefix = "旧任务 " + review.id + " ";
+  if (!review.taskId) return prefix + "缺少 Komari 任务编号，无法自动确认是否仍在执行。请打开任务详情，核对后确认处理。";
+  if (["-32040", "-32041"].includes(review.errorCode)) return prefix + "的结果读取被拒绝（错误码 " + review.errorCode + "）；请检查管理员认证和远程控制权限后重试。";
+  if (review.errorCode) return prefix + "的结果暂时无法读取（错误码 " + review.errorCode + "）；请检查 Komari 与 Agent 连接后重新核查。";
+  if (Number.isInteger(review.exitCode) && review.exitCode < 0) return prefix + "返回退出码 " + review.exitCode + "，但缺少可验证的完成回执。请打开任务详情，核对后确认处理。";
+  return prefix + "尚未返回退出结果；请等待任务结束后重新核查。";
+}
+
+async function inspectInstallDispatches(scan) {
+  const jobs = getState().jobs.filter((job) => job.machineUuid === scan.machineUuid && dispatchNeedsReview(job));
+  const reviews = [];
+  for (const job of jobs) {
+    const review = { id: job.id, state: job.state, taskId: job.taskId, updatedAt: job.updatedAt };
+    if (job.taskId) {
+      try { Object.assign(review, completedTaskEvidence(await findTask(job)) || {}); }
+      catch (error) {
+        const code = String(error && error.code != null ? error.code : "rpc_error");
+        review.errorCode = /^[A-Za-z0-9_.:-]{1,48}$/.test(code) ? code : "rpc_error";
+      }
+    }
+    reviews.push(review);
+  }
+  return reviews;
+}
+
+function completeInstallDispatchReview(state, scan, reviews) {
+  for (const review of reviews || []) {
+    const job = state.jobs.find((item) => item.id === review.id && item.machineUuid === scan.machineUuid);
+    if (!job || !dispatchNeedsReview(job) || !installDispatchTerminated(review) || job.taskId !== review.taskId || job.state !== review.state || job.updatedAt !== review.updatedAt) continue;
+    job.dispatchReview = { scanJobId: scan.id, checkedAt: now(), state: job.state, taskId: job.taskId, jobUpdatedAt: job.updatedAt, exitCode: review.exitCode };
+    if (review.notExecuted) { job.dispatchReview.notExecuted = review.notExecuted; job.dispatchReview.finishedAt = review.finishedAt; }
+    audit(state, null, "job.dispatch.auto_reviewed", { jobId: job.id, machineUuid: job.machineUuid, scanJobId: scan.id, state: job.state, exitCode: review.exitCode });
+  }
+  const blocked = unconfirmedDispatch(state, scan.machineUuid);
+  if (blocked) {
+    scan.state = "failed";
+    scan.message = "机器现状已读取，但旧任务 " + blocked.id + " 的状态在核查期间发生变化；请重新核查，或在任务详情核对后确认处理。";
+  } else {
+    scan.state = "succeeded";
+    scan.message = "安装前只读核查通过；已刷新机器现状并自动核对旧任务。确认安装后才会下发节点变更。";
+  }
 }
 
 function requireConfirmedDispatch(state, machineUuid) {
-  if (unconfirmedDispatch(state, machineUuid)) fail("dispatch_unconfirmed", "之前的远程任务仍待核查。请先只读核查机器，在工作台确认处理后再执行变更。", 409);
+  if (unconfirmedDispatch(state, machineUuid)) fail("dispatch_unconfirmed", "之前的远程任务仍待核查。请在安装向导勾选机器自动核查；无法确认的任务会显示具体原因。", 409);
 }
 
 function machineByUuid(state, uuid) {
@@ -1977,7 +2079,7 @@ async function handleAction(req, res) {
   const state = getState();
   if (maintenanceLock && !(action === "plugin.update.unlock" && pluginUpdateLockToken)) fail("maintenance_in_progress", "KNS 正在执行互斥设置或数据维护；请稍后重试。", 409);
   // Remote jobs validate current targets and resources; their request is not an edit of the whole state.
-  const currentStateActions = ["install", "install.batch", "uninstall", "enable", "disable", "instance.status", "machine.discover", "runtime.script.update", "runtime.kernel.update", "job.retry", "autoProvision.retry", "machine.sync", "profile.create", "profile.preview", "profile.token.show", "attention.acknowledge", "plugin.update.check", "plugin.update.prepare", "plugin.update.unlock"];
+  const currentStateActions = ["install", "install.batch", "uninstall", "enable", "disable", "instance.status", "machine.discover", "machine.install.check", "runtime.script.update", "runtime.kernel.update", "job.retry", "autoProvision.retry", "machine.sync", "profile.create", "profile.preview", "profile.token.show", "attention.acknowledge", "plugin.update.check", "plugin.update.prepare", "plugin.update.unlock"];
   if (body.expectedEditVersion != null) {
     const currentVersion = actionEditVersion(state, body);
     if (!currentVersion || typeof body.expectedEditVersion !== "string" || body.expectedEditVersion !== currentVersion) fail("state_revision_conflict", "当前编辑的设置已被其他操作修改。草稿已保留，请核对后再保存。", 409);
@@ -2306,25 +2408,45 @@ async function handleAction(req, res) {
     audit(state, req, "settings.updated", { privateSite: state.settings.privateSite });
     save(state); return json(res, 200, { ok: true, settings: publicState(state).settings });
   }
-  if (action === "machine.discover") {
+  if (action === "machine.discover" || action === "machine.install.check") {
+    const installPreflight = action === "machine.install.check";
     const machine = machineByUuid(state, String(body.machineUuid || "").toLowerCase());
     if (machine.online !== true) fail("machine_offline", "探针当前不在线，无法扫描 OneBox 配置。", 409);
+    if (installPreflight) requirePolicy(machine);
     const key = safeText(body.idempotencyKey || "", 256);
     if (!key) fail("idempotency_key_required", "只读扫描需要 idempotencyKey。", 400);
-    const requestHash = crypto.createHash("sha256").update(machine.uuid + ":discover-legacy-onebox").digest("hex");
-    const prior = state.jobs.find((item) => item.action === action && item.machineUuid === machine.uuid && item.idempotencyKey === key);
+    const requestHash = crypto.createHash("sha256").update(machine.uuid + (installPreflight ? ":install-preflight" : ":discover-legacy-onebox")).digest("hex");
+    const prior = state.jobs.find((item) => item.action === "machine.discover" && !!item.installPreflight === installPreflight && item.machineUuid === machine.uuid && item.idempotencyKey === key);
     if (prior) {
       if (prior.requestHash !== requestHash) fail("idempotency_conflict", "相同 idempotencyKey 已用于其他扫描请求。", 409);
       return json(res, 200, { ok: !["failed", "cancelled"].includes(prior.state), reused: true, job: safeJob(prior) });
     }
     const conflict = state.jobs.find((item) => item.machineUuid === machine.uuid && item.runtimeId === "onebox-main" && ["authorized", "dispatched", "running", "verifying"].includes(item.state));
+    if (installPreflight && conflict && conflict.installPreflight) return json(res, 200, { ok: true, reused: true, job: safeJob(conflict) });
     if (conflict) fail("runtime_busy", "该探针已有 OneBox 任务进行中，请等待完成后再扫描。", 409);
     const code = checkTwoFactor(body.twoFactorCode);
-    const job = { id: randomId("job"), action, state: "authorized", machineUuid: machine.uuid, machineName: machine.name, runtimeId: "onebox-main", idempotencyKey: key, requestHash, taskId: "", callback: null, createdAt: now(), updatedAt: now(), actor: safeText(((req.context || {}).principal || {}).username || "admin", 80), message: "正在远程只读扫描 OneBox 入站。" };
+    const job = { id: randomId("job"), action: "machine.discover", installPreflight, state: "authorized", machineUuid: machine.uuid, machineName: machine.name, runtimeId: "onebox-main", idempotencyKey: key, requestHash, taskId: "", callback: null, createdAt: now(), updatedAt: now(), actor: safeText(((req.context || {}).principal || {}).username || "admin", 80), message: installPreflight ? "正在执行安装前只读核查。" : "正在远程只读扫描 OneBox 入站。" };
     state.jobs.push(job); audit(state, req, "machine.legacy_discovery.requested", { jobId: job.id, machineUuid: machine.uuid }); save(state);
-    const params = { command: makeRemoteDiscoveryCommand(), clients: [machine.uuid] };
+    let prepared = job;
+    if (installPreflight) {
+      // A scan is authoritative only after every known earlier writer has ended.
+      const reviews = await inspectInstallDispatches(job);
+      const latest = getState();
+      prepared = latest.jobs.find((item) => item.id === job.id);
+      if (!prepared || prepared.state !== "authorized") fail("preflight_changed", "安装前核查任务已变化，请刷新后重试。", 409);
+      prepared.installDispatchReviews = reviews;
+      const unresolved = reviews.find((review) => !installDispatchTerminated(review));
+      if (unresolved) {
+        prepared.state = "failed"; prepared.updatedAt = now();
+        prepared.message = installDispatchFailureMessage(unresolved);
+        closeJob(prepared); save(latest);
+        return json(res, 200, { ok: false, job: safeJob(prepared) });
+      }
+      save(latest);
+    }
+    const params = { command: makeRemoteDiscoveryCommand(installPreflight), clients: [machine.uuid] };
     if (code) params["2fa_code"] = code;
-    const submitted = await finishDispatch(job, params); return json(res, 202, { ok: !["failed", "cancelled"].includes(submitted.state), job: safeJob(submitted) });
+    const submitted = await finishDispatch(prepared, params); return json(res, 202, { ok: !["failed", "cancelled"].includes(submitted.state), job: safeJob(submitted) });
   }
   if (action === "machine.import") {
     const machine = machineByUuid(state, String(body.machineUuid || "").toLowerCase());

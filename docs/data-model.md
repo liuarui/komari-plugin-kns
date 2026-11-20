@@ -25,6 +25,8 @@
 
 ## Schema 2 约束
 
+安装前核查复用 `machine.discover` 任务，带 `installPreflight:true` 和 `installDispatchReviews[]`。后者只保存旧任务 ID、状态、更新时间、Komari task ID、退出码、可选完成时间/明确未执行类别或净化后的查询错误码，不保存远端原始输出。只有旧任务已结束、随后只读扫描成功且旧记录状态/更新时间/task ID 未变化，才在旧任务写入 `dispatchReview`：`scanJobId`、`checkedAt`、`state`、`taskId`、`jobUpdatedAt`、`exitCode`，可选 `notExecuted` 和 `finishedAt`。该旁证仅解除与这些字段匹配的派发限制，不改变旧任务状态或结果；记录之后发生变化会重新要求核查。
+
 运行时执行的结构检查在 [store.js](../kns/store.js) 中：顶层必须是对象，`schemaVersion` 必须是受支持的正整数，机器、runtime、instance、job、profile、audit、legacyNodes 必须是数组；缺失设置会由默认值补齐。Schema 1 会在内存中逐版本迁移到 Schema 2；首次成功写入时才持久化新结构。下面的 JSON Schema 用于文档与审查，不会取代运行时检查。
 
 Schema 2 的 `setupComplete` 控制首次配置写操作门禁。首次配置同步探针后记录 `autoProvisionBaselineUuids`，基线机器不会被误认为新探针。`autoProvisionNewProbes` 对新安装默认关闭；Schema 1 缺少该字段时迁移为关闭。`defaultNode` 保存仅用于后续新探针的 VLESS + Reality 默认端口/监听地址及模板版本。任务记录可选的 `batchId`、`retryOfJobId`、私有 `retryIdempotencyKey` 和不含凭据的 `retrySpec`，用于受限安全重试与批次恢复；公开状态不会返回这些内部重试参数。

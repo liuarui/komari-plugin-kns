@@ -5,6 +5,7 @@
 | 组件 | 本次识别/实现 | 验收状态 |
 | --- | --- | --- |
 | Komari Server | manifest 声明 `>=1.4.3`。官方 1.4.3 源码已包含本插件所需的路由、cron、系统 RPC、Node `fs`/`crypto`/`url` 等 API；该静态源码核验范围的最低 tag 是 1.4.3，未在该版运行时验收。用户管理后台实际观察到 `1.6.1 (96cf0f7)`，官方 tag 对应提交 `96cf0f79d8cfdf6cc8be54fd1976bbc026d58f7f` | 目标面板已运行 KNS v1.0.0。机器中心页、分开的 OneBox 脚本/内核维护操作、默认订阅档案及临时链接的复制/二维码显示经过目标 UI 操作；临时 token 已撤销。完整安装向导、订阅客户端、响应式/键盘与完整 OneBox 生命周期未验收 |
+| KNS `1.3.5` 安装前核查 | 勾选即只读核查、旧任务终止证据与后续扫描、全部阻塞任务确认入口、扫描端口避让 | 本次仅做代码审阅、JavaScript / shell 语法及发布包一致性检查；未在目标面板执行新向导，未连接 VPS，未做 TLS / Reality 握手 |
 | Komari Agent | 目标 Agent 版本未提供；使用 `admin:exec` 与 `admin:getSpecificTaskResult` | 一台在线探针只读扫描及两个 Runtime 维护 Job 成功；扫描仍发现一个 OneBox 入站并保留原节点。Agent 版本未知；安装新节点、重配置、启停和卸载未在目标探针执行 |
 | OneBox | adapter schema 1，版本 `1.8.0`；[Release `v1.0.11`](https://github.com/liuarui/onebox/releases/tag/v1.0.11)，脚本版本 `1.0.11`，固定 SHA-256 `e0eb2f7a9b60fa508aa4fc07fa0b4eb36c72363340b3662f4f962777faaab67a` | OneBox `1.0.5` 的管理脚本更新操作已在目标探针成功，既有节点配置保持；`1.0.6` 的候选清单更新通过本地静态检查；`1.0.7` 和 `1.0.8` 的地区标签与优先排序通过静态检查；`1.0.9` 的两个新增欧洲候选通过组织身份及 DNS/IPv4 ASN 核对，未做本地握手测试；`1.0.10` 的非微软自签默认域名与证书 CN 回退通过本地静态检查和 shell 语法检查；`1.0.11` 的菜单浏览与操作锁分离、节点锁内复核通过 shell 语法检查和隔离 Debian 菜单行为检查，未做本地 TLS/Reality 握手测试。仍需在目标探针重新执行脚本更新和节点生命周期验收。仅一台 Linux 探针实测，不代表完整 OS/LXC 矩阵 |
 | sing-box | OneBox 共享 `onebox-main` Runtime | 目标探针的独立内核维护操作成功；之后观察到 `1.14.4` 且服务 `active`。未验证真实客户端导入或代理流量连通，也未对该目标二进制执行配置 `check` |

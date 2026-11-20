@@ -310,6 +310,7 @@
     .machine-select-card strong { grid-column:2; grid-row:1; font-size:13px; overflow-wrap:anywhere; }
     .machine-select-card small { grid-column:2; grid-row:2; }
     .machine-select-card .pill { grid-column:3; grid-row:1 / span 2; }
+    .machine-select-card .install-check-message { grid-column:2 / -1; grid-row:3; margin:4px 0 0; overflow-wrap:anywhere; }
     .machine-select-card:has(input:disabled) { opacity:.6; cursor:not-allowed; }
     .deploy-summary { display:grid; gap:14px; }
     .deploy-summary-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; }
@@ -518,6 +519,7 @@
           <div class="actions"><button id="selectAllInstallMachines" class="secondary" type="button">全选当前结果</button><button id="clearInstallMachines" class="secondary" type="button">清空</button></div>
         </div>
         <div id="installMachines" class="machine-list" aria-label="选择安装目标"></div>
+        <p class="small muted">勾选后自动只读核查机器和旧任务；可先选择协议，核查通过后再确认安装。</p>
       </section>
       <section id="deployStep2" class="deploy-steps" hidden>
         <p class="muted">可选择多个协议。端口会按目标机器已有节点自动避开冲突；提交前仍由服务端逐台检查。</p>
@@ -532,6 +534,7 @@
         </details>
       </section>
       <section id="deployStep3" class="deploy-steps" hidden><div id="deployReview" class="deploy-summary"></div><p class="notice small">任务进度和成功结果以 KNS 收到的 Agent、OneBox 回调与远端核查为准；“已提交”不代表安装完成。多协议按顺序执行，请保持此页打开直至结果显示；关闭后当前任务仍继续，但尚未提交的后续协议不会自动续跑。</p></section>
+      <section id="installCheckIssues" class="discovery-summary" hidden aria-label="安装前核查需要处理"></section>
       <section id="deploymentResults" class="deploy-task-panel" hidden aria-labelledby="deploymentResultsTitle">
         <div class="deploy-task-head"><div><span class="eyebrow">任务下发</span><h3 id="deploymentResultsTitle">本次安装结果</h3></div><div class="actions"><span id="deploymentSummary" class="pill">等待提交</span><button id="refreshDeployment" class="secondary" type="button">刷新状态</button></div></div>
         <p class="small muted">提交只代表任务已受理；完成状态以 Agent 执行、OneBox 回调和远端核查为准。</p>
@@ -747,10 +750,13 @@
   let latestSubscriptionProfileId = "";
   let deploymentBatch = [];
   let installPlanRunning = false;
+  let installWizardBusy = false;
+  let installWizardSession = 0;
   let batchClaimRunning = false;
   let legacyScanRunning = false;
   const draftScopes = new Map();
   const installMachineSelection = new Set();
+  const installMachineChecks = new Map();
   const localActionStatus = new Map();
   const operationJobs = new Map();
   const retryRequestKeys = new Map();
@@ -858,7 +864,7 @@
     if (scope && !draftScopes.has(scope) && state) draftScopes.set(scope, state.revision);
     updateDraftControls();
   });
-  const remoteTaskActions = new Set(["install","install.batch","reconfigure","reinstall","uninstall","enable","disable","instance.status","machine.discover","machine.import","runtime.script.update","runtime.kernel.update","job.retry","autoProvision.retry"]);
+  const remoteTaskActions = new Set(["install","install.batch","reconfigure","reinstall","uninstall","enable","disable","instance.status","machine.discover","machine.install.check","machine.import","runtime.script.update","runtime.kernel.update","job.retry","autoProvision.retry"]);
   const draftEditVersions = new Map();
   function editVersionFor(snapshot, body) {
     if (!snapshot) return "";
@@ -893,7 +899,7 @@
       if (version) payload.expectedEditVersion = version;
       const result = await request("/admin/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       trackOperationResult(body,result);
-      if (body.action !== "install.batch" && remoteTaskActions.has(String(body.action || "")) && result && result.ok === false && result.job) {
+      if (!["install.batch","machine.install.check"].includes(body.action) && remoteTaskActions.has(String(body.action || "")) && result && result.ok === false && result.job) {
         const error = new Error(result.job.message || "远程任务未提交。"); error.code = "remote_not_dispatched"; throw error;
       }
       if (scope) { draftScopes.delete(scope); draftEditVersions.delete(scope); }
@@ -1040,12 +1046,21 @@
   function transportsOverlap(left,right){const a=String(left||"tcp").toLowerCase();const b=String(right||"tcp").toLowerCase();return (a.includes("tcp")&&b.includes("tcp"))||(a.includes("udp")&&b.includes("udp"));}
   function occupiedListenPorts(instances,machineIds,transport){const used=new Set();const allow=new Set(machineIds||[]);for(const instance of instances||[]){if(instance.deletedAt||!allow.has(instance.machineUuid))continue;const port=Number(instance.listen&&instance.listen.port);if(port&&(!transport||transportsOverlap(transport,instance.listen&&instance.listen.transport)))used.add(port);}return used;}
   function listenPortOccupancy(instances,machineIds){return {tcp:occupiedListenPorts(instances,machineIds,"tcp"),udp:occupiedListenPorts(instances,machineIds,"udp")};}
+  function installInventory(snapshot){
+    const found=[];
+    for(const machine of snapshot.machines||[]){
+      const checkedAt=Date.parse(machine.discoveredAt||"");
+      if(!Number.isFinite(checkedAt)||checkedAt>Date.now()||Date.now()-checkedAt>5*60*1000)continue;
+      for(const node of machine.discoveredNodes||[])found.push({machineUuid:machine.uuid,listen:Object.assign({},node.listen,{transport:node.listen&&node.listen.transport==="ws"?"tcp":node.listen&&node.listen.transport==="unknown"?"tcp+udp":node.listen&&node.listen.transport})});
+    }
+    return [...(snapshot.instances||[]),...found];
+  }
   function reserveListenPort(occupancy,transport,port){const value=Number(port);if(!value)return occupancy;const kind=String(transport||"tcp").toLowerCase();if(kind.includes("tcp"))occupancy.tcp.add(value);if(kind.includes("udp"))occupancy.udp.add(value);return occupancy;}
   function usedPortsForTransport(occupancy,transport){const kind=String(transport||"tcp").toLowerCase();const busy=new Set();if(kind.includes("tcp"))occupancy.tcp.forEach((port)=>busy.add(port));if(kind.includes("udp"))occupancy.udp.forEach((port)=>busy.add(port));return busy;}
   function allocatePort(start,used){let port=Math.max(1,Number(start)||443);const busy=used instanceof Set?used:new Set(used||[]);while(busy.has(port)&&port<65535)port+=1;return port;}
   function assignAutoPorts(start,selected,occupancy){const used={tcp:new Set(occupancy&&occupancy.tcp),udp:new Set(occupancy&&occupancy.udp)};for(const spec of selected||[])if(spec.manual)reserveListenPort(used,spec.transport,spec.manual);const assigned={};for(const spec of selected||[]){const port=spec.manual||allocatePort(start,usedPortsForTransport(used,spec.transport));assigned[spec.id]=port;reserveListenPort(used,spec.transport,port);}return assigned;}
   function selectedProtocolIds(){return Array.from(document.querySelectorAll("[data-protocol-select]:checked")).map((field)=>field.value);}
-  function selectedMachineIds(){return Array.from(installMachineSelection).filter((uuid)=>state&&state.machines.some((machine)=>machine.uuid===uuid&&!machine.removedFromKomariAt));}
+  function selectedMachineIds(){return Array.from(installMachineSelection).filter((uuid)=>(latestServerSnapshot||state)?.machines.some((machine)=>machine.uuid===uuid&&!machine.removedFromKomariAt));}
   function currentProtocolFields(){
     const value=(selector)=>String(document.querySelector(selector)?.value||"").trim();
     const checked=(selector)=>!!document.querySelector(selector)?.checked;
@@ -1171,7 +1186,7 @@
     refreshProtocolAdvanced();
   }
   function recomputeAutoPorts(){
-    const machines=selectedMachineIds().map((uuid)=>state&&state.machines.find((item)=>item.uuid===uuid)).filter(Boolean);const machineIds=machines.filter(machineInstallAllowed).map((machine)=>machine.uuid);const occupancy=listenPortOccupancy(state&&state.instances,machineIds);const start=Number(state&&state.settings&&state.settings.defaultNode&&state.settings.defaultNode.listenPort)||443;
+    const snapshot=latestServerSnapshot||state;if(!snapshot)return;const machines=selectedMachineIds().map((uuid)=>snapshot.machines.find((item)=>item.uuid===uuid)).filter(Boolean);const machineIds=machines.filter(machineInstallSelectable).map((machine)=>machine.uuid);const occupancy=listenPortOccupancy(installInventory(snapshot),machineIds);const start=Number(snapshot.settings&&snapshot.settings.defaultNode&&snapshot.settings.defaultNode.listenPort)||443;
     const selected=selectedProtocolIds().map((id)=>{const field=document.querySelector('[data-protocol-port="'+id+'"]');const value=field&&Number(field.value);return {id,transport:protocolTransport(id),manual:field&&field.dataset.autoGenerated==="false"?value:0,field};}).filter((spec)=>spec.field);
     const assigned=assignAutoPorts(start,selected,occupancy);
     for(const spec of selected){if(spec.field.dataset.autoGenerated!=="false"){spec.field.value=String(assigned[spec.id]);spec.field.dataset.autoGenerated="true";}}
@@ -1209,7 +1224,7 @@
   }
   function normalizedEndpointHost(host){const value=String(host||"").trim().replace(/^\[|\]$/g,"").replace(/\.$/,"").toLowerCase();try{return new URL("https://"+formatEndpointHost(value)).hostname.replace(/^\[|\]$/g,"");}catch(_){return value;}}
   function installPreflight(snapshot,machineIds,protocols,network){
-    const errors=[];const planned=[];const instances=(snapshot.instances||[]).filter((item)=>!item.deletedAt);
+    const errors=[];const planned=[];const instances=installInventory(snapshot).filter((item)=>!item.deletedAt);
     const override=String(network.endpointHost||"").trim();
     if(network.nat&&!override)errors.push("NAT 模式需要填写公网 IP 或域名。");
     if(override){try{const parsed=new URL("https://"+formatEndpointHost(override));if(parsed.username||parsed.password||parsed.port||parsed.pathname!=="/"||parsed.search||parsed.hash||/[\s/@?#]/.test(override))throw new Error();}catch(_){errors.push("公网地址只能填写 IP 或域名，不要包含协议、端口或路径。");}}
@@ -1218,7 +1233,6 @@
       if(!machine){errors.push("所选机器已不存在："+uuid);continue;}
       if(!machineInstallAllowed(machine,snapshot))errors.push(machine.name+"："+machineInstallBlockReason(machine,snapshot));
       if((snapshot.jobs||[]).some((job)=>job.machineUuid===uuid&&["authorized","dispatched","running","verifying"].includes(job.state)))errors.push(machine.name+"：共享 Runtime 有未完成任务，请先等待或核查。");
-      if(machineHasUnconfirmedDispatch(machine.uuid,snapshot))errors.push(machine.name+"：上一条远程任务仍待核查，请先只读核查并处理任务提醒。");
       const hosts=(network.nat?(override?[override]:[]):machineEndpointHosts(machine)).map(normalizedEndpointHost);
       if(!hosts.length)errors.push(machine.name+"：所选地址族没有可用地址，请检查机器 IPv4 / IPv6 设置。");
       if(network.listenAddress==="0.0.0.0"&&hosts.some((host)=>host.includes(":")))errors.push(machine.name+"：IPv6 连接地址不能使用仅 IPv4 监听。");
@@ -1236,9 +1250,18 @@
     return Array.from(new Set(errors));
   }
   function currentInstallNetwork(){return {nat:$("entryMode").value==="nat",endpointHost:$("endpointHost").value.trim(),listenAddress:$("listenAddress").value||"::"};}
-  function showInstallPreflight(){const snapshot=latestServerSnapshot||state;const selected=selectedMachineIds();const eligible=selected.filter((uuid)=>{const machine=(snapshot.machines||[]).find((item)=>item.uuid===uuid);return machine&&machineInstallAllowed(machine);});if(selected.length&&!eligible.length){const unresolved=selected.map((uuid)=>(snapshot.machines||[]).find((item)=>item.uuid===uuid)).filter((machine)=>machine&&machineHasUnconfirmedDispatch(machine.uuid,snapshot));setStatus("installStatus",unresolved.length?"所选机器有未确认的远程任务："+unresolved.map((machine)=>machine.name).join("、")+"。请先只读核查并处理任务提醒。":"所选机器当前都不能安装；检查在线状态和机器授权。","error");return false;}const errors=installPreflight(snapshot,eligible,currentProtocolFields(),currentInstallNetwork());if(errors.length){setStatus("installStatus","安装前检查未通过：\n"+errors.join("\n"),"error");return false;}return true;}
+  function showInstallPreflight(){
+    const snapshot=latestServerSnapshot||state;const selected=selectedMachineIds();
+    for(const uuid of selected){
+      const check=installMachineChecks.get(uuid);
+      if(!installCheckReady(uuid,snapshot)){setStatus("installStatus",check&&check.phase==="error"?check.message:"所选机器正在核查或核查已过期，请等待自动核查完成。","error");return false;}
+    }
+    const errors=installPreflight(snapshot,selected,currentProtocolFields(),currentInstallNetwork());
+    if(errors.length){setStatus("installStatus","安装前检查未通过：\n"+errors.join("\n"),"error");return false;}
+    return true;
+  }
   function updateConnectionPreview(){
-    const selected=state&&state.machines.filter((machine)=>installMachineSelection.has(machine.uuid))||[];const override=String($("endpointHost").value||"").trim();const address=$("listenAddress").value||"::";const rows=currentProtocolFields();
+    const selected=(latestServerSnapshot||state)?.machines.filter((machine)=>installMachineSelection.has(machine.uuid))||[];const override=String($("endpointHost").value||"").trim();const address=$("listenAddress").value||"::";const rows=currentProtocolFields();
     if(!selected.length||!rows.length){$("connectionPreview").textContent="选择机器和协议后显示连接地址预览。";return;}
     const preview=[];for(const machine of selected){const hosts=$("entryMode").value==="nat"?(override?[override]:["填写公网 IP / 域名"]):machineEndpointHosts(machine);for(const item of rows){const external=item.externalPort||item.listenPort;const entries=hosts.length?hosts:["等待机器地址"];preview.push(machine.name+" · "+protocolName(item.id)+"："+entries.map((host)=>formatEndpointHost(host)+":"+external).join(" / ")+" → "+address+":"+item.listenPort);}}
     $("connectionPreview").textContent=preview.join("\n")+"\n预览来自当前机器设置；公网可达性仍以安装后检测为准。";
@@ -1254,7 +1277,7 @@
 
   function renderDeployReview(){
     const host=$("deployReview");if(!host)return;
-    const machineIds=selectedMachineIds();const chosen=state.machines.filter((machine)=>machineIds.includes(machine.uuid));const protocols=currentProtocolFields();
+    const machineIds=selectedMachineIds();const chosen=(latestServerSnapshot||state).machines.filter((machine)=>machineIds.includes(machine.uuid));const protocols=currentProtocolFields();
     const maxBatch=Math.max(1,Math.min(10,Number(state.settings.maxBatch)||10));
     host.replaceChildren();
     const head=el("div",null,"deploy-summary-head");
@@ -1266,8 +1289,8 @@
     const machines=el("section",null,"deploy-summary-section");machines.append(el("h4","目标机器"));
     const machineList=el("ul");
     for(const machine of chosen){
-      const policy=machine.policy||{};const allowed=machine.online===true&&policy.deployAllowed===true;
-      const reason=machine.online!==true?"离线或状态未知":policy.deployAllowed!==true?"未授权安装":"可提交";
+      const policy=machine.policy||{};const allowed=machineInstallAllowed(machine)&&installCheckReady(machine.uuid);
+      const reason=machineInstallBlockReason(machine)||(installCheckReady(machine.uuid)?"已核查，可提交":"等待自动核查");
       const source=policy.manualAddress?"手动地址":policy.ddnsHostname?"DDNS 地址":"Komari 地址策略";
       const row=el("li");row.append(el("span",(machine.name||machine.uuid)+" · "+source+"（"+(policy.addressMode||"自动")+"）"),el("span",reason,"pill "+(allowed?"success":"error")));machineList.append(row);
     }
@@ -1352,6 +1375,7 @@
     const selected=[];
     for(const job of latest.values()){
       if(job.attentionAcknowledgedAt&&job.attentionAcknowledgedState===job.state)continue;
+      if(dispatchReviewCurrent(job))continue;
       if(laterSuccess(job))continue;
       if(job.state==="needs_reconcile"&&importResolved(job))continue;
       if(uninstallResolved(job))continue;
@@ -1364,19 +1388,21 @@
     return !!(instance&&!instance.deletedAt&&health&&health.state==="unhealthy"&&health.attentionAcknowledgedIncidentId!==(health.attentionIncidentId||"legacy"));
   }
   async function acknowledgeAttention(body, button){
-    button.disabled=true;
+    if(button)button.disabled=true;
     try{
       const result=await postAction(Object.assign({action:"attention.acknowledge"},body));
       if(body.kind==="job"){
-        const job=(state.jobs||[]).find((item)=>item.id===body.jobId&&item.state===body.expectedState);
-        if(job){job.attentionAcknowledgedAt=result.acknowledgedAt;job.attentionAcknowledgedState=job.state;}
+        for(const snapshot of [state,latestServerSnapshot].filter(Boolean)){
+          const job=(snapshot.jobs||[]).find((item)=>item.id===body.jobId&&item.state===body.expectedState);
+          if(job){job.attentionAcknowledgedAt=result.acknowledgedAt;job.attentionAcknowledgedState=job.state;}
+        }
       }else{
         const instance=(state.instances||[]).find((item)=>item.id===body.instanceId);
         if(instance&&instance.health&&instance.health.state==="unhealthy"&&(instance.health.attentionIncidentId||"legacy")===body.incidentId){instance.health.attentionIncidentId=body.incidentId;instance.health.attentionAcknowledgedIncidentId=body.incidentId;instance.health.attentionAcknowledgedAt=result.acknowledgedAt;}
       }
-      renderOverview();await refresh();
+      renderOverview();await refresh();renderInstallMachineOptions();
       setStatus("globalStatus","已标记为处理完成；历史记录与节点状态仍可查看。","success");
-    }catch(error){setStatus("globalStatus",error.message,"error");button.disabled=false;}
+    }catch(error){setStatus("globalStatus",error.message,"error");if(button)button.disabled=false;}
   }
   function jobActionLabel(job){
     const names={"machine.import":"接管旧节点","machine.discover":"扫描节点","instance.status":"状态核查",install:"安装",reconfigure:"重配置",reinstall:"重装",enable:"启动",disable:"停止",uninstall:"卸载"};
@@ -1509,11 +1535,13 @@
     if(installPlanRunning)return;
     if(draftScopes.size){setStatus("globalStatus","请先保存或放弃未保存的设置，再开始安装。","error");return;}
     if($("installWizard").open)return;
+    installWizardSession+=1;installWizardBusy=false;
     $("installMachineSearch").value="";$("onlyAllowedMachines").checked=true;
     $("instanceName").value="";$("instanceTags").value="";$("listenAddress").value="::";$("entryMode").value="machine";$("endpointHost").value="";buildProtocolCards();
     installMachineSelection.clear();if(uuid)installMachineSelection.add(uuid);
-    deploymentBatch=[];renderInstallMachineOptions();renderDeployStep(1);setStatus("installStatus","","muted");
+    deploymentBatch=[];$("deployNext").disabled=false;$("installBatch").disabled=false;renderDeployStep(1);renderInstallMachineOptions();setStatus("installStatus","","muted");
     $("installWizard").showModal();$("installMachineSearch").focus();
+    if(uuid)void checkInstallMachine(uuid);
     const selected=$("installMachines").querySelector(".machine-select-card.selected");if(selected)selected.scrollIntoView({block:"nearest"});
   }
 
@@ -1527,7 +1555,7 @@
       if(!confirmed)return;
     }
     installMachineSelection.clear();draftScopes.delete("deploy");draftEditVersions.delete("deploy");if(draftConflict&&draftConflict.scope==="deploy")draftConflict=null;
-    $("installWizard").close();updateDraftControls();
+    installWizardSession+=1;installWizardBusy=false;$("installWizard").close();updateDraftControls();
   }
 
   async function retryAutoProvision(machine){
@@ -1690,9 +1718,73 @@
     catch(error){setMachineStatus(machine.uuid,error.message,"error");}
   }
 
-  function machineHasUnconfirmedDispatch(machineUuid,snapshot){const current=snapshot||latestServerSnapshot||state;return (current.jobs||[]).some((job)=>job.machineUuid===machineUuid&&(job.dispatchUncertain||['needs_reconcile','timed_out'].includes(job.state))&&!['machine.discover','instance.status'].includes(job.action)&&!['succeeded','cancelled'].includes(job.state)&&!(job.attentionAcknowledgedAt&&job.attentionAcknowledgedState===job.state));}
-  function machineInstallBlockReason(machine,snapshot){if(machineHasUnconfirmedDispatch(machine.uuid,snapshot))return "上一条远程任务结果待核查，请先只读核查机器并处理任务提醒。";if(machine.removedFromKomariAt)return "机器已从 Komari 删除。";if(machine.online!==true)return "机器离线或状态未知。";if(!(machine.policy&&machine.policy.deployAllowed===true))return "此机器尚未授权远程安装。";return "";}
+  function dispatchReviewCurrent(job){return !!(job.dispatchReview&&job.dispatchReview.state===job.state&&job.dispatchReview.taskId===job.taskId&&job.dispatchReview.jobUpdatedAt===job.updatedAt);}
+  function machineUnconfirmedDispatches(machineUuid,snapshot){const current=snapshot||latestServerSnapshot||state;return (current.jobs||[]).filter((job)=>job.machineUuid===machineUuid&&(job.dispatchUncertain||['needs_reconcile','timed_out'].includes(job.state))&&!['machine.discover','instance.status'].includes(job.action)&&!['succeeded','cancelled'].includes(job.state)&&!(job.attentionAcknowledgedAt&&job.attentionAcknowledgedState===job.state)&&!dispatchReviewCurrent(job));}
+  function machineHasUnconfirmedDispatch(machineUuid,snapshot){return machineUnconfirmedDispatches(machineUuid,snapshot).length>0;}
+  function machineInstallSelectable(machine){return !!machine&&!machine.removedFromKomariAt&&machine.online===true&&machine.policy&&machine.policy.deployAllowed===true;}
+  function machineInstallBlockReason(machine,snapshot){if(machine.removedFromKomariAt)return "机器已从 Komari 删除。";if(machine.online!==true)return "机器离线或状态未知。";if(!(machine.policy&&machine.policy.deployAllowed===true))return "此机器尚未授权远程安装。";if(machineHasUnconfirmedDispatch(machine.uuid,snapshot))return "旧任务仍无法确认；在此重新勾选机器会自动核查并显示原因。";return "";}
   function machineInstallAllowed(machine,snapshot){return !machineInstallBlockReason(machine,snapshot);}
+
+  function installCheckVersion(uuid,snapshot){return JSON.stringify((snapshot.jobs||[]).filter((job)=>job.machineUuid===uuid&&!["machine.discover","instance.status"].includes(job.action)).map((job)=>[job.id,job.state,job.updatedAt,job.taskId]).sort((a,b)=>a[0].localeCompare(b[0])));}
+  function installCheckReady(uuid,snapshot=latestServerSnapshot||state){
+    const check=installMachineChecks.get(uuid);const machine=(snapshot.machines||[]).find((item)=>item.uuid===uuid);
+    if(!check||check.phase!=="ready"||Date.now()-check.finishedAt>5*60*1000||!machineInstallSelectable(machine)||machineHasUnconfirmedDispatch(uuid,snapshot))return false;
+    return check.version===installCheckVersion(uuid,snapshot);
+  }
+
+  async function checkInstallMachine(uuid,force=false){
+    const previous=installMachineChecks.get(uuid);
+    if(previous&&previous.phase==="checking")return previous.promise;
+    if(!force&&installCheckReady(uuid))return true;
+    const check={phase:"checking",message:"正在自动只读核查…",requestKey:idempotencyKey(),jobId:"",finishedAt:0};
+    installMachineChecks.set(uuid,check);
+    check.promise=(async()=>{
+      try{
+        const response=await postAction({action:"machine.install.check",machineUuid:uuid,idempotencyKey:check.requestKey});
+        if(!response.job||!response.job.id)throw new Error("未收到核查任务编号，保留安装设置；请重新勾选机器核查。");
+        check.jobId=response.job.id;
+        const deadline=Date.now()+30*60*1000;
+        while(Date.now()<deadline){
+          const latest=await request("/admin/state");latestServerSnapshot=latest;lastSuccessfulRefreshAt=Date.now();
+          const job=(latest.jobs||[]).find((item)=>item.id===check.jobId);
+          if(!job)throw new Error("核查任务记录已变化，请重新勾选机器核查。");
+          check.message=job.message||"正在等待机器返回只读核查结果…";
+          if(["succeeded","failed","needs_reconcile","timed_out","cancelled"].includes(job.state)){
+            if(job.state!=="succeeded")throw new Error(check.message);
+            check.phase="ready";check.finishedAt=Date.now();check.version=installCheckVersion(uuid,latest);
+            if(!installCheckReady(uuid,latest))throw new Error("核查期间机器或旧任务状态已变化，请重新勾选机器核查。");
+            return true;
+          }
+          renderInstallMachineOptions();
+          await wait(2500);
+        }
+        throw new Error("核查仍未完成，安装尚未下发。请等待该任务结束后重新勾选机器。");
+      }catch(error){
+        check.phase="error";check.message=error.message;
+        try{latestServerSnapshot=await request("/admin/state");lastSuccessfulRefreshAt=Date.now();}catch(_){}
+        return false;
+      }
+      finally{renderMachineDispatchReviews();renderInstallMachineOptions();recomputeAutoPorts();updateConnectionPreview();renderDeployReviewIfVisible();}
+    })();
+    renderInstallMachineOptions();
+    return check.promise;
+  }
+
+  async function ensureInstallMachineChecks(session=installWizardSession){
+    const ids=selectedMachineIds();
+    if(!ids.length)return false;
+    setStatus("installStatus","正在等待所选机器的自动核查结果…","muted");
+    const results=await Promise.all(ids.map((uuid)=>checkInstallMachine(uuid)));
+    if(session!==installWizardSession||!$("installWizard").open)return false;
+    if(results.some((ok)=>!ok)){
+      const errors=ids.filter((uuid,index)=>!results[index]).map((uuid)=>{
+        const machine=(latestServerSnapshot||state).machines.find((item)=>item.uuid===uuid);const check=installMachineChecks.get(uuid);
+        return (machine&&machine.name||uuid)+"："+(check&&check.message||"核查未通过。");
+      });
+      setStatus("installStatus",errors.join("\n"),"error");return false;
+    }
+    return ids.length===selectedMachineIds().length&&ids.every((uuid)=>installMachineSelection.has(uuid));
+  }
   function runtimeStateLabel(instance){
     const remote=instance.remoteStatus||{};const checked=Date.parse(remote.checkedAt||"");const fresh=Number.isFinite(checked)&&checked<=Date.now()&&Date.now()-checked<=5*60*1000;
     if(!fresh)return "未核查";
@@ -1700,6 +1792,17 @@
     if(remote.installed===true&&(remote.enabled===false||remote.serviceState==="inactive"||remote.serviceState==="stopped"))return "已停止";
     if(remote.installed===true&&remote.serviceState==="active")return "运行正常";
     return "状态待确认";
+  }
+  function renderMachineDispatchReviews(snapshot=latestServerSnapshot||state){
+    if(!snapshot)return;
+    for(const card of document.querySelectorAll(".machine-card[data-machine-uuid]")){
+      const jobs=machineUnconfirmedDispatches(card.dataset.machineUuid,snapshot);
+      const badge=card.querySelector("[data-dispatch-warning]");if(badge)badge.hidden=!jobs.length;
+      const host=card.querySelector("[data-dispatch-review]");if(!host)continue;
+      host.replaceChildren();host.hidden=!jobs.length;if(!jobs.length)continue;
+      host.append(el("strong","阻塞安装的旧任务（"+jobs.length+"）","error"),el("p","安装向导会自动核查；无法自动确认时，可在此查看具体任务并确认处理。","small muted"));
+      for(const job of jobs){const item=el("div",null,"result-item");item.append(el("strong",jobActionLabel(job)+" · "+jobStateLabel(job),"small"),el("p",job.message||"任务结果待确认。","small"),el("small","任务编号 "+job.id,"small muted"),actionButton("查看详情 / 确认处理",()=>showJobDetail(job)));host.append(item);}
+    }
   }
   function appendInstanceCard(container,instance){
     const card=el("article",null,"node-card");card.dataset.instanceId=instance.id;
@@ -1823,15 +1926,16 @@
       const removed=!!machine.removedFromKomariAt;const card=el("article",null,"machine-card");card.dataset.machineUuid=machine.uuid;if(removed)card.dataset.removed="true";
       const instances=state.instances.filter((instance)=>instance.machineUuid===machine.uuid&&!instance.deletedAt);
       const heading=el("div",null,"machine-heading");const titleBox=el("div");titleBox.append(el("h3",machine.name||machine.uuid),el("small",[machineRegionLabel(machine.region),machine.os,machine.arch].filter(Boolean).join(" · ")||machine.uuid,"muted small"));
-      const meta=el("div",null,"machine-meta");meta.append(el("span",machine.online===true?"在线":machine.online===false?"离线":"状态未知","pill "+(machine.online===true?"success":"muted")),el("span",instances.length+" 个节点","pill"),el("span",machineVirtualizationLabel(machine.virtualization),"pill"));if(removed)meta.append(el("span","Komari 已删除 · 远程停用","pill error"));if(machineHasUnconfirmedDispatch(machine.uuid))meta.append(el("span","远程任务需核查","pill error"));if((machine.policy&&machine.policy.managementTags||[]).includes("不纳管"))meta.append(el("span","不纳管","pill"));
+      const meta=el("div",null,"machine-meta");meta.append(el("span",machine.online===true?"在线":machine.online===false?"离线":"状态未知","pill "+(machine.online===true?"success":"muted")),el("span",instances.length+" 个节点","pill"),el("span",machineVirtualizationLabel(machine.virtualization),"pill"));if(removed)meta.append(el("span","Komari 已删除 · 远程停用","pill error"));const dispatchWarning=el("span","远程任务需核查","pill error");dispatchWarning.dataset.dispatchWarning="true";dispatchWarning.hidden=!machineHasUnconfirmedDispatch(machine.uuid);meta.append(dispatchWarning);if((machine.policy&&machine.policy.managementTags||[]).includes("不纳管"))meta.append(el("span","不纳管","pill"));
       heading.append(titleBox,meta);card.append(heading);
       const addresses=[machine.ipv4&&"IPv4 "+machine.ipv4,machine.ipv6&&"IPv6 "+machine.ipv6].filter(Boolean);card.append(el("p",addresses.join(" · ")||"尚无可用连接地址","small muted"));
       const policy=machine.policy||{};
-      const install=actionButton("安装节点",()=>startInstallForMachine(machine.uuid));install.disabled=!machineInstallAllowed(machine)||state.settings.setupComplete!==true;install.title=machineHasUnconfirmedDispatch(machine.uuid)?"上一条远程任务结果待核查，请先只读核查机器并处理任务提醒":machine.online!==true?"机器当前离线或状态未知":machineInstallAllowed(machine)?"在此机器安装节点":"请先勾选并保存远程安装授权";
+      const install=actionButton("安装节点",()=>startInstallForMachine(machine.uuid));install.disabled=!machineInstallSelectable(machine)||state.settings.setupComplete!==true;install.title=machineInstallSelectable(machine)?"进入安装向导，自动只读核查后再确认安装":machine.online!==true?"机器当前离线或状态未知":"请先勾选并保存远程安装授权";
       const tools=el("div",null,"machine-tools");const scanButton=actionButton("扫描已有节点",()=>discoverLegacyNodes(machine));scanButton.disabled=removed||machine.online!==true;tools.append(install,scanButton);if(machine.autoProvision&&machine.autoProvision.state==="failed"){const retry=actionButton("重试自动安装",()=>retryAutoProvision(machine));retry.disabled=removed||machineHasUnconfirmedDispatch(machine.uuid);retry.title=machineHasUnconfirmedDispatch(machine.uuid)?"上一条远程命令结果未知，请先核查并处理任务提醒":"";tools.append(retry);}
       const scanLabel=el("label","加入批量扫描");const scanCheck=document.createElement("input");scanCheck.type="checkbox";scanCheck.dataset.noDraft="true";scanCheck.checked=legacyScanSelection.has(machine.uuid);scanCheck.disabled=removed||machine.online!==true;scanCheck.addEventListener("change",()=>{if(scanCheck.checked)legacyScanSelection.add(machine.uuid);else legacyScanSelection.delete(machine.uuid);});scanLabel.prepend(scanCheck);tools.append(scanLabel);
       const deployLabel=el("label","允许远程安装");deployLabel.title="开启权限不会自动安装；仍需管理员主动提交任务。";const deploy=document.createElement("input");deploy.type="checkbox";deploy.checked=policy.deployAllowed===true;deploy.disabled=removed;deploy.dataset.policy="deploy";deployLabel.prepend(deploy);const savePolicy=actionButton("保存机器设置",()=>updatePolicy(machine.uuid,card));savePolicy.disabled=removed;tools.append(deployLabel,savePolicy,el("small",removed?"该机器已从 Komari 删除，设置只读。":"勾选只授权，不会自动安装。","muted small"));
       card.append(tools);
+      const blockers=el("section",null,"discovery-summary");blockers.dataset.dispatchReview="true";blockers.hidden=true;card.append(blockers);
       const discovered=Array.isArray(machine.discoveredNodes)?machine.discoveredNodes:[];
       if(machine.discoveredAt||legacyScanFailures.has(machine.uuid)){
         const scanFresh=machineScanFresh(machine);const resultBox=el("section",null,"discovery-summary");resultBox.append(el("strong","OneBox 只读扫描结果"));
@@ -1865,34 +1969,64 @@
       if(machine.autoProvision)advanced.append(el("p","新机器自动安装状态："+machine.autoProvision.state+" · "+(machine.autoProvision.message||""),machine.autoProvision.state==="failed"?"error small":"muted small"));
       card.append(advanced);restoreMachineExpansion(card,machine.uuid);host.append(card);
     }
-    renderInstallMachineOptions();
+    renderMachineDispatchReviews();renderInstallMachineOptions();
   }
 
   function renderInstallMachineOptions(){
-    const host=$("installMachines");if(!host||!state)return;host.replaceChildren();
+    const host=$("installMachines");const snapshot=latestServerSnapshot||state;if(!host||!snapshot)return;host.replaceChildren();
+    renderInstallCheckIssues(snapshot);
     const query=String($("installMachineSearch").value||"").trim().toLowerCase();const onlyAllowed=$("onlyAllowedMachines").checked;
-    const visible=state.machines.filter((machine)=>{const hay=[machine.name,machine.uuid,machine.region,machineRegionLabel(machine.region),machine.os,machine.ipv4,machine.ipv6].join(" ").toLowerCase();return !machine.removedFromKomariAt&&(!query||hay.includes(query))&&(!onlyAllowed||machineInstallAllowed(machine));});
-    if(!visible.length){host.append(el("p",onlyAllowed?"当前没有可安装机器。请检查在线状态、远程安装授权或需要核查的任务。可取消勾选查看全部机器。":"没有符合搜索条件的机器。","notice small"));updateInstallSelectionSummary();return;}
+    const visible=snapshot.machines.filter((machine)=>{const hay=[machine.name,machine.uuid,machine.region,machineRegionLabel(machine.region),machine.os,machine.ipv4,machine.ipv6].join(" ").toLowerCase();return !machine.removedFromKomariAt&&(!query||hay.includes(query))&&(!onlyAllowed||machineInstallSelectable(machine));});
+    if(!visible.length){host.append(el("p",onlyAllowed?"当前没有已授权安装的在线机器。可取消勾选查看全部机器。":"没有符合搜索条件的机器。","notice small"));updateInstallSelectionSummary();return;}
     for(const machine of visible){
-      const row=el("label",null,"machine-select-card");
-      if(row.dataset)row.dataset.machineUuid=machine.uuid;
-      const checkbox=document.createElement("input");checkbox.type="checkbox";checkbox.value=machine.uuid;checkbox.checked=installMachineSelection.has(machine.uuid);checkbox.disabled=!machineInstallAllowed(machine);checkbox.dataset.machineSelect="true";checkbox.dataset.noDraft="true";
-      const reason=machineInstallBlockReason(machine);const status=el("span",machineInstallAllowed(machine)?"可安装":machineHasUnconfirmedDispatch(machine.uuid)?"需核查":machine.online!==true?"离线/未知":"未授权安装","pill "+(machineInstallAllowed(machine)?"success":machineHasUnconfirmedDispatch(machine.uuid)?"error":"muted"));if(reason)status.title=reason;
+      const row=el("label",null,"machine-select-card");row.dataset.machineUuid=machine.uuid;
+      const selected=installMachineSelection.has(machine.uuid);const check=installMachineChecks.get(machine.uuid);const ready=installCheckReady(machine.uuid,snapshot);
+      const checkbox=document.createElement("input");checkbox.type="checkbox";checkbox.value=machine.uuid;checkbox.checked=selected;checkbox.disabled=installPlanRunning||!machineInstallSelectable(machine);checkbox.dataset.machineSelect="true";checkbox.dataset.noDraft="true";
+      const reason=machineInstallBlockReason(machine,snapshot);
+      const label=!machineInstallSelectable(machine)?(machine.online!==true?"离线/未知":"未授权安装"):check&&check.phase==="checking"?"正在核查":ready?"已核查":selected&&check&&check.phase==="error"?"核查未通过":machineHasUnconfirmedDispatch(machine.uuid,snapshot)?"勾选核查":"可选择";
+      const kind=ready?"success":selected&&check&&check.phase==="error"?"error":"muted";
+      const status=el("span",label,"pill "+kind);if(reason)status.title=reason;
       const meta=[machineRegionLabel(machine.region),machine.os,machine.ipv4||machine.ipv6].filter(Boolean).join(" · ");
       row.append(checkbox,el("strong",machine.name||machine.uuid),el("small",meta||"暂无地址信息","small muted"),status);
-      if(checkbox.checked&&row.classList)row.classList.add("selected");
-      checkbox.addEventListener("change",()=>{if(state&&!draftScopes.has("deploy"))draftScopes.set("deploy",state.revision);updateDraftControls();if(checkbox.checked)installMachineSelection.add(machine.uuid);else installMachineSelection.delete(machine.uuid);if(row.classList)row.classList.toggle("selected",checkbox.checked);updateInstallSelectionSummary();recomputeAutoPorts();updateConnectionPreview();});
+      if(selected&&check){const message=el("p",check.message,"install-check-message small "+kind);message.setAttribute("role","status");row.append(message);}
+      if(selected)row.classList.add("selected");
+      checkbox.addEventListener("change",()=>{
+        if(state&&!draftScopes.has("deploy"))draftScopes.set("deploy",state.revision);updateDraftControls();
+        if(checkbox.checked){
+          const maxBatch=Math.max(1,Math.min(10,Number(snapshot.settings.maxBatch)||10));
+          if(installMachineSelection.size>=maxBatch){checkbox.checked=false;setStatus("installStatus","每次最多选择 "+maxBatch+" 台机器。","error");return;}
+          installMachineSelection.add(machine.uuid);void checkInstallMachine(machine.uuid,true);
+        }else installMachineSelection.delete(machine.uuid);
+        renderInstallMachineOptions();recomputeAutoPorts();updateConnectionPreview();renderDeployReviewIfVisible();
+      });
       host.append(row);
     }
     updateInstallSelectionSummary();
   }
+  function renderInstallCheckIssues(snapshot=latestServerSnapshot||state){
+    const host=$("installCheckIssues");if(!host||!snapshot)return;host.replaceChildren();
+    const failed=selectedMachineIds().filter((uuid)=>installMachineChecks.get(uuid)?.phase==="error");
+    host.hidden=!failed.length;if(!failed.length)return;
+    host.append(el("strong","安装前核查需要处理","error"));
+    for(const uuid of failed){
+      const machine=snapshot.machines.find((item)=>item.uuid===uuid);const check=installMachineChecks.get(uuid);const row=el("div",null,"result-item small");
+      row.append(el("strong",machine&&machine.name||uuid),el("p",check.message,"error small"));
+      const retry=actionButton("重新核查",()=>{void checkInstallMachine(uuid,true);});retry.disabled=installPlanRunning;row.append(retry);
+      const failedJob=(snapshot.jobs||[]).find((job)=>job.id===check.jobId);
+      if(failedJob)row.append(actionButton("查看本次核查详情",()=>showJobDetail(failedJob)));
+      for(const job of machineUnconfirmedDispatches(uuid,snapshot)){
+        const details=el("div",null,"result-item small");details.append(el("span","阻塞任务 "+job.id),actionButton("查看详情 / 确认处理",()=>showJobDetail(job)));row.append(details);
+      }
+      host.append(row);
+    }
+  }
   function updateInstallSelectionSummary(){
-    const summary=$("installSelectionSummary");
-    const maxBatch=Math.max(1,Math.min(10,Number(state&&state.settings&&state.settings.maxBatch)||10));
-    const count=installMachineSelection.size;
-    if(summary){summary.textContent=count?("已选 "+count+" 台 · 最多 "+maxBatch+" 台"):"尚未选择机器";summary.className="small "+(count>maxBatch?"error":"muted");}
-    const next=$("deployNext");
-    if(next&&typeof deployStep!=="undefined"&&deployStep===1)next.disabled=count===0;
+    const summary=$("installSelectionSummary");const snapshot=latestServerSnapshot||state;
+    const maxBatch=Math.max(1,Math.min(10,Number(snapshot&&snapshot.settings&&snapshot.settings.maxBatch)||10));
+    const ids=selectedMachineIds();const count=ids.length;const ready=ids.filter((uuid)=>installCheckReady(uuid,snapshot)).length;
+    const pending=ids.filter((uuid)=>installMachineChecks.get(uuid)?.phase==="checking").length;
+    if(summary){summary.textContent=count?("已选 "+count+" 台 · 已核查 "+ready+" 台"+(pending?" · 核查中 "+pending+" 台":"")+" · 最多 "+maxBatch+" 台"):"尚未选择机器";summary.className="small "+(count>maxBatch?"error":"muted");}
+    const next=$("deployNext");if(next&&typeof deployStep!=="undefined"&&deployStep===1)next.disabled=count===0;
   }
 
   function wait(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
@@ -2017,7 +2151,16 @@
     return true;
   }
   async function showJobDetail(job){
+    job=((latestServerSnapshot||state).jobs||[]).find((item)=>item.id===job.id)||job;
     const lines=["任务 ID："+job.id,"目标："+(job.machineName||job.machineUuid)+"（"+job.machineUuid+"）","动作："+job.action,"状态："+job.state,"Komari task ID："+(job.taskId||"尚未返回"),"创建："+(job.createdAt||"未知"),"更新："+(job.updatedAt||"未知"),"RPC 错误码："+(job.rpcErrorCode||"无"),"轮询错误码："+(job.pollErrorCode||"无"),"结果："+(job.message||"暂无结果"),"下一步："+jobNextStep(job)];
+    if(dispatchReviewCurrent(job))lines.push("自动核查："+job.dispatchReview.checkedAt+" · 已确认 Agent 任务结束并刷新机器现状；原任务结果和历史保留。");
+    if(["failed","needs_reconcile","timed_out"].includes(job.state)&&!(job.attentionAcknowledgedAt&&job.attentionAcknowledgedState===job.state)&&!dispatchReviewCurrent(job)){
+      const machine=(latestServerSnapshot||state).machines.find((item)=>item.uuid===job.machineUuid);
+      lines.push("最近机器扫描："+(machine&&machine.discoveredAt||"尚无成功扫描"),"确认处理前，请核对旧任务已结束以及节点现状。解除限制不会重发、撤销旧任务，也不会把原任务改为成功。");
+      const values=await askOperation({title:"任务详情与确认处理",description:lines.join("\n"),confirmLabel:"已核对，确认处理"});
+      if(values)await acknowledgeAttention({kind:"job",jobId:job.id,expectedState:job.state});
+      return;
+    }
     const instance=job.instanceId&&(state.instances||[]).find((item)=>item.id===job.instanceId&&item.machineUuid===job.machineUuid&&!item.deletedAt);
     const needsCheck=["needs_reconcile","timed_out"].includes(job.state);
     if(needsCheck&&instance){
@@ -2093,7 +2236,7 @@
 
   async function runInstallPlan(machineIds,protocols){
     const chosen=machineIds.map((uuid)=>(latestServerSnapshot||state).machines.find((machine)=>machine.uuid===uuid)||Object.assign({},state.machines.find((machine)=>machine.uuid===uuid)||{uuid,name:uuid},{online:false}));
-    const executable=chosen.filter(machineInstallAllowed);const blocked=chosen.filter((machine)=>!machineInstallAllowed(machine));
+    const executable=chosen.filter((machine)=>machineInstallAllowed(machine)&&installCheckReady(machine.uuid));const blocked=chosen.filter((machine)=>!machineInstallAllowed(machine)||!installCheckReady(machine.uuid));
     if(!executable.length){renderDeploymentResults();setStatus("installStatus","所选机器当前都不能安装；检查在线状态和机器授权。","error");return;}
     deploymentBatch=blocked.flatMap((machine)=>protocols.map((protocol)=>({machineUuid:machine.uuid,protocol:protocol.id,accepted:false,error:{message:machineInstallBlockReason(machine)}})));
     const shared={listenAddress:$("listenAddress").value,endpointHost:$("endpointHost").value.trim(),name:String($("instanceName").value||"").trim(),tags:$("instanceTags").value.split(",").map((value)=>value.trim()).filter(Boolean)};
@@ -2366,7 +2509,7 @@
     setStatus("globalStatus","正在刷新 KNS 状态…");
     try{
       const latest=await request("/admin/state");latestServerSnapshot=latest;lastSuccessfulRefreshAt=Date.now();refreshDeploymentJobs(latest);
-      if(draftScopes.size){setStatus("globalStatus","刷新成功（revision "+latest.revision+"），草稿基于 revision "+Math.min(...draftScopes.values())+"，已保留未重绘。保存时会检查冲突。","muted");return;}
+      if(draftScopes.size){renderMachineDispatchReviews(latest);if($("installWizard").open&&!installPlanRunning)renderInstallMachineOptions();setStatus("globalStatus","刷新成功（revision "+latest.revision+"），草稿基于 revision "+Math.min(...draftScopes.values())+"，已保留未重绘。保存时会检查冲突。","muted");return;}
       draftConflict=null;updateDraftControls();state=latest;render();setStatus("globalStatus","刷新成功 · revision "+state.revision,"success");
     }catch(error){setStatus("globalStatus","刷新失败，保留上次数据（"+(lastSuccessfulRefreshAt?new Date(lastSuccessfulRefreshAt).toLocaleString():"尚无成功刷新")+"）。"+error.message,"error");}
   }
@@ -2459,13 +2602,33 @@
   $("compareConflict").addEventListener("click",safeRevisionConflictAction);
   $("auditOlder").addEventListener("click",loadOlderAudit);$("export").addEventListener("click",exportEncryptedBackup);$("exportState").addEventListener("click",exportEncryptedBackup);$("importBackup").addEventListener("click",importEncryptedBackup);
   $("installMachineSearch").addEventListener("input",renderInstallMachineOptions);$("onlyAllowedMachines").addEventListener("change",renderInstallMachineOptions);
-  $("selectAllInstallMachines").addEventListener("click",()=>{const query=String($("installMachineSearch").value||"").trim().toLowerCase();if(state&&!draftScopes.has("deploy"))draftScopes.set("deploy",state.revision);updateDraftControls();for(const machine of state.machines){if(machine.removedFromKomariAt||!machineInstallAllowed(machine))continue;const hay=[machine.name,machine.uuid,machine.region,machineRegionLabel(machine.region),machine.os,machine.ipv4,machine.ipv6].join(" ").toLowerCase();if(query&&!hay.includes(query))continue;installMachineSelection.add(machine.uuid);}renderInstallMachineOptions();recomputeAutoPorts();updateConnectionPreview();});
+  $("selectAllInstallMachines").addEventListener("click",()=>{
+    if(installPlanRunning)return;
+    const snapshot=latestServerSnapshot||state;const query=String($("installMachineSearch").value||"").trim().toLowerCase();
+    const maxBatch=Math.max(1,Math.min(10,Number(snapshot.settings.maxBatch)||10));
+    if(state&&!draftScopes.has("deploy"))draftScopes.set("deploy",state.revision);updateDraftControls();
+    const added=[];
+    for(const machine of snapshot.machines){
+      if(!machineInstallSelectable(machine)||installMachineSelection.has(machine.uuid))continue;
+      const hay=[machine.name,machine.uuid,machine.region,machineRegionLabel(machine.region),machine.os,machine.ipv4,machine.ipv6].join(" ").toLowerCase();
+      if(query&&!hay.includes(query))continue;
+      if(installMachineSelection.size>=maxBatch){setStatus("installStatus","本次已选满 "+maxBatch+" 台，其余机器可分批安装。","muted");break;}
+      installMachineSelection.add(machine.uuid);added.push(machine.uuid);
+    }
+    renderInstallMachineOptions();recomputeAutoPorts();updateConnectionPreview();
+    for(const uuid of added)void checkInstallMachine(uuid);
+  });
   $("clearInstallMachines").addEventListener("click",()=>{installMachineSelection.clear();renderInstallMachineOptions();recomputeAutoPorts();updateConnectionPreview();});
   $("refreshDeployment").addEventListener("click",refresh);
   $("endpointHost").addEventListener("input",()=>{updateConnectionPreview();renderDeployReviewIfVisible();});$("entryMode").addEventListener("change",()=>{updateEntryMode();updateConnectionPreview();renderDeployReviewIfVisible();});$("listenAddress").addEventListener("change",()=>{updateConnectionPreview();renderDeployReviewIfVisible();});
-  $("deployNext").addEventListener("click",()=>{
-    if(deployStep===1){const selected=selectedMachineIds().filter((uuid)=>state.machines.some((machine)=>machine.uuid===uuid));if(!selected.length){setStatus("installStatus","先选择至少一台机器。","error");return;}const maxBatch=Math.max(1,Math.min(10,Number(state.settings.maxBatch)||10));if(selected.length>maxBatch){setStatus("installStatus","每次最多选择 "+maxBatch+" 台机器。","error");return;}}
+  $("deployNext").addEventListener("click",async()=>{
+    if(installWizardBusy||installPlanRunning)return;
+    const session=installWizardSession;const step=deployStep;
+    installWizardBusy=true;$("deployNext").disabled=true;
+    try{
+    if(deployStep===1){const selected=selectedMachineIds();if(!selected.length){setStatus("installStatus","先选择至少一台机器。","error");return;}const maxBatch=Math.max(1,Math.min(10,Number(state.settings.maxBatch)||10));if(selected.length>maxBatch){setStatus("installStatus","每次最多选择 "+maxBatch+" 台机器。","error");return;}}
     if(deployStep===2){
+      if(!await ensureInstallMachineChecks(session)||session!==installWizardSession||!$("installWizard").open)return;
       renderProtocolFields();const protocols=currentProtocolFields();
       if(!protocols.length){setStatus("installStatus","请选择至少一种协议。","error");return;}
       if($("entryMode").value==="nat"&&!$("endpointHost").reportValidity())return;
@@ -2482,10 +2645,12 @@
         if($("entryMode").value==="nat"&&leftPublic===rightPublic&&overlaps(left,right)){setStatus("installStatus","有协议使用相同公网端口和传输方式；请调整 NAT 映射。","error");return;}
       }
     }
+    if(session!==installWizardSession||step!==deployStep)return;
     if(deployStep===2&&!showInstallPreflight())return;
     setStatus("installStatus","","muted");renderDeployStep(deployStep+1);
+    }finally{if(session===installWizardSession){installWizardBusy=false;$("deployNext").disabled=false;updateInstallSelectionSummary();}}
   });
-  $("deployBack").addEventListener("click",()=>{if(!installPlanRunning)renderDeployStep(deployStep-1);});
+  $("deployBack").addEventListener("click",()=>{if(!installPlanRunning&&!installWizardBusy)renderDeployStep(deployStep-1);});
   $("startSetup").addEventListener("click",openSetupWizard);$("setupForm").addEventListener("submit",completeSetup);$("setupCancel").addEventListener("click",()=>{$("setupWizard").hidden=true;$("setupCard").hidden=false;});
   $("setupNext").addEventListener("click",()=>{if(setupStep===1){const input=$("setupPublicBaseUrl");if(!input.reportValidity())return;try{const parsed=new URL(input.value.trim());if(parsed.protocol!=="https:"||parsed.username||parsed.password||parsed.search||parsed.hash){setStatus("setupStatus","地址必须是无账号、查询和片段的 HTTPS URL。","error");return;}}catch(_){setStatus("setupStatus","请输入有效 HTTPS URL。","error");return;}}if(setupStep===2){if(!$("setupDefaultPort").reportValidity())return;if($("setupAutoProvision").checked&&!$("setupAutoProvisionConfirm").checked){setStatus("setupStatus","开启自动部署前，请明确确认 root 安装影响。","error");return;}}setStatus("setupStatus","","muted");renderSetupStep(setupStep+1);});
   $("setupBack").addEventListener("click",()=>renderSetupStep(setupStep-1));$("setupAutoProvision").addEventListener("change",()=>{$("setupAutoProvisionConfirmLabel").hidden=!$("setupAutoProvision").checked;if(!$("setupAutoProvision").checked)$("setupAutoProvisionConfirm").checked=false;});
@@ -2497,17 +2662,22 @@
   window.addEventListener("pagehide",clearDelivery);
   buildProtocolCards();protocolCardsReady=true;renderProtocolFields();renderDeployStep(1);
   $("installBatch").addEventListener("click",async()=>{
-    if(installPlanRunning)return;
+    if(installPlanRunning||installWizardBusy)return;
+    const session=installWizardSession;
+    installWizardBusy=true;$("installBatch").disabled=true;
+    try{
+    if(!await ensureInstallMachineChecks(session)||session!==installWizardSession||!$("installWizard").open)return;
     const machineIds=selectedMachineIds();const protocols=currentProtocolFields();
     if(!showInstallPreflight())return;
     if(!machineIds.length||!protocols.length){setStatus("installStatus","请至少选择一台机器和一种协议。","error");return;}
     const maxBatch=Math.max(1,Math.min(10,Number(state&&state.settings&&state.settings.maxBatch)||10));if(machineIds.length>maxBatch){setStatus("installStatus","每次最多选择 "+maxBatch+" 台机器。","error");return;}
-    const chosen=machineIds.map((uuid)=>state.machines.find((machine)=>machine.uuid===uuid)).filter(Boolean);const blocked=chosen.filter((machine)=>!machineInstallAllowed(machine));
+    const chosen=machineIds.map((uuid)=>(latestServerSnapshot||state).machines.find((machine)=>machine.uuid===uuid)).filter(Boolean);const blocked=chosen.filter((machine)=>!machineInstallAllowed(machine));
     const description=["确认后会立即下发任务，任务由机器执行。","目标机器："+chosen.length+" 台","安装协议：",...protocols.map((item)=>"• "+protocolName(item.id)+" · "+item.listenPort+" 端口"+(item.externalPort?"（公网端口 "+item.externalPort+"）":"")),"\n同一台机器会依次处理协议；上一项完成核验后才开始下一项。","安装会修改代理配置和防火墙。运行中的节点可能短暂重连。提交成功不代表安装完成。",blocked.length?"\n以下机器将跳过：\n"+blocked.map((machine)=>"• "+machine.name+"："+machineInstallBlockReason(machine)).join("\n"):""].join("\n");
     const values=await askOperation({title:"确认下发安装任务",description,focusConfirm:true,confirmLabel:"下发任务",danger:true});
-    if(!values)return;
+    if(!values||session!==installWizardSession||!$("installWizard").open)return;
     if(!showInstallPreflight())return;
     await runInstallPlan(machineIds,protocols);
+    }finally{if(session===installWizardSession){installWizardBusy=false;$("installBatch").disabled=false;}}
   });
   $("openProfileDrawer").addEventListener("click",()=>openProfileDrawer());
   $("closeProfileDrawer").addEventListener("click",closeProfileDrawer);
